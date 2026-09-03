@@ -11,7 +11,7 @@ int main() {
     constexpr int kFrames = 60;
     const double begin = QpcClock::now_seconds();
     for (int i = 0; i < kFrames; ++i) {
-        pacer.wait_for_next_frame();
+        (void)pacer.wait_for_next_frame();
     }
     const double end = QpcClock::now_seconds();
     const double fps = static_cast<double>(kFrames) / (end - begin);

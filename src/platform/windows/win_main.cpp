@@ -6,7 +6,6 @@
 #include "platform/windows/win32_window.h"
 #include "platform/windows/windows_frame_pacer.h"
 
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
 

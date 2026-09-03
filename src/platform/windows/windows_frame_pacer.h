@@ -2,7 +2,6 @@
 
 #include "core/frame_schedule.h"
 
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 namespace b3r::platform::windows {
