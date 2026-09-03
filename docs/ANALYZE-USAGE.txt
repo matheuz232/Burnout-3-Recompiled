@@ -16,6 +16,12 @@ Increase the bounded reachable-CFG worklist when needed:
 
   .\Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --output "burnout3-analysis.txt" --max-blocks 8192
 
+Follow explicit direct-call targets for broader evidence:
+
+  .\Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --output "burnout3-analysis-with-callees.txt" --max-blocks 8192 --follow-direct-calls
+
+Direct call traversal is disabled by default. When enabled, explicit direct callees share the same --max-blocks budget and remain recorded as call evidence. Indirect JR/JALR destinations are never guessed, and following a direct call does not infer a function boundary.
+
 Show command-line help:
 
   .\Burnout3Analyze.exe --help
