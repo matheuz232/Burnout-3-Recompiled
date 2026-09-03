@@ -12,7 +12,7 @@ Completion rule: `implemented -> compiled -> executed/tested -> validated`.
 | Runtime option parser | DONE | Unit tests pass on host and Windows CI |
 | Structured logging | DONE | Unit tests pass on host and Windows CI |
 | Win32 executable target | COMPILED_IN_CI | `Burnout3Recompiled_Test.exe` builds with MSVC 19.44 / Visual Studio 2022; interactive launch still required |
-| Win32 window | READY_FOR_INTERACTIVE_VALIDATION | Compiles in Windows CI; must be opened/closed on Windows 10/11 |
+| Win32 window | READY_FOR_INTERACTIVE_VALIDATION | Windows CI smoke creates a real `HWND`, verifies it is live, posts `WM_CLOSE`, observes `WM_QUIT` and confirms destruction; visual/interactive Windows 10/11 validation still required |
 | QPC high-resolution clock | DONE | Windows integration test executes successfully in GitHub Actions |
 | 120 FPS Windows frame pacer | WORKING | Windows integration test executes successfully; next gate is tighter pacing/jitter capture on desktop Windows |
 | Crash handler/minidump | CI_VALIDATED | Controlled child-process access violation on Windows CI verifies `last_crash.txt`, PS2/native execution markers and a non-empty `.dmp`; GUI/window validation remains separate |
@@ -52,7 +52,9 @@ PR #7 merge-ref run `33774831203` passed 16/16, and post-merge `main` run `33777
 
 Opcode-coverage RED run `33777384366` built successfully and failed only the two report-contract tests that required the new histograms. GREEN run `33777558935` built the updated renderer and passed 16/16 tests. PR #8 merge-ref run `33778143705` and post-merge `main` run `33778300157` both passed 16/16.
 
-Crash-handler RED run `33799222874` failed during CMake generation exactly because the test-declared probe source did not exist. GREEN run `33799323131` built the isolated probe and harness with MSVC 19.44 and passed 17/17 tests, including controlled access-violation state/minidump validation.
+Crash-handler RED run `33799222874` failed during CMake generation exactly because the test-declared probe source did not exist. GREEN run `33799323131` built the isolated probe and harness with MSVC 19.44 and passed 17/17 tests, including controlled access-violation state/minidump validation. PR #9 merge-ref run `33799706870` and post-merge `main` run `33799864371` also passed 17/17.
+
+Win32-window smoke RED run `33802472364` failed during CMake generation exactly because the declared smoke source did not exist. GREEN run `33802569842` built the real-window smoke test and passed 18/18 tests; `win32_window_smoke_tests` created/closed the window and completed in 0.05 seconds.
 
 No project-code compiler warnings were emitted in these final validation runs; the remaining workflow warning is external to the project (`actions/checkout@v4` Node runtime deprecation).
 
@@ -62,6 +64,6 @@ The first CI attempt failed before compilation because `windows-latest` had move
 
 The bootstrap is materially further along but **Test Build 0.1 is not yet complete**. Remaining bootstrap validation gates are:
 
-1. launch the GUI executable on Windows 10/11 and verify window/message-loop shutdown behavior;
+1. visually inspect the GUI executable on an interactive Windows 10/11 desktop; automated create/`WM_CLOSE`/`WM_QUIT` lifecycle is already covered by Windows CI smoke;
 2. capture frame pacing/jitter over a longer interval on a normal desktop session;
 3. run `Burnout3Analyze` against an externally supplied legal Burnout 3 executable without committing proprietary data, use the deterministic report to measure real reachable-code/opcode coverage, and drive the actual recompilation strategy from that evidence.
