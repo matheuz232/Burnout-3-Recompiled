@@ -26,6 +26,7 @@ Completion rule: `implemented -> compiled -> executed/tested -> validated`.
 | R5900 opcode coverage metrics | CI_VALIDATED | Report includes deterministic instruction histogram plus primary-opcode histogram for reachable `UNKNOWN` sites, including delay slots; Windows/MSVC suite passes 16/16 |
 | External PS2 ELF analysis pipeline | CI_VALIDATED | Synthetic ELF is parsed, mapped, traversed and rendered end-to-end; 13/13 Windows/MSVC tests pass |
 | `Burnout3Analyze` CLI | CI_VALIDATED | Console executable builds with VS2022/MSVC, external-file/stdout/output-path behavior is tested, and the full suite passes 16/16; next gate is a legally supplied Burnout 3 ELF |
+| `Burnout3Analyze` Windows artifact | CI_VALIDATED | `main`/manual Windows CI publishes `Burnout3Analyze-windows-x64`; artifact ID `9913944778` was downloaded and verified to contain only the analyzer executable plus usage guide |
 | Static/binary recompiler | TODO | Strategy intentionally not selected yet; real ELF coverage should drive the instruction/IR/backend plan |
 | Graphics | TODO | No D3D initialization yet |
 | Audio | TODO | No XAudio2 initialization yet |
@@ -59,7 +60,9 @@ Win32-window smoke RED run `33802472364` failed during CMake generation exactly 
 
 Frame-pacing telemetry RED run `33805068940` failed exactly because `core/frame_pacing_telemetry.h` did not yet exist. Pure telemetry GREEN run `33805247593` passed 19/19. Windows telemetry run `33805412037` passed 19/19 with a 240-frame pacing smoke. Run `33805548230` additionally surfaced the report in the CI log: 240 samples, 8.333 ms mean, 8.204 ms min, 8.462 ms max, 0.012 ms population stddev, 8.333 ms P50/P95/P99, 80 samples above the exact 120 Hz period, and zero above 9/10/12 ms; the high-resolution timer path was active.
 
-No project-code compiler warnings were emitted in these final validation runs; the remaining workflow warning is external to the project (`actions/checkout@v4` Node runtime deprecation).
+Analyzer-artifact RED run `33808095539` passed configure/build, 19/19 tests and pacing telemetry, then failed only at package staging because `docs/ANALYZE-USAGE.txt` was absent. GREEN run `33808250674` passed 19/19 plus package staging/validation, with upload correctly skipped on a feature-branch push. PR #12 merge-ref run `33808465659` passed 19/19 plus staging/validation and also skipped publishing. After merge commit `46f04e4f798cd1850ae94647952c85bd16911e13`, post-merge `main` run `33808599204` passed 19/19 and published artifact `Burnout3Analyze-windows-x64` ID `9913944778` (58,379-byte ZIP; SHA-256 `07bde0a403eb7981a2d43ab0335ba0318f691aa0840aae3aeaed875c5cc724d1`). Download inspection confirmed exactly `Burnout3Analyze.exe` and `ANALYZE-USAGE.txt`, with no ELF, assets, dumps or other proprietary data.
+
+No project-code compiler warnings were emitted in these final validation runs; the remaining workflow warnings are external action/runtime deprecations (`actions/checkout@v4` and `actions/upload-artifact@v4`).
 
 The first CI attempt failed before compilation because `windows-latest` had moved to a Windows Server 2025 / Visual Studio 2026 image while the project explicitly requested the Visual Studio 2022 CMake generator. The workflow remains pinned to `windows-2022`.
 
@@ -69,4 +72,4 @@ The bootstrap is materially further along but **Test Build 0.1 is not yet comple
 
 1. visually inspect the GUI executable on an interactive Windows 10/11 desktop; automated create/`WM_CLOSE`/`WM_QUIT` lifecycle is already covered by Windows CI smoke;
 2. capture frame pacing/jitter over a longer interval on a normal desktop session; the 240-frame hosted-CI telemetry is evidence only, not a physical-desktop benchmark;
-3. run `Burnout3Analyze` against an externally supplied legal Burnout 3 executable without committing proprietary data, use the deterministic report to measure real reachable-code/opcode coverage, and drive the actual recompilation strategy from that evidence.
+3. download/use the CI-published `Burnout3Analyze-windows-x64` (or a local build) against an externally supplied legal Burnout 3 executable without committing proprietary data, use the deterministic report to measure real reachable-code/opcode coverage, and drive the actual recompilation strategy from that evidence.

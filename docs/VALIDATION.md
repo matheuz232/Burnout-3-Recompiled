@@ -275,3 +275,33 @@ The `OVER_8_333MS` counter uses the exact `1000/120 = 8.333333...` ms threshold 
 This is a short hosted-CI smoke, not a physical-desktop performance certification. Scheduler behavior, power management, display composition, GPU work and longer-duration jitter still require capture on a normal interactive Windows 10/11 desktop. The presentation target remains 120 Hz; this milestone does not select or alter the game's simulation cadence.
 
 No project-code compiler warning was emitted in the final telemetry run. The only workflow warning remains the external `actions/checkout@v4` Node-runtime deprecation notice.
+
+## 2026-09-03 `Burnout3Analyze` Windows artifact validation
+
+Windows CI now stages a narrowly scoped analyzer package after the normal configure, build, test and frame-pacing telemetry steps. Package staging and validation run on every workflow event; publishing runs only for a push to `main` or an explicit `workflow_dispatch`, so pull requests and feature-branch pushes do not publish redundant analyzer artifacts.
+
+TDD / CI evidence:
+
+- RED run `33808095539`: configure/build, 19/19 tests and pacing telemetry passed; `Stage analyzer package` then failed exactly because `docs/ANALYZE-USAGE.txt` did not exist, and validation/upload were skipped;
+- GREEN run `33808250674`: 19/19 tests, telemetry, package staging and package validation passed; upload was correctly skipped on the feature-branch push;
+- PR #12 merge-ref run `33808465659` checked out temporary merge commit `ab34417e4702453a4ecf155f9596bd9e5ce66049`, passed 19/19 tests plus package staging/validation, and correctly skipped upload for the `pull_request` event;
+- PR #12 merged as `46f04e4f798cd1850ae94647952c85bd16911e13`;
+- post-merge `main` run `33808599204` passed 19/19 tests and completed `Upload analyzer artifact` successfully.
+
+Published artifact evidence from run `33808599204`:
+
+- name: `Burnout3Analyze-windows-x64`;
+- artifact ID: `9913944778`;
+- ZIP size: 58,379 bytes;
+- GitHub artifact SHA-256: `07bde0a403eb7981a2d43ab0335ba0318f691aa0840aae3aeaed875c5cc724d1`;
+- expiration: `2026-12-02T21:33:39Z`;
+- workflow log states exactly two files were uploaded.
+
+The published ZIP was downloaded and inspected independently after the workflow completed. It contains exactly:
+
+- `ANALYZE-USAGE.txt`: 1,009 bytes, SHA-256 `f099454e11f891dbeb120aa2720a640cf44572c25ddfa97d24a7ca52148f7a3a`;
+- `Burnout3Analyze.exe`: 119,296 bytes, SHA-256 `0d7e0e8a9fa087cc1715faa6036b85592e0bf882ea17e96275504107d93d2065`, with a valid `MZ` header and PE header offset at byte 256.
+
+No ELF, game asset, dump or other proprietary Burnout 3 data is present in the package. This validates the analyzer delivery channel only; it does **not** validate real Burnout 3 opcode/CFG coverage. The next evidence gate remains running this analyzer against a legally obtained external game executable and using only the generated text report to drive decoder/recompiler work.
+
+No project-code compiler warning was emitted in the final artifact validation run. Remaining workflow warnings are external action/runtime deprecations from `actions/checkout@v4` / `actions/upload-artifact@v4` and their Node runtime dependencies.
