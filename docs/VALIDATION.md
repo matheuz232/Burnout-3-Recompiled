@@ -125,3 +125,45 @@ TDD evidence:
 - no project-code compiler warning was emitted; the only workflow warning is the external `actions/checkout@v4` Node-runtime deprecation notice.
 
 No fresh GCC/Clang rerun was performed for this report-only milestone in the connector-backed continuation; the prior portable analysis layers remain covered by their recorded clean host validations above.
+
+## 2026-09-03 external PS2 ELF analysis pipeline validation
+
+`Ps2ElfAnalysisResult` composes the existing primitives without executing guest instructions:
+
+`ELF bytes -> parse_ps2_elf -> Ps2MemoryMap::from_elf -> analyze_r5900_reachability -> render_r5900_analysis_report`.
+
+The synthetic end-to-end fixture contains one executable PT_LOAD at guest entry `0x00100000` and one `BREAK` instruction. The test requires an exact deterministic report and separately verifies that invalid ELF magic is classified as `ElfParseFailed` before memory/CFG analysis.
+
+TDD evidence:
+
+- RED run `33772468390`: MSVC failed exactly because `analysis/ps2_elf_analysis.h` did not exist;
+- GREEN run `33772705605`: the pipeline compiled and the Windows suite passed 13/13.
+
+## 2026-09-03 `Burnout3Analyze` option parser validation
+
+The console-tool parser supports `--elf <path>`, optional `--output <path>`, optional positive `--max-blocks <count>` (default 4096), and `--help`. Tests cover defaults, missing values, missing ELF path, invalid/zero block limits and unknown options.
+
+TDD evidence:
+
+- RED run `33772935813`: MSVC failed exactly because `tools/burnout3_analyze_options.h` did not exist;
+- GREEN run `33773184514`: `b3r_tools` built and the Windows suite passed 14/14 with no project-code warning.
+
+## 2026-09-03 `Burnout3Analyze` file-I/O validation
+
+The application layer opens an externally supplied ELF as a binary file, bounds the in-memory read size, forwards the requested block limit into the analysis pipeline, and writes the deterministic report either to the provided output stream or to an explicit output file. The test uses only a temporary synthetic ELF and verifies missing-input-file classification.
+
+TDD evidence:
+
+- RED run `33773406647`: MSVC failed exactly because `tools/burnout3_analyze_app.h` did not exist;
+- GREEN run `33773705488`: Windows/MSVC passed 15/15 tests, including actual temporary-file read/write behavior.
+
+## 2026-09-03 `Burnout3Analyze.exe` validation
+
+The console `main` is intentionally thin: it adapts `argv` to the tested parser, prints help or parse errors, and delegates real work to the tested application layer. It contains no guest-analysis semantics.
+
+TDD evidence:
+
+- RED run `33773875369`: the project built, 15 tests passed, and only `burnout3_analyze_help` failed because the `Burnout3Analyze` executable did not exist yet;
+- GREEN run `33774102751`: Visual Studio 2022 / MSVC 19.44 linked `Burnout3Analyze.exe` and `Burnout3Recompiled_Test.exe`, and all 16/16 tests passed including `Burnout3Analyze --help`.
+
+No project-code compiler warning was emitted in the final GREEN run. The only workflow warning remains the external `actions/checkout@v4` Node-runtime deprecation notice. No proprietary Burnout 3 executable or asset was used or committed. A legally supplied real game ELF remains the next evidence gate.

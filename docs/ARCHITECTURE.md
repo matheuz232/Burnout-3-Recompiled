@@ -1,6 +1,6 @@
 # Architecture
 
-## Current bootstrap
+## Current bootstrap runtime
 
 ```text
 Burnout3Recompiled_Test
@@ -14,6 +14,23 @@ Burnout3Recompiled_Test
   -> FrameStats (portable)
 ```
 
+## Current static-analysis pipeline
+
+```text
+Burnout3Analyze
+  -> Burnout3AnalyzeOptions
+  -> Burnout3AnalyzeApp
+       -> Ps2ElfAnalysis
+            -> Ps2ElfImage
+            -> Ps2MemoryMap
+            -> R5900 decoder
+            -> basic-block analysis
+            -> reachable CFG
+            -> deterministic analysis report
+```
+
+`Burnout3Analyze` reads externally supplied files only. The executable and the analysis libraries never require proprietary game data to be present in the repository.
+
 ### `src/core/`
 
 Portable deterministic runtime primitives. These are deliberately independent from Win32 so timing math can be tested on any development host.
@@ -26,9 +43,23 @@ Windows 10/11 x64 process/window/timer/crash glue. No cross-platform windowing o
 
 Structured logging and explicit stub diagnostics.
 
+### `src/recompiler/`
+
+Guest executable parsing and instruction-level R5900 decoding primitives. Despite the directory name, native code generation does not exist yet; unsupported instruction families remain explicit rather than being emulated silently.
+
 ### `src/runtime/`
 
-Guest-runtime state that is independent from Win32. The first component is `Ps2MemoryMap`, which centralizes PS2 virtual-address translation into owned native backing for validated ELF load regions. Full PS2 hardware address-space modeling remains evidence-driven and is not assumed by this layer.
+Guest-runtime state independent from Win32. `Ps2MemoryMap` centralizes PS2 virtual-address translation into owned native backing for validated ELF load regions. Full PS2 hardware address-space modeling remains evidence-driven.
+
+### `src/analysis/`
+
+Read-only static-analysis stages. They build conservative basic blocks, reachable control flow and deterministic reports. They do not execute guest instructions, infer register-indirect destinations, or assign unsupported semantics.
+
+`Ps2ElfAnalysis` is the composition boundary that turns external ELF bytes into a deterministic analysis report.
+
+### `src/tools/`
+
+Thin user-facing tooling around tested libraries. `Burnout3Analyze` separates command-line parsing, file I/O and the console `main`; guest-analysis semantics stay in `src/analysis/`.
 
 ## Planned boundaries
 
@@ -40,6 +71,8 @@ src/platform/windows/
 src/game/
 src/recompiler/
 src/runtime/
+src/analysis/
+src/tools/
 src/renderer/
 src/audio/
 src/input/

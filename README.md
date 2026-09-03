@@ -4,34 +4,50 @@ Experimental native Windows x86-64 recompilation/port project for **Burnout 3: T
 
 ## Current milestone
 
-`Burnout 3 Recompiled - Test Build 0.1` bootstrap infrastructure.
+`Burnout 3 Recompiled - Test Build 0.1` bootstrap and static-analysis infrastructure.
 
 The current source tree contains:
 
 - C++20/CMake project structure;
 - native Win32 window bootstrap;
-- structured logging;
-- Windows unhandled-exception/minidump handler;
-- QueryPerformanceCounter clock;
-- high-resolution waitable-timer + spin 120 Hz frame pacer;
-- 120-sample frame statistics;
-- command-line option parsing;
-- portable unit tests plus Windows-only QPC/pacer integration tests;
-- Windows CI definition for Visual Studio 2022.
+- structured logging and Windows minidump plumbing;
+- QueryPerformanceCounter clock and 120 Hz Windows frame pacer;
+- validated PS2 ELF32/MIPS structural loading;
+- PT_LOAD-backed guest memory mapping;
+- initial R5900 decoder;
+- conservative basic-block and reachable-CFG analysis;
+- deterministic analysis reports;
+- `Burnout3Analyze`, a console tool for analyzing an externally supplied PS2 ELF without executing guest code;
+- portable/unit tests plus Windows-specific integration tests;
+- Windows CI pinned to Visual Studio 2022.
 
-It **does not yet** contain PS2 ELF loading, MIPS recompilation, graphics, audio, input, game initialization, menu, or gameplay.
+The project **does not yet** contain a working static/binary code generator, translated Burnout 3 game code, graphics, audio, input, game initialization, menus, or gameplay.
 
 ## Legal data policy
 
-No proprietary Burnout 3 executable, assets, audio, textures, symbols, dumps, or game data are included in this repository. Future game-data loading must use files supplied externally by the owner from a legally obtained copy.
+No proprietary Burnout 3 executable, assets, audio, textures, symbols, dumps, or game data are included in this repository. Game-data analysis uses files supplied externally by the owner from a legally obtained copy. Do not commit those files.
 
-Example future/current bootstrap invocation:
+## Analyze an external PS2 ELF
+
+After a Release build:
 
 ```powershell
-Burnout3Recompiled_Test.exe --windowed --frame-stats --game-data "D:\Games\Burnout3\data"
+Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --output "burnout3-analysis.txt"
 ```
 
-At this milestone, `--game-data` is accepted and logged but the data is not parsed yet.
+To write the report directly to the console:
+
+```powershell
+Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50"
+```
+
+The reachable-CFG worklist is bounded. The default is 4096 blocks and can be overridden explicitly:
+
+```powershell
+Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --max-blocks 8192
+```
+
+This tool performs static analysis only. It does not execute PS2 instructions, emulate a PS2, infer register-indirect targets, or recompile guest code yet. See `docs/ANALYSIS_TOOL.md` for the output contract and current limitations.
 
 ## Build on Windows 10/11 x64
 
@@ -57,13 +73,16 @@ cmake --build --preset vs2022-release
 ctest --preset vs2022-release
 ```
 
-The Visual Studio multi-config executable is normally under:
+The Visual Studio multi-config executables are normally under the selected configuration directory, including:
 
 ```text
-build/vs2022-debug/Debug/Burnout3Recompiled_Test.exe
+Burnout3Recompiled_Test.exe
+Burnout3Analyze.exe
 ```
 
-## Runtime options
+## Runtime bootstrap options
+
+`Burnout3Recompiled_Test.exe` currently accepts:
 
 ```text
 --debug
@@ -82,6 +101,6 @@ Some flags are accepted before their corresponding subsystem exists. Missing fun
 
 The target presentation cadence is exactly **120.000 FPS**, corresponding to **8.333333 ms** per frame. The current bootstrap validates schedule math independently from the Windows waiting mechanism. The Windows backend uses QPC, a waitable timer, and a short spin phase to avoid relying exclusively on `Sleep()`.
 
-This is only the presentation/frame-pacing foundation. The original game's simulation rate is **not assumed** to be 30 or 60 Hz; simulation timing will be chosen only after binary/runtime analysis.
+This is only the presentation/frame-pacing foundation. The original game's simulation rate is **not assumed** to be 30 or 60 Hz; simulation timing will be chosen only after binary/runtime evidence.
 
 See `docs/PROGRESS.md` for the authoritative status.

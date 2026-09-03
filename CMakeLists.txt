@@ -41,6 +41,7 @@ add_library(b3r_analysis
   src/analysis/r5900_control_flow.cpp
   src/analysis/r5900_reachability.cpp
   src/analysis/r5900_analysis_report.cpp
+  src/analysis/ps2_elf_analysis.cpp
 )
 target_include_directories(b3r_analysis PUBLIC src)
 target_link_libraries(b3r_analysis PUBLIC b3r_runtime b3r_recompiler)
@@ -48,6 +49,28 @@ if(MSVC)
   target_compile_options(b3r_analysis PRIVATE /W4 /permissive- /Zc:__cplusplus)
 else()
   target_compile_options(b3r_analysis PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_library(b3r_tools
+  src/tools/burnout3_analyze_options.cpp
+  src/tools/burnout3_analyze_app.cpp
+)
+target_include_directories(b3r_tools PUBLIC src)
+target_link_libraries(b3r_tools PUBLIC b3r_analysis)
+if(MSVC)
+  target_compile_options(b3r_tools PRIVATE /W4 /permissive- /Zc:__cplusplus)
+else()
+  target_compile_options(b3r_tools PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(Burnout3Analyze
+  src/tools/burnout3_analyze_main.cpp
+)
+target_link_libraries(Burnout3Analyze PRIVATE b3r_tools)
+if(MSVC)
+  target_compile_options(Burnout3Analyze PRIVATE /W4 /permissive- /Zc:__cplusplus)
+else()
+  target_compile_options(Burnout3Analyze PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)
@@ -130,6 +153,20 @@ if(B3R_BUILD_TESTS)
   add_executable(r5900_analysis_report_tests tests/r5900_analysis_report_tests.cpp)
   target_link_libraries(r5900_analysis_report_tests PRIVATE b3r_analysis)
   add_test(NAME r5900_analysis_report_tests COMMAND r5900_analysis_report_tests)
+
+  add_executable(ps2_elf_analysis_tests tests/ps2_elf_analysis_tests.cpp)
+  target_link_libraries(ps2_elf_analysis_tests PRIVATE b3r_analysis)
+  add_test(NAME ps2_elf_analysis_tests COMMAND ps2_elf_analysis_tests)
+
+  add_executable(burnout3_analyze_options_tests tests/burnout3_analyze_options_tests.cpp)
+  target_link_libraries(burnout3_analyze_options_tests PRIVATE b3r_tools)
+  add_test(NAME burnout3_analyze_options_tests COMMAND burnout3_analyze_options_tests)
+
+  add_executable(burnout3_analyze_app_tests tests/burnout3_analyze_app_tests.cpp)
+  target_link_libraries(burnout3_analyze_app_tests PRIVATE b3r_tools)
+  add_test(NAME burnout3_analyze_app_tests COMMAND burnout3_analyze_app_tests)
+
+  add_test(NAME burnout3_analyze_help COMMAND Burnout3Analyze --help)
 
   if(WIN32)
     add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
