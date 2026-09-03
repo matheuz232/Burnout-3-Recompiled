@@ -10,6 +10,7 @@ option(B3R_BUILD_TESTS "Build Burnout3Recompiled tests" ON)
 add_library(b3r_core
   src/core/frame_schedule.cpp
   src/core/frame_stats.cpp
+  src/core/frame_pacing_telemetry.cpp
   src/core/runtime_options.cpp
   src/debug/log.cpp
 )
