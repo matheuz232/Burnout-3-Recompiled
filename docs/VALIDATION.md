@@ -24,7 +24,7 @@ All four bootstrap host-portable tests passed under GCC and Clang before the ELF
 
 GitHub Actions run `33713829165` used Windows Server 2022, Visual Studio 2022 Enterprise, MSVC 19.44.35228 and Windows SDK 10.0.26100.0. CMake configure, Release build, `Burnout3Recompiled_Test.exe` link and all 6/6 bootstrap tests passed.
 
-CI does not constitute interactive validation of the Win32 window or crash/minidump path, and the current pacing integration test is only a coarse average-rate sanity check. Those remain separate gates.
+CI does not constitute interactive validation of the Win32 window, and the current pacing integration test is only a coarse average-rate sanity check. Those remain separate gates.
 
 ## 2026-09-03 PS2 ELF loader validation
 
@@ -185,3 +185,25 @@ TDD evidence:
 - GREEN run `33777558935`: Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 built the updated renderer, `Burnout3Analyze.exe`, and `Burnout3Recompiled_Test.exe`; all 16/16 tests passed.
 
 No project-code compiler warning was emitted in the GREEN run. No decoder instruction support, reachability behavior, or guest execution semantics were added by this milestone. The next meaningful evidence gate remains a legally supplied Burnout 3 ELF.
+
+PR #8 merge-ref run `33778143705` passed 16/16 tests. After merge commit `3f43e1bcce3aad31b826b11226af18302eb6efef`, post-merge `main` run `33778300157` also passed 16/16, preserving the same baseline before crash-handler work.
+
+## 2026-09-03 controlled Windows crash-handler/minidump validation
+
+The crash handler is now exercised in Windows CI through an isolated child process rather than by intentionally crashing the GUI executable. The dedicated `crash_handler_probe` installs the real `CrashHandler`, records known execution markers (`PS2=0x00B3C0DE`, native=`0x1234ABCD`), suppresses Windows fault UI for automation, and raises `EXCEPTION_ACCESS_VIOLATION`.
+
+The parent `crash_handler_windows_tests` harness:
+
+- creates a unique temporary working directory and removes any stale test data before launch;
+- starts the probe as a separate process so the CTest runner survives the intentional crash;
+- requires abnormal child termination;
+- verifies `crash_dumps/last_crash.txt` exists and contains `EXCEPTION_ACCESS_VIOLATION` plus the expected PS2/native execution markers;
+- requires at least one non-empty `.dmp` file;
+- removes the isolated temporary directory after successful validation.
+
+TDD evidence:
+
+- RED run `33799222874`: CMake configuration failed exactly because the test-declared `tests/crash_handler_probe.cpp` production probe did not exist; build/test stages were therefore skipped;
+- GREEN run `33799323131`: Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 built `crash_handler_probe.exe`, `crash_handler_windows_tests.exe`, `Burnout3Recompiled_Test.exe`, and `Burnout3Analyze.exe`; all 17/17 tests passed, including the controlled crash/minidump test in 0.11 seconds.
+
+No project-code compiler warning was emitted in the GREEN run. The remaining workflow warning is external (`actions/checkout@v4` Node runtime deprecation). This validates controlled crash-state/minidump generation by the shared Windows crash-handler library; it does not replace the separate interactive Win32 window/message-loop validation gate.
