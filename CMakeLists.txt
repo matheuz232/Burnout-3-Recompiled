@@ -51,6 +51,16 @@ else()
   target_compile_options(b3r_analysis PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_library(b3r_tools
+  src/tools/burnout3_analyze_options.cpp
+)
+target_include_directories(b3r_tools PUBLIC src)
+if(MSVC)
+  target_compile_options(b3r_tools PRIVATE /W4 /permissive- /Zc:__cplusplus)
+else()
+  target_compile_options(b3r_tools PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
   target_compile_options(b3r_core PRIVATE /W4 /permissive- /Zc:__cplusplus)
 else()
@@ -137,7 +147,7 @@ if(B3R_BUILD_TESTS)
   add_test(NAME ps2_elf_analysis_tests COMMAND ps2_elf_analysis_tests)
 
   add_executable(burnout3_analyze_options_tests tests/burnout3_analyze_options_tests.cpp)
-  target_link_libraries(burnout3_analyze_options_tests PRIVATE b3r_analysis)
+  target_link_libraries(burnout3_analyze_options_tests PRIVATE b3r_tools)
   add_test(NAME burnout3_analyze_options_tests COMMAND burnout3_analyze_options_tests)
 
   if(WIN32)
