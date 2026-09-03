@@ -61,6 +61,7 @@ run_burnout3_analyze(const Burnout3AnalyzeOptions& options,
 
     analysis::R5900ReachabilityOptions analysis_options{};
     analysis_options.max_blocks = options.max_blocks;
+    analysis_options.follow_direct_calls = options.follow_direct_calls;
     const auto analysis_result = analysis::analyze_ps2_elf(bytes, analysis_options);
     if (!analysis_result.ok()) {
         return fail(Burnout3AnalyzeRunError::AnalysisFailed,
