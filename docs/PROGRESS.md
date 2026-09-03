@@ -17,7 +17,7 @@ Completion rule: `implemented -> compiled -> executed/tested -> validated`.
 | 120 FPS Windows frame pacer | WORKING | Windows integration test executes successfully; next gate is tighter pacing/jitter capture on desktop Windows |
 | Crash handler/minidump | READY_FOR_INTERACTIVE_VALIDATION | Compiles in Windows CI; requires controlled Windows crash test |
 | PS2 ELF loader | CI_VALIDATED | Synthetic ELF32 little-endian MIPS tests pass with GCC, Clang and MSVC; next gate is a legally supplied real game ELF |
-| PS2 memory mapping | TODO | Next subsystem after ELF loader is merged and tested against legally supplied executable metadata |
+| PS2 memory mapping | WORKING | ELF PT_LOAD-backed mapper passes GCC/Clang synthetic tests; Windows/MSVC CI pending |
 | MIPS decoder | TODO | Requires executable analysis |
 | Static/binary recompiler | TODO | Strategy intentionally not selected yet |
 | Graphics | TODO | No D3D initialization yet |
@@ -40,4 +40,4 @@ The bootstrap is materially further along but **Test Build 0.1 is not yet comple
 1. launch the GUI executable on Windows 10/11 and verify window/message-loop shutdown behavior;
 2. perform a controlled crash and verify minidump + state output;
 3. capture frame pacing/jitter over a longer interval on a normal desktop session;
-4. then integrate the ELF loader with an externally supplied legal game executable without committing proprietary data.
+4. integrate the ELF loader and memory mapper with an externally supplied legal game executable without committing proprietary data.

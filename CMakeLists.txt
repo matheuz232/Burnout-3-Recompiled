@@ -25,6 +25,17 @@ else()
   target_compile_options(b3r_recompiler PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_library(b3r_runtime
+  src/runtime/ps2_memory_map.cpp
+)
+target_include_directories(b3r_runtime PUBLIC src)
+target_link_libraries(b3r_runtime PUBLIC b3r_recompiler)
+if(MSVC)
+  target_compile_options(b3r_runtime PRIVATE /W4 /permissive- /Zc:__cplusplus)
+else()
+  target_compile_options(b3r_runtime PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
   target_compile_options(b3r_core PRIVATE /W4 /permissive- /Zc:__cplusplus)
 else()
@@ -85,6 +96,10 @@ if(B3R_BUILD_TESTS)
   add_executable(ps2_elf_tests tests/ps2_elf_tests.cpp)
   target_link_libraries(ps2_elf_tests PRIVATE b3r_recompiler)
   add_test(NAME ps2_elf_tests COMMAND ps2_elf_tests)
+
+  add_executable(ps2_memory_map_tests tests/ps2_memory_map_tests.cpp)
+  target_link_libraries(ps2_memory_map_tests PRIVATE b3r_runtime)
+  add_test(NAME ps2_memory_map_tests COMMAND ps2_memory_map_tests)
 
   if(WIN32)
     add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
