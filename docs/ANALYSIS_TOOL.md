@@ -37,7 +37,7 @@ external file
 
 ## Report
 
-The report begins with summary counters such as:
+The report begins with summary counters and coverage histograms such as:
 
 ```text
 ENTRY 0x00100000
@@ -48,9 +48,19 @@ UNKNOWN 1
 CALLS 2
 INDIRECT_EXITS 1
 CFG_ISSUES 2
+INSTRUCTION_HISTOGRAM 3
+  BEQ 1
+  NOP 1
+  UNKNOWN 1
+UNKNOWN_PRIMARY_OPCODES 1
+  0x1C 1
 ```
 
-It then records blocks, instruction raw words, delay slots, edges, calls and analysis issues in deterministic order. Equivalent graph evidence must produce byte-identical output regardless of internal container ordering.
+`INSTRUCTION_HISTOGRAM` counts every reachable instruction site represented by the graph, including architectural delay slots, and sorts instruction names deterministically. `UNKNOWN_PRIMARY_OPCODES` counts only unresolved instructions and groups them by the six-bit MIPS primary opcode extracted from the raw word.
+
+The unknown-primary histogram is diagnostic evidence, not a decoder. A primary opcode does not by itself identify all SPECIAL/MMI/COP sub-operations, but the frequency data shows which top-level unresolved families are worth investigating first when a real executable is supplied.
+
+The report then records blocks, instruction raw words, delay slots, edges, calls and analysis issues in deterministic order. Equivalent graph evidence must produce byte-identical output regardless of internal container ordering.
 
 ## Conservative rules
 
@@ -72,4 +82,4 @@ No Burnout 3 executable or asset belongs in this repository. Point `--elf` at a 
 
 ## Next evidence gate
 
-Run the tool against a legally supplied Burnout 3 executable and retain only the generated non-proprietary analysis report/coverage evidence needed to guide further work. That evidence will determine the next decoder families, function-discovery work and eventual IR/backend design.
+Run the tool against a legally supplied Burnout 3 executable and retain only the generated non-proprietary analysis report/coverage evidence needed to guide further work. The instruction and unknown-primary histograms will help determine the next decoder families, function-discovery work and eventual IR/backend design.

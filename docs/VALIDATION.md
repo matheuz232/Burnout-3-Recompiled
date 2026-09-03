@@ -167,3 +167,21 @@ TDD evidence:
 - GREEN run `33774102751`: Visual Studio 2022 / MSVC 19.44 linked `Burnout3Analyze.exe` and `Burnout3Recompiled_Test.exe`, and all 16/16 tests passed including `Burnout3Analyze --help`.
 
 No project-code compiler warning was emitted in the final GREEN run. The only workflow warning remains the external `actions/checkout@v4` Node-runtime deprecation notice. No proprietary Burnout 3 executable or asset was used or committed. A legally supplied real game ELF remains the next evidence gate.
+
+PR #7 merge-ref run `33774831203` also passed 16/16 tests. After merge commit `6168a581a3aff455636790ea15ca8967b53ca6ac`, `main` push run `33777197703` completed successfully, preserving the same validated toolchain baseline.
+
+## 2026-09-03 R5900 opcode-coverage report validation
+
+The deterministic report now adds two evidence-only coverage sections without changing decoder or CFG semantics:
+
+- `INSTRUCTION_HISTOGRAM`: counts reachable decoded instruction names, including `UNKNOWN`, and includes architectural delay slots;
+- `UNKNOWN_PRIMARY_OPCODES`: counts only reachable `UNKNOWN` instruction sites by the six-bit MIPS primary opcode extracted from each raw instruction word.
+
+Both histograms use stable ordering. The unknown-primary grouping is intentionally coarse: primary opcodes identify top-level unresolved families but do not by themselves resolve SPECIAL/MMI/COP sub-operations.
+
+TDD evidence:
+
+- RED run `33777384366`: the entire project built successfully; 14/16 tests passed and exactly `r5900_analysis_report_tests` plus `ps2_elf_analysis_tests` failed because the new histogram sections were absent;
+- GREEN run `33777558935`: Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 built the updated renderer, `Burnout3Analyze.exe`, and `Burnout3Recompiled_Test.exe`; all 16/16 tests passed.
+
+No project-code compiler warning was emitted in the GREEN run. No decoder instruction support, reachability behavior, or guest execution semantics were added by this milestone. The next meaningful evidence gate remains a legally supplied Burnout 3 ELF.

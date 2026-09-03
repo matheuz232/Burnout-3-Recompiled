@@ -21,7 +21,8 @@ Completion rule: `implemented -> compiled -> executed/tested -> validated`.
 | R5900 decoder | CI_VALIDATED | Initial static integer/control-flow/load-store decoder passes GCC/Clang tests and 9/9 Windows/MSVC CI suite; MMI/COP families remain explicit Unknown |
 | R5900 basic-block analysis | CI_VALIDATED | Conservative block/edge analysis passes GCC/Clang tests and 10/10 Windows/MSVC CI suite; delay slots and branch-likely are explicit |
 | Reachable control-flow graph | CI_VALIDATED | Bounded direct-edge worklist passes GCC/Clang tests and 11/11 Windows/MSVC CI suite; calls and indirect exits remain evidence rather than guessed traversal |
-| R5900 analysis report | CI_VALIDATED | Stable deterministic text report for blocks/instructions/calls/issues passes 12/12 Windows/MSVC CI |
+| R5900 analysis report | CI_VALIDATED | Stable deterministic text report for blocks/instructions/calls/issues passes Windows/MSVC CI |
+| R5900 opcode coverage metrics | CI_VALIDATED | Report includes deterministic instruction histogram plus primary-opcode histogram for reachable `UNKNOWN` sites, including delay slots; Windows/MSVC suite passes 16/16 |
 | External PS2 ELF analysis pipeline | CI_VALIDATED | Synthetic ELF is parsed, mapped, traversed and rendered end-to-end; 13/13 Windows/MSVC tests pass |
 | `Burnout3Analyze` CLI | CI_VALIDATED | Console executable builds with VS2022/MSVC, external-file/stdout/output-path behavior is tested, and the full suite passes 16/16; next gate is a legally supplied Burnout 3 ELF |
 | Static/binary recompiler | TODO | Strategy intentionally not selected yet; real ELF coverage should drive the instruction/IR/backend plan |
@@ -47,7 +48,11 @@ Reachability run `33717425111` passed 11/11. Analysis-report GREEN run `33718514
 - file-I/O app RED `33773406647` -> GREEN `33773705488` (15/15);
 - executable help-smoke RED `33773875369` -> GREEN `33774102751` (16/16).
 
-The final GREEN run linked both `Burnout3Analyze.exe` and `Burnout3Recompiled_Test.exe`. No project-code compiler warnings were emitted; the remaining workflow warning is external to the project (`actions/checkout@v4` Node runtime deprecation).
+PR #7 merge-ref run `33774831203` passed 16/16, and post-merge `main` run `33777197703` also completed successfully.
+
+Opcode-coverage RED run `33777384366` built successfully and failed only the two report-contract tests that required the new histograms. GREEN run `33777558935` built the updated renderer and passed 16/16 tests.
+
+No project-code compiler warnings were emitted in these final validation runs; the remaining workflow warning is external to the project (`actions/checkout@v4` Node runtime deprecation).
 
 The first CI attempt failed before compilation because `windows-latest` had moved to a Windows Server 2025 / Visual Studio 2026 image while the project explicitly requested the Visual Studio 2022 CMake generator. The workflow remains pinned to `windows-2022`.
 
