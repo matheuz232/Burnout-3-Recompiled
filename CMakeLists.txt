@@ -156,6 +156,8 @@ if(B3R_BUILD_TESTS)
   target_link_libraries(burnout3_analyze_app_tests PRIVATE b3r_tools)
   add_test(NAME burnout3_analyze_app_tests COMMAND burnout3_analyze_app_tests)
 
+  add_test(NAME burnout3_analyze_help COMMAND Burnout3Analyze --help)
+
   if(WIN32)
     add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
     target_link_libraries(qpc_clock_windows_tests PRIVATE b3r_windows_runtime)
