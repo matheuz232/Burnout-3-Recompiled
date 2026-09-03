@@ -3,6 +3,7 @@ name: Windows CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build-test:
@@ -17,3 +18,26 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure
       - name: Frame pacing telemetry
         run: .\build\Release\frame_pacer_windows_tests.exe
+      - name: Stage analyzer package
+        shell: pwsh
+        run: |
+          $package = "artifact\Burnout3Analyze-windows-x64"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item ".\build\Release\Burnout3Analyze.exe" "$package\Burnout3Analyze.exe"
+          Copy-Item ".\docs\ANALYZE-USAGE.txt" "$package\ANALYZE-USAGE.txt"
+      - name: Validate analyzer package
+        shell: pwsh
+        run: |
+          $package = "artifact\Burnout3Analyze-windows-x64"
+          $exe = Join-Path $package "Burnout3Analyze.exe"
+          $usage = Join-Path $package "ANALYZE-USAGE.txt"
+          if (-not (Test-Path $exe -PathType Leaf)) { throw "Burnout3Analyze.exe missing from staged package" }
+          if ((Get-Item $exe).Length -le 0) { throw "Burnout3Analyze.exe is empty" }
+          if (-not (Test-Path $usage -PathType Leaf)) { throw "ANALYZE-USAGE.txt missing from staged package" }
+      - name: Upload analyzer artifact
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        uses: actions/upload-artifact@v4
+        with:
+          name: Burnout3Analyze-windows-x64
+          path: artifact/Burnout3Analyze-windows-x64
+          if-no-files-found: error
