@@ -82,12 +82,18 @@ const char* control_flow_error_name(R5900ControlFlowError error) noexcept {
 using InstructionHistogram = std::map<std::string, std::size_t>;
 using UnknownPrimaryHistogram = std::map<std::uint8_t, std::size_t>;
 
+struct UnknownSite {
+    std::uint32_t pc{};
+    std::uint32_t raw{};
+};
+
 void count_site(const R5900InstructionSite& site,
                 std::size_t& instructions,
                 std::size_t& decoded,
                 std::size_t& unknown,
                 InstructionHistogram& instruction_histogram,
-                UnknownPrimaryHistogram& unknown_primary_histogram) {
+                UnknownPrimaryHistogram& unknown_primary_histogram,
+                std::vector<UnknownSite>& unknown_sites) {
     ++instructions;
 
     const auto instruction_name =
@@ -99,6 +105,7 @@ void count_site(const R5900InstructionSite& site,
         const auto primary_opcode =
             static_cast<std::uint8_t>((site.decoded.raw >> 26u) & 0x3Fu);
         ++unknown_primary_histogram[primary_opcode];
+        unknown_sites.push_back(UnknownSite{site.pc, site.decoded.raw});
     } else {
         ++decoded;
     }
@@ -121,6 +128,7 @@ std::string render_r5900_analysis_report(const R5900ReachabilityGraph& graph) {
     std::size_t unknown_count = 0;
     InstructionHistogram instruction_histogram{};
     UnknownPrimaryHistogram unknown_primary_histogram{};
+    std::vector<UnknownSite> unknown_sites{};
     for (const auto* block : blocks) {
         for (const auto& instruction : block->instructions) {
             count_site(instruction,
@@ -128,7 +136,8 @@ std::string render_r5900_analysis_report(const R5900ReachabilityGraph& graph) {
                        decoded_count,
                        unknown_count,
                        instruction_histogram,
-                       unknown_primary_histogram);
+                       unknown_primary_histogram,
+                       unknown_sites);
         }
         if (block->delay_slot.has_value()) {
             count_site(*block->delay_slot,
@@ -136,9 +145,13 @@ std::string render_r5900_analysis_report(const R5900ReachabilityGraph& graph) {
                        decoded_count,
                        unknown_count,
                        instruction_histogram,
-                       unknown_primary_histogram);
+                       unknown_primary_histogram,
+                       unknown_sites);
         }
     }
+    std::sort(unknown_sites.begin(), unknown_sites.end(), [](const auto& lhs, const auto& rhs) {
+        return std::tuple{lhs.pc, lhs.raw} < std::tuple{rhs.pc, rhs.raw};
+    });
 
     const auto indirect_exit_count = static_cast<std::size_t>(std::count_if(
         graph.issues.begin(), graph.issues.end(), [](const auto& issue) {
@@ -163,6 +176,24 @@ std::string render_r5900_analysis_report(const R5900ReachabilityGraph& graph) {
     out << "UNKNOWN_PRIMARY_OPCODES " << unknown_primary_histogram.size() << '\n';
     for (const auto& [opcode, count] : unknown_primary_histogram) {
         out << "  " << hex_opcode(opcode) << ' ' << count << '\n';
+    }
+
+    out << "UNKNOWN_SITES " << unknown_sites.size() << '\n';
+    for (const auto& site : unknown_sites) {
+        const auto primary = static_cast<std::uint8_t>((site.raw >> 26u) & 0x3Fu);
+        const auto rs = static_cast<std::uint8_t>((site.raw >> 21u) & 0x1Fu);
+        const auto rt = static_cast<std::uint8_t>((site.raw >> 16u) & 0x1Fu);
+        const auto rd = static_cast<std::uint8_t>((site.raw >> 11u) & 0x1Fu);
+        const auto sa = static_cast<std::uint8_t>((site.raw >> 6u) & 0x1Fu);
+        const auto funct = static_cast<std::uint8_t>(site.raw & 0x3Fu);
+        out << "  PC " << hex32(site.pc)
+            << " RAW " << hex32(site.raw)
+            << " PRIMARY " << hex_opcode(primary)
+            << " RS " << hex_opcode(rs)
+            << " RT " << hex_opcode(rt)
+            << " RD " << hex_opcode(rd)
+            << " SA " << hex_opcode(sa)
+            << " FUNCT " << hex_opcode(funct) << '\n';
     }
     out << '\n';
 
