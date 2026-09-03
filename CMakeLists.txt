@@ -131,6 +131,10 @@ if(B3R_BUILD_TESTS)
   target_link_libraries(r5900_analysis_report_tests PRIVATE b3r_analysis)
   add_test(NAME r5900_analysis_report_tests COMMAND r5900_analysis_report_tests)
 
+  add_executable(ps2_elf_analysis_tests tests/ps2_elf_analysis_tests.cpp)
+  target_link_libraries(ps2_elf_analysis_tests PRIVATE b3r_analysis)
+  add_test(NAME ps2_elf_analysis_tests COMMAND ps2_elf_analysis_tests)
+
   if(WIN32)
     add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
     target_link_libraries(qpc_clock_windows_tests PRIVATE b3r_windows_runtime)
