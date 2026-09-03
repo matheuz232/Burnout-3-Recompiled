@@ -63,6 +63,16 @@ else()
   target_compile_options(b3r_tools PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_executable(Burnout3Analyze
+  src/tools/burnout3_analyze_main.cpp
+)
+target_link_libraries(Burnout3Analyze PRIVATE b3r_tools)
+if(MSVC)
+  target_compile_options(Burnout3Analyze PRIVATE /W4 /permissive- /Zc:__cplusplus)
+else()
+  target_compile_options(Burnout3Analyze PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
   target_compile_options(b3r_core PRIVATE /W4 /permissive- /Zc:__cplusplus)
 else()
