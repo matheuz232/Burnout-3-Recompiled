@@ -11,5 +11,5 @@
 - [x] Implement bounded deterministic traversal and issue recording.
 - [x] Verify GREEN and complete host suite.
 - [x] Verify clean GCC/Clang Release builds.
-- [ ] Publish and verify Windows/MSVC CI.
-- [ ] Update progress/validation evidence.
+- [x] Publish and verify Windows/MSVC CI.
+- [x] Update progress/validation evidence.
