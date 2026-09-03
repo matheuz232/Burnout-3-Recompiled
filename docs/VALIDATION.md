@@ -22,31 +22,7 @@ All four bootstrap host-portable tests passed under GCC and Clang before the ELF
 
 ## 2026-09-03 Windows CI validation
 
-GitHub Actions run `33713829165` used:
-
-- runner: `windows-2022`;
-- Windows Server 2022;
-- Visual Studio 2022 Enterprise toolchain;
-- MSVC 19.44.35228;
-- Windows SDK 10.0.26100.0.
-
-Results:
-
-- CMake configure: PASS;
-- MSVC Release build: PASS;
-- `Burnout3Recompiled_Test.exe` link: PASS;
-- `frame_schedule_tests`: PASS;
-- `frame_stats_tests`: PASS;
-- `runtime_options_tests`: PASS;
-- `log_tests`: PASS;
-- `qpc_clock_windows_tests`: PASS;
-- `frame_pacer_windows_tests`: PASS;
-- total: 6/6 tests passed.
-
-The CI exposed two warning classes that were cleaned up in the ELF feature branch:
-
-- duplicate `WIN32_LEAN_AND_MEAN` definitions (already provided by CMake usage requirements);
-- intentional discard of the frame-pacer return value without an explicit cast.
+GitHub Actions run `33713829165` used Windows Server 2022, Visual Studio 2022 Enterprise, MSVC 19.44.35228 and Windows SDK 10.0.26100.0. CMake configure, Release build, `Burnout3Recompiled_Test.exe` link and all 6/6 bootstrap tests passed.
 
 CI does not constitute interactive validation of the Win32 window or crash/minidump path, and the current pacing integration test is only a coarse average-rate sanity check. Those remain separate gates.
 
@@ -54,33 +30,51 @@ CI does not constitute interactive validation of the Win32 window or crash/minid
 
 The ELF loader is tested only with synthetic, non-proprietary ELF data. It validates ELF32 little-endian MIPS executable headers, program-header table bounds, PT_LOAD ranges, and `p_memsz >= p_filesz`.
 
-Host result: 5/5 tests pass in clean Release builds with GCC 14.2 and Clang 17. GitHub Actions run `33714243602` then compiled the ELF loader with MSVC 19.44 and passed 7/7 tests on Windows, including `ps2_elf_tests`. The code-specific MSVC warnings observed in the earlier bootstrap run are absent; the remaining workflow warning is an external `actions/checkout@v4` Node-runtime deprecation notice.
+Host result: 5/5 tests pass in clean Release builds with GCC 14.2 and Clang 17. GitHub Actions run `33714243602` compiled the ELF loader with MSVC 19.44 and passed 7/7 tests on Windows.
 
 ## 2026-09-03 PS2 ELF-backed memory-map validation
 
-The first-stage PS2 virtual-address mapper is tested entirely with synthetic ELF images and contains no proprietary Burnout 3 data. The tests cover:
-
-- PT_LOAD payload copy into native backing;
-- zero-filled `[p_filesz, p_memsz)` BSS;
-- guest-address translation and range bounds;
-- overlap rejection;
-- 32-bit guest address-space overflow rejection;
-- mutable little-endian 8/16/32-bit read/write helpers.
+Synthetic tests cover PT_LOAD payload copy, BSS zero-fill, guest-address translation/bounds, overlap rejection, 32-bit address-space overflow rejection, and mutable little-endian 8/16/32-bit helpers.
 
 Fresh clean Release host results:
 
 - GCC 14.2: 6/6 tests passed;
 - Clang 17: 6/6 tests passed.
 
-GitHub Actions run `33715582203` on Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 then built `b3r_runtime` and passed 8/8 tests, including `ps2_memory_map_tests`. An earlier run exposed MSVC warning C4244 caused by integer promotion in the `read_u16` return expression; commit `5e7d3a2a` adds an explicit final narrowing cast, and the clean rerun contains no project-code compiler warnings. The remaining warning is the external `actions/checkout@v4` Node-runtime deprecation notice.
+GitHub Actions run `33715582203` built `b3r_runtime` with MSVC 19.44 and passed 8/8 tests. The previously observed integer-promotion C4244 warning was eliminated.
 
 ## 2026-09-03 R5900 static decoder validation
 
-The initial Emotion Engine/R5900 decoder is a static-analysis primitive only. It does not execute instructions or emulate CPU state. Synthetic tests cover field extraction, signed immediates, direct branch/jump targets, delay-slot metadata, link/branch-likely flags, indirect `JR`/`JALR` handling, stable instruction names, and R5900-specific 128-bit `LQ`/`SQ` widths. Unsupported MMI/COP families remain explicitly `Unknown` rather than receiving guessed semantics.
+The initial R5900 decoder is a static-analysis primitive only. It does not execute instructions or emulate CPU state. Synthetic tests cover field extraction, signed immediates, direct branch/jump targets, delay-slot metadata, link/branch-likely flags, indirect `JR`/`JALR`, stable instruction names, and R5900-specific 128-bit `LQ`/`SQ` widths. Unsupported MMI/COP families remain explicitly `Unknown`.
 
-Fresh clean host results before publication:
+Fresh clean host results:
 
 - GCC 14.2: 7/7 tests passed with no compiler warnings;
 - Clang 17: 7/7 tests passed with no compiler warnings.
 
-GitHub Actions run `33716010679` on Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 compiled `r5900_decoder.cpp` and passed 9/9 tests, including `r5900_decoder_tests`. The build emitted no project-code compiler warnings. The only workflow warning is the external `actions/checkout@v4` Node-runtime deprecation notice.
+GitHub Actions run `33716010679` compiled the decoder with MSVC 19.44 and passed 9/9 tests with no project-code compiler warnings.
+
+## 2026-09-03 R5900 basic-block/control-flow validation
+
+The first control-flow analyzer is read-only and does not execute guest instructions or infer register values. It introduces a separate `b3r_analysis` layer depending on the guest-memory map and decoder, avoiding a recompiler/runtime dependency cycle.
+
+Synthetic tests cover:
+
+- linear instruction collection through the terminating control instruction;
+- architectural delay slots stored separately from the linear body;
+- normal and branch-likely delay-slot path metadata;
+- conditional taken/not-taken edges;
+- direct `J` and `JAL` edges;
+- indirect `JR`/`JALR` exits without invented targets;
+- call continuations after the delay slot;
+- `BREAK`/system trap termination;
+- conservative termination on unsupported/Unknown instructions;
+- bounded instruction-limit fallthrough;
+- unaligned, unmapped, non-executable and missing-delay-slot rejection.
+
+Fresh clean Release host results:
+
+- GCC: 8/8 tests passed, no compiler warnings;
+- Clang 17: 8/8 tests passed, no compiler warnings.
+
+GitHub Actions run `33716632916` on Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 built `b3r_analysis` and passed 10/10 tests, including `r5900_control_flow_tests`. No project-code compiler warning was emitted. The only workflow warning is the external `actions/checkout@v4` Node-runtime deprecation notice.
