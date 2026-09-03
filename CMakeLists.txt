@@ -176,5 +176,22 @@ if(B3R_BUILD_TESTS)
     add_executable(frame_pacer_windows_tests tests/frame_pacer_windows_tests.cpp)
     target_link_libraries(frame_pacer_windows_tests PRIVATE b3r_windows_runtime)
     add_test(NAME frame_pacer_windows_tests COMMAND frame_pacer_windows_tests)
+
+    add_executable(crash_handler_probe tests/crash_handler_probe.cpp)
+    target_link_libraries(crash_handler_probe PRIVATE b3r_windows_runtime)
+    if(MSVC)
+      target_compile_options(crash_handler_probe PRIVATE /W4 /permissive- /Zc:__cplusplus)
+    endif()
+
+    add_executable(crash_handler_windows_tests tests/crash_handler_windows_tests.cpp)
+    target_link_libraries(crash_handler_windows_tests PRIVATE b3r_windows_runtime)
+    if(MSVC)
+      target_compile_options(crash_handler_windows_tests PRIVATE /W4 /permissive- /Zc:__cplusplus)
+    endif()
+    add_test(
+      NAME crash_handler_windows_tests
+      COMMAND crash_handler_windows_tests $<TARGET_FILE:crash_handler_probe>
+    )
+    set_tests_properties(crash_handler_windows_tests PROPERTIES TIMEOUT 30)
   endif()
 endif()
