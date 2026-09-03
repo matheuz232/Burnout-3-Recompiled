@@ -207,3 +207,24 @@ TDD evidence:
 - GREEN run `33799323131`: Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 built `crash_handler_probe.exe`, `crash_handler_windows_tests.exe`, `Burnout3Recompiled_Test.exe`, and `Burnout3Analyze.exe`; all 17/17 tests passed, including the controlled crash/minidump test in 0.11 seconds.
 
 No project-code compiler warning was emitted in the GREEN run. The remaining workflow warning is external (`actions/checkout@v4` Node runtime deprecation). This validates controlled crash-state/minidump generation by the shared Windows crash-handler library; it does not replace the separate interactive Win32 window/message-loop validation gate.
+
+## 2026-09-03 Win32 window lifecycle smoke validation
+
+The Win32 window path is now exercised in Windows CI with a real top-level `HWND` using the existing production `Win32Window` implementation. This is an automated lifecycle smoke test, not visual desktop validation.
+
+The smoke test:
+
+- acquires the current process `HINSTANCE`;
+- creates a 640x360 windowed `Win32Window`;
+- requires a non-null live `HWND`;
+- posts `WM_CLOSE` to the real window;
+- pumps the production message loop until `WM_QUIT` is observed;
+- confirms the `HWND` is destroyed;
+- uses a bounded loop plus CTest timeout so CI cannot hang indefinitely.
+
+TDD evidence:
+
+- RED run `33802472364`: CMake generation failed exactly because the declared `tests/win32_window_smoke_tests.cpp` source did not exist yet;
+- GREEN run `33802569842`: Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 built the smoke target and passed 18/18 tests; `win32_window_smoke_tests` completed successfully in 0.05 seconds.
+
+No project-code compiler warning was emitted in the GREEN run. The only workflow warning remains the external `actions/checkout@v4` Node-runtime deprecation notice. This proves automated create/close/message-loop behavior in the hosted Windows environment, but it does not replace visual inspection of the GUI on an interactive Windows 10/11 desktop.
