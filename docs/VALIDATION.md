@@ -78,3 +78,25 @@ Fresh clean Release host results:
 - Clang 17: 8/8 tests passed, no compiler warnings.
 
 GitHub Actions run `33716632916` on Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 built `b3r_analysis` and passed 10/10 tests, including `r5900_control_flow_tests`. No project-code compiler warning was emitted. The only workflow warning is the external `actions/checkout@v4` Node-runtime deprecation notice.
+
+## 2026-09-03 R5900 reachable control-flow validation
+
+The reachability walker remains a read-only static-analysis layer. It uses a bounded deterministic worklist over validated basic blocks, follows only explicit non-call direct successors, records direct and indirect calls separately, and never invents register-indirect targets.
+
+Synthetic coverage includes:
+
+- deterministic branch/fallthrough discovery;
+- call-continuation traversal while keeping direct call targets as evidence only;
+- direct self-loop deduplication;
+- invalid/unmapped successor recording without discarding the valid source block;
+- explicit block-limit truncation evidence;
+- unresolved indirect exits;
+- leader-inside-block conflict detection;
+- fatal rejection of an invalid entry point.
+
+Fresh clean Release host results:
+
+- GCC: 9/9 tests passed, no compiler warnings;
+- Clang 17: 9/9 tests passed, no compiler warnings.
+
+GitHub Actions run `33717425111` on Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 compiled `r5900_reachability.cpp` and passed 11/11 tests, including `r5900_reachability_tests`. No project-code compiler warning was emitted. The only workflow warning is the external `actions/checkout@v4` Node-runtime deprecation notice.
