@@ -39,17 +39,10 @@ constexpr std::uint32_t j_type(std::uint8_t op, std::uint32_t target) {
            ((target >> 2u) & 0x03FFFFFFu);
 }
 
-b3r::runtime::Ps2MemoryMap make_memory() {
+b3r::runtime::Ps2MemoryMap make_memory(const std::vector<std::uint32_t>& words) {
     constexpr std::uint32_t kBase = 0x1000u;
     constexpr std::uint32_t kProgramHeaderOffset = 52u;
     constexpr std::uint32_t kSegmentOffset = 0x100u;
-    constexpr std::size_t kWordCount = 66u;
-
-    std::vector<std::uint32_t> words(kWordCount, 0u);
-    words[0] = j_type(0x03u, 0x1100u); // JAL 0x1100
-    words[1] = 0u;                    // delay slot
-    words[2] = 0x0000000Du;           // BREAK continuation
-    words[64] = 0x0000000Du;          // BREAK callee
 
     const auto payload_size = static_cast<std::uint32_t>(words.size() * 4u);
     Bytes bytes(kSegmentOffset + payload_size, 0u);
@@ -90,9 +83,33 @@ b3r::runtime::Ps2MemoryMap make_memory() {
     return std::move(*map.memory);
 }
 
+std::vector<std::uint32_t> single_call_program(std::uint32_t target = 0x1100u) {
+    std::vector<std::uint32_t> words(66u, 0u);
+    words[0] = j_type(0x03u, target);
+    words[1] = 0u;
+    words[2] = 0x0000000Du;
+    words[64] = 0x0000000Du;
+    return words;
+}
+
 bool has_block(const b3r::analysis::R5900ReachabilityGraph& graph, std::uint32_t pc) {
     return std::any_of(graph.blocks.begin(), graph.blocks.end(),
                        [pc](const auto& block) { return block.start_pc == pc; });
+}
+
+std::size_t block_count(const b3r::analysis::R5900ReachabilityGraph& graph, std::uint32_t pc) {
+    return static_cast<std::size_t>(std::count_if(
+        graph.blocks.begin(), graph.blocks.end(),
+        [pc](const auto& block) { return block.start_pc == pc; }));
+}
+
+bool has_issue(const b3r::analysis::R5900ReachabilityGraph& graph,
+               b3r::analysis::R5900ReachabilityIssueKind kind,
+               std::uint32_t target) {
+    return std::any_of(graph.issues.begin(), graph.issues.end(),
+                       [kind, target](const auto& issue) {
+                           return issue.kind == kind && issue.target == target;
+                       });
 }
 
 } // namespace
@@ -100,7 +117,7 @@ bool has_block(const b3r::analysis::R5900ReachabilityGraph& graph, std::uint32_t
 int main() {
     using namespace b3r::analysis;
 
-    const auto memory = make_memory();
+    const auto memory = make_memory(single_call_program());
 
     {
         const auto result = analyze_r5900_reachability(memory, 0x1000u);
@@ -118,6 +135,50 @@ int main() {
                "enabled follow-direct-calls must traverse the explicit callee target");
         expect(result.graph->calls.size() == 1u && result.graph->calls[0].target == 0x1100u,
                "traversed direct call must remain recorded as call evidence");
+    }
+
+    {
+        R5900ReachabilityOptions options{};
+        options.follow_direct_calls = true;
+        options.max_blocks = 2u;
+        const auto result = analyze_r5900_reachability(memory, 0x1000u, options);
+        expect(result.ok(), "bounded follow-direct-calls reachability must succeed");
+        expect(result.graph->blocks.size() == 2u && has_block(*result.graph, 0x1100u),
+               "direct callee must consume the shared block budget");
+        expect(has_issue(*result.graph, R5900ReachabilityIssueKind::BlockLimitReached, 0x1008u),
+               "shared block limit must report the queued continuation that could not be analyzed");
+    }
+
+    {
+        auto words = single_call_program();
+        words[2] = j_type(0x03u, 0x1100u);
+        words[3] = 0u;
+        words[4] = 0x0000000Du;
+        const auto duplicate_memory = make_memory(words);
+
+        R5900ReachabilityOptions options{};
+        options.follow_direct_calls = true;
+        const auto result = analyze_r5900_reachability(duplicate_memory, 0x1000u, options);
+        expect(result.ok(), "duplicate direct-call target analysis must succeed");
+        expect(result.graph->calls.size() == 2u,
+               "each direct call site must remain recorded as evidence");
+        expect(block_count(*result.graph, 0x1100u) == 1u,
+               "duplicate direct-call targets must be scheduled only once");
+    }
+
+    {
+        auto words = single_call_program(0x2000u);
+        words.resize(3u);
+        const auto invalid_target_memory = make_memory(words);
+
+        R5900ReachabilityOptions options{};
+        options.follow_direct_calls = true;
+        const auto result = analyze_r5900_reachability(invalid_target_memory, 0x1000u, options);
+        expect(result.ok(), "invalid callee must remain a non-fatal reachability issue");
+        expect(has_issue(*result.graph, R5900ReachabilityIssueKind::TargetAnalysisFailed, 0x2000u),
+               "unmapped direct callee must be reported as TargetAnalysisFailed");
+        expect(has_block(*result.graph, 0x1008u),
+               "valid call continuation must still be traversed after an invalid callee");
     }
 
     std::cout << "r5900_follow_direct_calls_tests: PASS\n";
