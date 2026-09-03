@@ -21,8 +21,10 @@ Completion rule: `implemented -> compiled -> executed/tested -> validated`.
 | R5900 decoder | CI_VALIDATED | Initial static integer/control-flow/load-store decoder passes GCC/Clang tests and 9/9 Windows/MSVC CI suite; MMI/COP families remain explicit Unknown |
 | R5900 basic-block analysis | CI_VALIDATED | Conservative block/edge analysis passes GCC/Clang tests and 10/10 Windows/MSVC CI suite; delay slots and branch-likely are explicit |
 | Reachable control-flow graph | CI_VALIDATED | Bounded direct-edge worklist passes GCC/Clang tests and 11/11 Windows/MSVC CI suite; calls and indirect exits remain evidence rather than guessed traversal |
-| R5900 analysis report | CI_VALIDATED | Stable deterministic text report for blocks/instructions/calls/issues passes 12/12 Windows/MSVC CI; next gate is feeding it a legally supplied real game ELF |
-| Static/binary recompiler | TODO | Strategy intentionally not selected yet |
+| R5900 analysis report | CI_VALIDATED | Stable deterministic text report for blocks/instructions/calls/issues passes 12/12 Windows/MSVC CI |
+| External PS2 ELF analysis pipeline | CI_VALIDATED | Synthetic ELF is parsed, mapped, traversed and rendered end-to-end; 13/13 Windows/MSVC tests pass |
+| `Burnout3Analyze` CLI | CI_VALIDATED | Console executable builds with VS2022/MSVC, external-file/stdout/output-path behavior is tested, and the full suite passes 16/16; next gate is a legally supplied Burnout 3 ELF |
+| Static/binary recompiler | TODO | Strategy intentionally not selected yet; real ELF coverage should drive the instruction/IR/backend plan |
 | Graphics | TODO | No D3D initialization yet |
 | Audio | TODO | No XAudio2 initialization yet |
 | Input | TODO | No keyboard/XInput layer yet |
@@ -36,9 +38,16 @@ GitHub Actions run `33713829165` on `windows-2022` completed successfully using 
 
 Memory-map run `33715582203` passed 8/8. R5900 decoder run `33716010679` passed 9/9. R5900 basic-block run `33716632916` built `b3r_analysis` with MSVC 19.44 and passed 10/10 tests including `r5900_control_flow_tests`.
 
-Reachability run `33717425111` compiled `r5900_reachability.cpp` with MSVC 19.44 and passed 11/11 tests including `r5900_reachability_tests`.
+Reachability run `33717425111` passed 11/11. Analysis-report GREEN run `33718514985` passed 12/12.
 
-Analysis-report RED run `33718368434` failed at the expected missing-header boundary before production code existed. GREEN run `33718514985` compiled `r5900_analysis_report.cpp` with MSVC 19.44 and passed 12/12 tests including `r5900_analysis_report_tests`. No project-code compiler warnings were emitted; the remaining workflow warning is external to the project (`actions/checkout@v4` Node runtime deprecation).
+`Burnout3Analyze` development used three additional TDD gates plus the final executable gate:
+
+- ELF-pipeline RED `33772468390` -> GREEN `33772705605` (13/13);
+- CLI-options RED `33772935813` -> GREEN `33773184514` (14/14);
+- file-I/O app RED `33773406647` -> GREEN `33773705488` (15/15);
+- executable help-smoke RED `33773875369` -> GREEN `33774102751` (16/16).
+
+The final GREEN run linked both `Burnout3Analyze.exe` and `Burnout3Recompiled_Test.exe`. No project-code compiler warnings were emitted; the remaining workflow warning is external to the project (`actions/checkout@v4` Node runtime deprecation).
 
 The first CI attempt failed before compilation because `windows-latest` had moved to a Windows Server 2025 / Visual Studio 2026 image while the project explicitly requested the Visual Studio 2022 CMake generator. The workflow remains pinned to `windows-2022`.
 
@@ -49,4 +58,4 @@ The bootstrap is materially further along but **Test Build 0.1 is not yet comple
 1. launch the GUI executable on Windows 10/11 and verify window/message-loop shutdown behavior;
 2. perform a controlled crash and verify minidump + state output;
 3. capture frame pacing/jitter over a longer interval on a normal desktop session;
-4. analyze an externally supplied legal game executable without committing proprietary data, use the deterministic analysis report to measure real reachable-code coverage, and then drive later recompilation work from that evidence.
+4. run `Burnout3Analyze` against an externally supplied legal Burnout 3 executable without committing proprietary data, use the deterministic report to measure real reachable-code/opcode coverage, and drive the actual recompilation strategy from that evidence.
