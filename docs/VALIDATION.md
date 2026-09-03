@@ -100,3 +100,28 @@ Fresh clean Release host results:
 - Clang 17: 9/9 tests passed, no compiler warnings.
 
 GitHub Actions run `33717425111` on Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 compiled `r5900_reachability.cpp` and passed 11/11 tests, including `r5900_reachability_tests`. No project-code compiler warning was emitted. The only workflow warning is the external `actions/checkout@v4` Node-runtime deprecation notice.
+
+## 2026-09-03 deterministic R5900 analysis-report validation
+
+The report renderer is a pure presentation layer over `R5900ReachabilityGraph`. It does not access the guest memory map, execute instructions, discover additional control flow, infer indirect targets, or assign function boundaries. Its purpose is to make analysis evidence reproducible and diffable once a legal real game ELF is supplied.
+
+The text contract includes:
+
+- entry point;
+- block/instruction/decoded/unknown counts;
+- call, indirect-exit and CFG-issue counts;
+- blocks sorted by guest start PC;
+- instruction and delay-slot raw words;
+- explicit control-flow edges;
+- direct/indirect call evidence;
+- unresolved/failed/conflicting reachability issues.
+
+The deterministic-order test constructs equivalent graphs with reversed container ordering and requires byte-identical report text.
+
+TDD evidence:
+
+- RED run `33718368434`: MSVC build failed exactly because `analysis/r5900_analysis_report.h` did not exist yet;
+- GREEN run `33718514985`: Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 built `r5900_analysis_report.cpp` and passed 12/12 tests, including `r5900_analysis_report_tests`;
+- no project-code compiler warning was emitted; the only workflow warning is the external `actions/checkout@v4` Node-runtime deprecation notice.
+
+No fresh GCC/Clang rerun was performed for this report-only milestone in the connector-backed continuation; the prior portable analysis layers remain covered by their recorded clean host validations above.
