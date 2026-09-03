@@ -167,7 +167,7 @@ int main() {
         expect(result.ok(), "follow-direct-calls app analysis must succeed");
         expect(stdout_stream.str().find("BLOCK 0x00100100 END Trap") != std::string::npos,
                "app must propagate follow-direct-calls into reachability");
-        expect(stdout_stream.str().find("DIRECT_CALL 0x00100000") != std::string::npos,
+        expect(stdout_stream.str().find("CALL 0x00100000 PC 0x00100000 DIRECT 0x00100100") != std::string::npos,
                "followed callee must remain represented as direct-call evidence");
     }
 
