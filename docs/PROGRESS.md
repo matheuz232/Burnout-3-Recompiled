@@ -15,7 +15,7 @@ Completion rule: `implemented -> compiled -> executed/tested -> validated`.
 | Win32 window | READY_FOR_INTERACTIVE_VALIDATION | Compiles in Windows CI; must be opened/closed on Windows 10/11 |
 | QPC high-resolution clock | DONE | Windows integration test executes successfully in GitHub Actions |
 | 120 FPS Windows frame pacer | WORKING | Windows integration test executes successfully; next gate is tighter pacing/jitter capture on desktop Windows |
-| Crash handler/minidump | READY_FOR_INTERACTIVE_VALIDATION | Compiles in Windows CI; requires controlled Windows crash test |
+| Crash handler/minidump | CI_VALIDATED | Controlled child-process access violation on Windows CI verifies `last_crash.txt`, PS2/native execution markers and a non-empty `.dmp`; GUI/window validation remains separate |
 | PS2 ELF loader | CI_VALIDATED | Synthetic ELF32 little-endian MIPS tests pass with GCC, Clang and MSVC; next gate is a legally supplied real game ELF |
 | PS2 memory mapping | CI_VALIDATED | ELF PT_LOAD-backed mapper passes GCC/Clang tests and 8/8 Windows/MSVC CI suite; next gate is real executable metadata |
 | R5900 decoder | CI_VALIDATED | Initial static integer/control-flow/load-store decoder passes GCC/Clang tests and 9/9 Windows/MSVC CI suite; MMI/COP families remain explicit Unknown |
@@ -50,7 +50,9 @@ Reachability run `33717425111` passed 11/11. Analysis-report GREEN run `33718514
 
 PR #7 merge-ref run `33774831203` passed 16/16, and post-merge `main` run `33777197703` also completed successfully.
 
-Opcode-coverage RED run `33777384366` built successfully and failed only the two report-contract tests that required the new histograms. GREEN run `33777558935` built the updated renderer and passed 16/16 tests.
+Opcode-coverage RED run `33777384366` built successfully and failed only the two report-contract tests that required the new histograms. GREEN run `33777558935` built the updated renderer and passed 16/16 tests. PR #8 merge-ref run `33778143705` and post-merge `main` run `33778300157` both passed 16/16.
+
+Crash-handler RED run `33799222874` failed during CMake generation exactly because the test-declared probe source did not exist. GREEN run `33799323131` built the isolated probe and harness with MSVC 19.44 and passed 17/17 tests, including controlled access-violation state/minidump validation.
 
 No project-code compiler warnings were emitted in these final validation runs; the remaining workflow warning is external to the project (`actions/checkout@v4` Node runtime deprecation).
 
@@ -61,6 +63,5 @@ The first CI attempt failed before compilation because `windows-latest` had move
 The bootstrap is materially further along but **Test Build 0.1 is not yet complete**. Remaining bootstrap validation gates are:
 
 1. launch the GUI executable on Windows 10/11 and verify window/message-loop shutdown behavior;
-2. perform a controlled crash and verify minidump + state output;
-3. capture frame pacing/jitter over a longer interval on a normal desktop session;
-4. run `Burnout3Analyze` against an externally supplied legal Burnout 3 executable without committing proprietary data, use the deterministic report to measure real reachable-code/opcode coverage, and drive the actual recompilation strategy from that evidence.
+2. capture frame pacing/jitter over a longer interval on a normal desktop session;
+3. run `Burnout3Analyze` against an externally supplied legal Burnout 3 executable without committing proprietary data, use the deterministic report to measure real reachable-code/opcode coverage, and drive the actual recompilation strategy from that evidence.
