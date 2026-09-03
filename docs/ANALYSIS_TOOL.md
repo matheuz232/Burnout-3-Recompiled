@@ -43,7 +43,7 @@ external file
 
 ## Report
 
-The report begins with summary counters and coverage histograms such as:
+The report begins with summary counters and coverage diagnostics such as:
 
 ```text
 ENTRY 0x00100000
@@ -60,11 +60,17 @@ INSTRUCTION_HISTOGRAM 3
   UNKNOWN 1
 UNKNOWN_PRIMARY_OPCODES 1
   0x1C 1
+UNKNOWN_SITES 1
+  PC 0x00100020 RAW 0x712A4CC1 PRIMARY 0x1C RS 0x09 RT 0x0A RD 0x09 SA 0x13 FUNCT 0x01
 ```
 
 `INSTRUCTION_HISTOGRAM` counts every reachable instruction site represented by the graph, including architectural delay slots, and sorts instruction names deterministically. `UNKNOWN_PRIMARY_OPCODES` counts only unresolved instructions and groups them by the six-bit MIPS primary opcode extracted from the raw word.
 
-The unknown-primary histogram is diagnostic evidence, not a decoder. A primary opcode does not by itself identify all SPECIAL/MMI/COP sub-operations, but the frequency data shows which top-level unresolved families are worth investigating first when a real executable is supplied.
+`UNKNOWN_SITES` records every reachable `UNKNOWN` site, including unknown delay-slot instructions, and sorts sites by guest PC with the raw word as a deterministic tie-breaker. Each record exposes the 32-bit word plus the raw MIPS bit positions `PRIMARY`, `RS`, `RT`, `RD`, `SA`, and `FUNCT`.
+
+Those fields are **diagnostic bitfields, not decoded operands**. Their semantic meaning depends on the instruction format and opcode family; for an unsupported instruction some listed fields may not represent registers, shift amounts, or function selectors at all. The section exists to make unresolved SPECIAL/MMI/COP families easier to group from real evidence without claiming instruction semantics that the decoder does not yet implement.
+
+The unknown-primary histogram and unknown-site records are diagnostic evidence, not a decoder. A primary opcode does not by itself identify all SPECIAL/MMI/COP sub-operations, but the frequency and site-level raw fields show which unresolved families are worth investigating first when a real executable is supplied.
 
 The report then records blocks, instruction raw words, delay slots, edges, calls and analysis issues in deterministic order. Equivalent graph evidence must produce byte-identical output regardless of internal container ordering. Enabling `--follow-direct-calls` can increase block/instruction coverage, but does not change the report format.
 
@@ -88,4 +94,4 @@ No Burnout 3 executable or asset belongs in this repository. Point `--elf` at a 
 
 ## Next evidence gate
 
-Run the tool against a legally supplied Burnout 3 executable and retain only the generated non-proprietary analysis report/coverage evidence needed to guide further work. For the broadest evidence, run once with `--follow-direct-calls` and a sufficiently large `--max-blocks` value, then inspect `BlockLimitReached`, `TargetAnalysisFailed`, unresolved indirect exits, instruction histograms, and unknown-primary coverage before expanding decoder or recompiler scope.
+Run the tool against a legally supplied Burnout 3 executable and retain only the generated non-proprietary analysis report/coverage evidence needed to guide further work. For the broadest evidence, run once with `--follow-direct-calls` and a sufficiently large `--max-blocks` value, then inspect `BlockLimitReached`, `TargetAnalysisFailed`, unresolved indirect exits, instruction histograms, unknown-primary coverage, and `UNKNOWN_SITES` before expanding decoder or recompiler scope.

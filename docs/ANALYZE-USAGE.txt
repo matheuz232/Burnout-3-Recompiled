@@ -22,6 +22,8 @@ Follow explicit direct-call targets for broader evidence:
 
 Direct call traversal is disabled by default. When enabled, explicit direct callees share the same --max-blocks budget and remain recorded as call evidence. Indirect JR/JALR destinations are never guessed, and following a direct call does not infer a function boundary.
 
+Generated reports include UNKNOWN_PRIMARY_OPCODES plus deterministic UNKNOWN_SITES records with PC, RAW, PRIMARY, RS, RT, RD, SA and FUNCT bit positions for unresolved instructions, including reachable delay slots. These are raw diagnostic bitfields only; they do not imply decoded operand semantics.
+
 Show command-line help:
 
   .\Burnout3Analyze.exe --help
