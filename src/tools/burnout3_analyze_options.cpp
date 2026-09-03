@@ -33,7 +33,7 @@ parse_burnout3_analyze_options(std::span<const std::string_view> args) {
             continue;
         }
 
-        auto require_value = [&](const char* option_name) -> std::optional<std::string_view> {
+        auto require_value = [&]() -> std::optional<std::string_view> {
             if (i + 1u >= args.size() || is_option(args[i + 1u])) {
                 return std::nullopt;
             }
@@ -46,7 +46,7 @@ parse_burnout3_analyze_options(std::span<const std::string_view> args) {
                 return fail(Burnout3AnalyzeOptionError::DuplicateOption,
                             "--elf may only be specified once");
             }
-            const auto value = require_value("--elf");
+            const auto value = require_value();
             if (!value.has_value()) {
                 return fail(Burnout3AnalyzeOptionError::MissingValue,
                             "--elf requires a file path");
@@ -61,7 +61,7 @@ parse_burnout3_analyze_options(std::span<const std::string_view> args) {
                 return fail(Burnout3AnalyzeOptionError::DuplicateOption,
                             "--output may only be specified once");
             }
-            const auto value = require_value("--output");
+            const auto value = require_value();
             if (!value.has_value()) {
                 return fail(Burnout3AnalyzeOptionError::MissingValue,
                             "--output requires a file path");
@@ -76,7 +76,7 @@ parse_burnout3_analyze_options(std::span<const std::string_view> args) {
                 return fail(Burnout3AnalyzeOptionError::DuplicateOption,
                             "--max-blocks may only be specified once");
             }
-            const auto value = require_value("--max-blocks");
+            const auto value = require_value();
             if (!value.has_value()) {
                 return fail(Burnout3AnalyzeOptionError::MissingValue,
                             "--max-blocks requires a positive integer");
