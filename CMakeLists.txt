@@ -1,0 +1,84 @@
+cmake_minimum_required(VERSION 3.25)
+project(Burnout3Recompiled LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+option(B3R_BUILD_TESTS "Build Burnout3Recompiled tests" ON)
+
+add_library(b3r_core
+  src/core/frame_schedule.cpp
+  src/core/frame_stats.cpp
+  src/core/runtime_options.cpp
+  src/debug/log.cpp
+)
+target_include_directories(b3r_core PUBLIC src)
+
+if(MSVC)
+  target_compile_options(b3r_core PRIVATE /W4 /permissive- /Zc:__cplusplus)
+else()
+  target_compile_options(b3r_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(WIN32)
+  add_library(b3r_windows_runtime STATIC
+    src/platform/windows/crash_handler.cpp
+    src/platform/windows/qpc_clock.cpp
+    src/platform/windows/win32_window.cpp
+    src/platform/windows/windows_frame_pacer.cpp
+  )
+  target_include_directories(b3r_windows_runtime PUBLIC src)
+  target_compile_definitions(b3r_windows_runtime PUBLIC
+    UNICODE
+    _UNICODE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    _WIN32_WINNT=0x0A00
+    WINVER=0x0A00
+  )
+  target_link_libraries(b3r_windows_runtime PUBLIC b3r_core dbghelp winmm)
+  if(MSVC)
+    target_compile_options(b3r_windows_runtime PRIVATE /W4 /permissive- /Zc:__cplusplus)
+  endif()
+
+  add_executable(Burnout3Recompiled_Test WIN32
+    src/platform/windows/win_main.cpp
+  )
+  target_link_libraries(Burnout3Recompiled_Test PRIVATE b3r_windows_runtime shell32)
+  if(MSVC)
+    target_compile_options(Burnout3Recompiled_Test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+  endif()
+else()
+  message(STATUS "Non-Windows host: Win32 runtime target is skipped; portable tests remain available.")
+endif()
+
+if(B3R_BUILD_TESTS)
+  enable_testing()
+
+  add_executable(frame_schedule_tests tests/frame_schedule_tests.cpp)
+  target_link_libraries(frame_schedule_tests PRIVATE b3r_core)
+  add_test(NAME frame_schedule_tests COMMAND frame_schedule_tests)
+
+  add_executable(frame_stats_tests tests/frame_stats_tests.cpp)
+  target_link_libraries(frame_stats_tests PRIVATE b3r_core)
+  add_test(NAME frame_stats_tests COMMAND frame_stats_tests)
+
+  add_executable(runtime_options_tests tests/runtime_options_tests.cpp)
+  target_link_libraries(runtime_options_tests PRIVATE b3r_core)
+  add_test(NAME runtime_options_tests COMMAND runtime_options_tests)
+
+  add_executable(log_tests tests/log_tests.cpp)
+  target_link_libraries(log_tests PRIVATE b3r_core)
+  add_test(NAME log_tests COMMAND log_tests)
+
+  if(WIN32)
+    add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
+    target_link_libraries(qpc_clock_windows_tests PRIVATE b3r_windows_runtime)
+    add_test(NAME qpc_clock_windows_tests COMMAND qpc_clock_windows_tests)
+
+    add_executable(frame_pacer_windows_tests tests/frame_pacer_windows_tests.cpp)
+    target_link_libraries(frame_pacer_windows_tests PRIVATE b3r_windows_runtime)
+    add_test(NAME frame_pacer_windows_tests COMMAND frame_pacer_windows_tests)
+  endif()
+endif()
