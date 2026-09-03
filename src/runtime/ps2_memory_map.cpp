@@ -156,8 +156,9 @@ std::optional<std::uint16_t> Ps2MemoryMap::read_u16(std::uint32_t address) const
     if (!bytes) {
         return std::nullopt;
     }
-    return static_cast<std::uint16_t>((*bytes)[0]) |
-           (static_cast<std::uint16_t>((*bytes)[1]) << 8u);
+    return static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>((*bytes)[0]) |
+        (static_cast<std::uint16_t>((*bytes)[1]) << 8u));
 }
 
 std::optional<std::uint32_t> Ps2MemoryMap::read_u32(std::uint32_t address) const noexcept {
