@@ -162,13 +162,19 @@ int main() {
         options.elf_path = direct_call_elf_path.string();
         options.max_blocks = 32;
         options.follow_direct_calls = true;
-        std::ostringstream stdout_stream;
-        const auto result = run_burnout3_analyze(options, stdout_stream);
-        expect(result.ok(), "follow-direct-calls app analysis must succeed");
-        expect(stdout_stream.str().find("BLOCK 0x00100100 END Trap") != std::string::npos,
+        std::ostringstream first_stream;
+        const auto first_result = run_burnout3_analyze(options, first_stream);
+        expect(first_result.ok(), "follow-direct-calls app analysis must succeed");
+        expect(first_stream.str().find("BLOCK 0x00100100 END Trap") != std::string::npos,
                "app must propagate follow-direct-calls into reachability");
-        expect(stdout_stream.str().find("CALL 0x00100000 PC 0x00100000 DIRECT 0x00100100") != std::string::npos,
+        expect(first_stream.str().find("CALL 0x00100000 PC 0x00100000 DIRECT 0x00100100") != std::string::npos,
                "followed callee must remain represented as direct-call evidence");
+
+        std::ostringstream second_stream;
+        const auto second_result = run_burnout3_analyze(options, second_stream);
+        expect(second_result.ok(), "repeated follow-direct-calls analysis must succeed");
+        expect(second_stream.str() == first_stream.str(),
+               "follow-direct-calls analysis report must remain deterministic end to end");
     }
 
     {
