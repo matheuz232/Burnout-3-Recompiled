@@ -21,6 +21,7 @@ struct Burnout3AnalyzeOptions {
     std::string elf_path{};
     std::optional<std::string> output_path{};
     std::size_t max_blocks{4096};
+    bool follow_direct_calls{false};
     bool show_help{false};
 };
 
