@@ -38,7 +38,7 @@ b3r::analysis::R5900ReachabilityGraph make_graph(bool reverse_order) {
     R5900BasicBlock first{};
     first.start_pc = 0x1000u;
     first.instructions.push_back(site(0x1000u, R5900Instruction::Beq, 0x10800003u));
-    first.delay_slot = site(0x1004u, R5900Instruction::Nop, 0x00000000u);
+    first.delay_slot = site(0x1004u, R5900Instruction::Unknown, 0x4BEF1234u);
     first.end_kind = R5900BlockEndKind::ConditionalBranch;
     first.delay_slot_executes_on_fallthrough = true;
     first.edges.push_back(R5900ControlFlowEdge{R5900EdgeKind::BranchTaken, 0x1010u});
@@ -46,7 +46,7 @@ b3r::analysis::R5900ReachabilityGraph make_graph(bool reverse_order) {
 
     R5900BasicBlock second{};
     second.start_pc = 0x1010u;
-    second.instructions.push_back(site(0x1010u, R5900Instruction::Unknown, 0x70000000u));
+    second.instructions.push_back(site(0x1010u, R5900Instruction::Unknown, 0x712A4CC1u));
     second.end_kind = R5900BlockEndKind::UnsupportedInstruction;
 
     graph.blocks = {second, first};
@@ -87,26 +87,29 @@ int main() {
         "ENTRY 0x00001000\n"
         "BLOCKS 2\n"
         "INSTRUCTIONS 3\n"
-        "DECODED 2\n"
-        "UNKNOWN 1\n"
+        "DECODED 1\n"
+        "UNKNOWN 2\n"
         "CALLS 2\n"
         "INDIRECT_EXITS 1\n"
         "CFG_ISSUES 2\n"
-        "INSTRUCTION_HISTOGRAM 3\n"
+        "INSTRUCTION_HISTOGRAM 2\n"
         "  BEQ 1\n"
-        "  NOP 1\n"
-        "  UNKNOWN 1\n"
-        "UNKNOWN_PRIMARY_OPCODES 1\n"
+        "  UNKNOWN 2\n"
+        "UNKNOWN_PRIMARY_OPCODES 2\n"
+        "  0x12 1\n"
         "  0x1C 1\n"
+        "UNKNOWN_SITES 2\n"
+        "  PC 0x00001004 RAW 0x4BEF1234 PRIMARY 0x12 RS 0x1F RT 0x0F RD 0x02 SA 0x08 FUNCT 0x34\n"
+        "  PC 0x00001010 RAW 0x712A4CC1 PRIMARY 0x1C RS 0x09 RT 0x0A RD 0x09 SA 0x13 FUNCT 0x01\n"
         "\n"
         "BLOCK 0x00001000 END ConditionalBranch\n"
         "  0x00001000 BEQ RAW 0x10800003\n"
-        "  DELAY 0x00001004 NOP RAW 0x00000000 FALLTHROUGH yes\n"
+        "  DELAY 0x00001004 UNKNOWN RAW 0x4BEF1234 FALLTHROUGH yes\n"
         "  EDGE BranchTaken 0x00001010\n"
         "  EDGE BranchNotTaken 0x00001008\n"
         "\n"
         "BLOCK 0x00001010 END UnsupportedInstruction\n"
-        "  0x00001010 UNKNOWN RAW 0x70000000\n"
+        "  0x00001010 UNKNOWN RAW 0x712A4CC1\n"
         "\n"
         "CALL 0x00001008 PC 0x00001008 DIRECT 0x00002000\n"
         "CALL 0x00001020 PC 0x00001024 INDIRECT unresolved\n"
@@ -115,10 +118,12 @@ int main() {
         "ISSUE TargetAnalysisFailed SOURCE 0x00001000 TARGET 0x00003000 ERROR UnmappedInstruction\n";
 
     const auto ordered = render_r5900_analysis_report(make_graph(false));
-    expect(ordered == expected, "report must include stable instruction and unknown-primary histograms");
+    expect(ordered == expected,
+           "report must include deterministic unknown-site bitfield evidence including delay slots");
 
     const auto reordered = render_r5900_analysis_report(make_graph(true));
-    expect(reordered == expected, "coverage histograms must remain deterministic regardless of graph container order");
+    expect(reordered == expected,
+           "unknown-site evidence must remain deterministic regardless of graph container order");
 
     std::cout << "r5900_analysis_report_tests: PASS\n";
     return EXIT_SUCCESS;
