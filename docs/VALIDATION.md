@@ -73,3 +73,14 @@ Fresh clean Release host results:
 - Clang 17: 6/6 tests passed.
 
 GitHub Actions run `33715582203` on Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 then built `b3r_runtime` and passed 8/8 tests, including `ps2_memory_map_tests`. An earlier run exposed MSVC warning C4244 caused by integer promotion in the `read_u16` return expression; commit `5e7d3a2a` adds an explicit final narrowing cast, and the clean rerun contains no project-code compiler warnings. The remaining warning is the external `actions/checkout@v4` Node-runtime deprecation notice.
+
+## 2026-09-03 R5900 static decoder validation
+
+The initial Emotion Engine/R5900 decoder is a static-analysis primitive only. It does not execute instructions or emulate CPU state. Synthetic tests cover field extraction, signed immediates, direct branch/jump targets, delay-slot metadata, link/branch-likely flags, indirect `JR`/`JALR` handling, stable instruction names, and R5900-specific 128-bit `LQ`/`SQ` widths. Unsupported MMI/COP families remain explicitly `Unknown` rather than receiving guessed semantics.
+
+Fresh clean host results before publication:
+
+- GCC 14.2: 7/7 tests passed with no compiler warnings;
+- Clang 17: 7/7 tests passed with no compiler warnings.
+
+GitHub Actions run `33716010679` on Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 compiled `r5900_decoder.cpp` and passed 9/9 tests, including `r5900_decoder_tests`. The build emitted no project-code compiler warnings. The only workflow warning is the external `actions/checkout@v4` Node-runtime deprecation notice.
