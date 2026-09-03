@@ -37,6 +37,17 @@ else()
   target_compile_options(b3r_runtime PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_library(b3r_analysis
+  src/analysis/r5900_control_flow.cpp
+)
+target_include_directories(b3r_analysis PUBLIC src)
+target_link_libraries(b3r_analysis PUBLIC b3r_runtime b3r_recompiler)
+if(MSVC)
+  target_compile_options(b3r_analysis PRIVATE /W4 /permissive- /Zc:__cplusplus)
+else()
+  target_compile_options(b3r_analysis PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
   target_compile_options(b3r_core PRIVATE /W4 /permissive- /Zc:__cplusplus)
 else()
@@ -105,6 +116,10 @@ if(B3R_BUILD_TESTS)
   add_executable(ps2_memory_map_tests tests/ps2_memory_map_tests.cpp)
   target_link_libraries(ps2_memory_map_tests PRIVATE b3r_runtime)
   add_test(NAME ps2_memory_map_tests COMMAND ps2_memory_map_tests)
+
+  add_executable(r5900_control_flow_tests tests/r5900_control_flow_tests.cpp)
+  target_link_libraries(r5900_control_flow_tests PRIVATE b3r_analysis)
+  add_test(NAME r5900_control_flow_tests COMMAND r5900_control_flow_tests)
 
   if(WIN32)
     add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
