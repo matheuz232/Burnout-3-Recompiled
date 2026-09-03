@@ -49,6 +49,7 @@ struct R5900ReachabilityGraph {
 
 struct R5900ReachabilityOptions {
     std::size_t max_blocks{4096};
+    bool follow_direct_calls{false};
     R5900ControlFlowOptions block_options{};
 };
 

@@ -25,6 +25,7 @@ parse_burnout3_analyze_options(std::span<const std::string_view> args) {
     bool saw_elf = false;
     bool saw_output = false;
     bool saw_max_blocks = false;
+    bool saw_follow_direct_calls = false;
 
     for (std::size_t i = 0; i < args.size(); ++i) {
         const auto arg = args[i];
@@ -95,6 +96,16 @@ parse_burnout3_analyze_options(std::span<const std::string_view> args) {
             continue;
         }
 
+        if (arg == "--follow-direct-calls") {
+            if (saw_follow_direct_calls) {
+                return fail(Burnout3AnalyzeOptionError::DuplicateOption,
+                            "--follow-direct-calls may only be specified once");
+            }
+            options.follow_direct_calls = true;
+            saw_follow_direct_calls = true;
+            continue;
+        }
+
         return fail(Burnout3AnalyzeOptionError::UnknownOption,
                     "unknown Burnout3Analyze option: " + std::string(arg));
     }
@@ -111,10 +122,11 @@ parse_burnout3_analyze_options(std::span<const std::string_view> args) {
 
 const char* burnout3_analyze_usage() noexcept {
     return
-        "Usage: Burnout3Analyze --elf <path> [--output <path>] [--max-blocks <count>]\n"
+        "Usage: Burnout3Analyze --elf <path> [--output <path>] [--max-blocks <count>] [--follow-direct-calls]\n"
         "       Burnout3Analyze --help\n\n"
         "Analyzes an externally supplied PS2 ELF without executing guest code.\n"
         "If --output is omitted, the deterministic analysis report is written to stdout.\n"
+        "Direct call targets remain evidence-only unless --follow-direct-calls is specified.\n"
         "Default --max-blocks: 4096.\n";
 }
 

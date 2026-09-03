@@ -25,12 +25,13 @@ void put_u32(Bytes& bytes, std::size_t offset, std::uint32_t value) {
     bytes[offset + 3] = static_cast<std::uint8_t>((value >> 24u) & 0xFFu);
 }
 
-Bytes make_break_elf() {
+Bytes make_elf(const std::vector<std::uint32_t>& words) {
     constexpr std::uint32_t kProgramHeaderOffset = 52;
     constexpr std::uint32_t kSegmentOffset = 0x100;
     constexpr std::uint32_t kEntry = 0x00100000;
+    const auto payload_size = static_cast<std::uint32_t>(words.size() * 4u);
 
-    Bytes bytes(0x104, 0);
+    Bytes bytes(kSegmentOffset + payload_size, 0);
     bytes[0] = 0x7F;
     bytes[1] = 'E';
     bytes[2] = 'L';
@@ -52,12 +53,29 @@ Bytes make_break_elf() {
     put_u32(bytes, kProgramHeaderOffset + 4, kSegmentOffset);
     put_u32(bytes, kProgramHeaderOffset + 8, kEntry);
     put_u32(bytes, kProgramHeaderOffset + 12, kEntry);
-    put_u32(bytes, kProgramHeaderOffset + 16, 4);
-    put_u32(bytes, kProgramHeaderOffset + 20, 4);
+    put_u32(bytes, kProgramHeaderOffset + 16, payload_size);
+    put_u32(bytes, kProgramHeaderOffset + 20, payload_size);
     put_u32(bytes, kProgramHeaderOffset + 24, 5);
     put_u32(bytes, kProgramHeaderOffset + 28, 0x1000);
-    put_u32(bytes, kSegmentOffset, 0x0000000Du);
+
+    for (std::size_t i = 0; i < words.size(); ++i) {
+        put_u32(bytes, kSegmentOffset + i * 4u, words[i]);
+    }
     return bytes;
+}
+
+Bytes make_break_elf() {
+    return make_elf({0x0000000Du});
+}
+
+Bytes make_direct_call_elf() {
+    constexpr std::uint32_t kTarget = 0x00100100u;
+    std::vector<std::uint32_t> words(65u, 0u);
+    words[0] = (0x03u << 26u) | ((kTarget >> 2u) & 0x03FFFFFFu); // JAL target
+    words[1] = 0u;                                               // delay slot
+    words[2] = 0x0000000Du;                                      // continuation BREAK
+    words[64] = 0x0000000Du;                                     // callee BREAK
+    return make_elf(words);
 }
 
 [[noreturn]] void fail(const char* message) {
@@ -94,10 +112,13 @@ int main() {
 
     const auto temp = std::filesystem::temp_directory_path();
     const auto elf_path = temp / "b3r_burnout3_analyze_test.elf";
+    const auto direct_call_elf_path = temp / "b3r_burnout3_direct_call_test.elf";
     const auto report_path = temp / "b3r_burnout3_analyze_test.txt";
     std::filesystem::remove(elf_path);
+    std::filesystem::remove(direct_call_elf_path);
     std::filesystem::remove(report_path);
     write_bytes(elf_path, make_break_elf());
+    write_bytes(direct_call_elf_path, make_direct_call_elf());
 
     {
         Burnout3AnalyzeOptions options{};
@@ -127,6 +148,37 @@ int main() {
 
     {
         Burnout3AnalyzeOptions options{};
+        options.elf_path = direct_call_elf_path.string();
+        options.max_blocks = 32;
+        std::ostringstream stdout_stream;
+        const auto result = run_burnout3_analyze(options, stdout_stream);
+        expect(result.ok(), "default direct-call fixture analysis must succeed");
+        expect(stdout_stream.str().find("BLOCK 0x00100100") == std::string::npos,
+               "default app analysis must keep direct callees out of reachable blocks");
+    }
+
+    {
+        Burnout3AnalyzeOptions options{};
+        options.elf_path = direct_call_elf_path.string();
+        options.max_blocks = 32;
+        options.follow_direct_calls = true;
+        std::ostringstream first_stream;
+        const auto first_result = run_burnout3_analyze(options, first_stream);
+        expect(first_result.ok(), "follow-direct-calls app analysis must succeed");
+        expect(first_stream.str().find("BLOCK 0x00100100 END Trap") != std::string::npos,
+               "app must propagate follow-direct-calls into reachability");
+        expect(first_stream.str().find("CALL 0x00100000 PC 0x00100000 DIRECT 0x00100100") != std::string::npos,
+               "followed callee must remain represented as direct-call evidence");
+
+        std::ostringstream second_stream;
+        const auto second_result = run_burnout3_analyze(options, second_stream);
+        expect(second_result.ok(), "repeated follow-direct-calls analysis must succeed");
+        expect(second_stream.str() == first_stream.str(),
+               "follow-direct-calls analysis report must remain deterministic end to end");
+    }
+
+    {
+        Burnout3AnalyzeOptions options{};
         options.elf_path = (temp / "b3r_missing_burnout3.elf").string();
         std::ostringstream stdout_stream;
         const auto result = run_burnout3_analyze(options, stdout_stream);
@@ -136,6 +188,7 @@ int main() {
     }
 
     std::filesystem::remove(elf_path);
+    std::filesystem::remove(direct_call_elf_path);
     std::filesystem::remove(report_path);
 
     std::cout << "burnout3_analyze_app_tests: PASS\n";

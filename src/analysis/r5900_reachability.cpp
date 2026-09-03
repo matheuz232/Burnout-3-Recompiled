@@ -169,6 +169,10 @@ R5900ReachabilityResult analyze_r5900_reachability(const runtime::Ps2MemoryMap& 
                     false,
                     edge.target,
                 });
+                if (options.follow_direct_calls && edge.target.has_value() &&
+                    scheduled.insert(*edge.target).second) {
+                    worklist.push_back(PendingTarget{*edge.target, block.start_pc, false});
+                }
                 break;
 
             case R5900EdgeKind::IndirectCall:
