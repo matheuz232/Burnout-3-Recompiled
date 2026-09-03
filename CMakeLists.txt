@@ -122,6 +122,10 @@ if(B3R_BUILD_TESTS)
   target_link_libraries(frame_stats_tests PRIVATE b3r_core)
   add_test(NAME frame_stats_tests COMMAND frame_stats_tests)
 
+  add_executable(frame_pacing_telemetry_tests tests/frame_pacing_telemetry_tests.cpp)
+  target_link_libraries(frame_pacing_telemetry_tests PRIVATE b3r_core)
+  add_test(NAME frame_pacing_telemetry_tests COMMAND frame_pacing_telemetry_tests)
+
   add_executable(runtime_options_tests tests/runtime_options_tests.cpp)
   target_link_libraries(runtime_options_tests PRIVATE b3r_core)
   add_test(NAME runtime_options_tests COMMAND runtime_options_tests)
