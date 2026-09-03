@@ -58,4 +58,4 @@ Host tests now include:
 
 - `ps2_elf_tests`
 
-Current host result: 5/5 tests pass in clean Release builds with GCC 14.2 and Clang 17. Windows CI validation remains the final cross-platform compiler gate for this feature branch.
+Host result: 5/5 tests pass in clean Release builds with GCC 14.2 and Clang 17. GitHub Actions run `33714243602` then compiled the ELF loader with MSVC 19.44 and passed 7/7 tests on Windows, including `ps2_elf_tests`. The code-specific MSVC warnings observed in the earlier bootstrap run are absent; the remaining workflow warning is an external `actions/checkout@v4` Node-runtime deprecation notice.
