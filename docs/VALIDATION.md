@@ -9,7 +9,7 @@ Environment available to the implementation session:
 - GCC 14.2;
 - Clang 17 toolchain frontend;
 - Linux host;
-- no MSVC, MinGW, or Windows SDK.
+- no local MSVC, MinGW, or Windows SDK.
 
 Host-portable tests:
 
@@ -18,9 +18,44 @@ Host-portable tests:
 - `runtime_options_tests`
 - `log_tests`
 
-Windows-only tests prepared but not executable on this host:
+All four bootstrap host-portable tests passed under GCC and Clang before the ELF milestone.
 
-- `qpc_clock_windows_tests`
-- `frame_pacer_windows_tests`
+## 2026-09-03 Windows CI validation
 
-A Windows CI workflow is included to compile the Win32 runtime and execute all tests when the repository is run on GitHub Actions/Windows.
+GitHub Actions run `33713829165` used:
+
+- runner: `windows-2022`;
+- Windows Server 2022;
+- Visual Studio 2022 Enterprise toolchain;
+- MSVC 19.44.35228;
+- Windows SDK 10.0.26100.0.
+
+Results:
+
+- CMake configure: PASS;
+- MSVC Release build: PASS;
+- `Burnout3Recompiled_Test.exe` link: PASS;
+- `frame_schedule_tests`: PASS;
+- `frame_stats_tests`: PASS;
+- `runtime_options_tests`: PASS;
+- `log_tests`: PASS;
+- `qpc_clock_windows_tests`: PASS;
+- `frame_pacer_windows_tests`: PASS;
+- total: 6/6 tests passed.
+
+The CI exposed two warning classes that are cleaned up in the ELF feature branch:
+
+- duplicate `WIN32_LEAN_AND_MEAN` definitions (already provided by CMake usage requirements);
+- intentional discard of the frame-pacer return value without an explicit cast.
+
+CI does not constitute interactive validation of the Win32 window or crash/minidump path, and the current pacing integration test is only a coarse average-rate sanity check. Those remain separate gates.
+
+## 2026-09-03 PS2 ELF loader host validation
+
+The ELF loader is tested only with synthetic, non-proprietary ELF data. It validates ELF32 little-endian MIPS executable headers, program-header table bounds, PT_LOAD ranges, and `p_memsz >= p_filesz`.
+
+Host tests now include:
+
+- `ps2_elf_tests`
+
+Host result: 5/5 tests pass in clean Release builds with GCC 14.2 and Clang 17. GitHub Actions run `33714243602` then compiled the ELF loader with MSVC 19.44 and passed 7/7 tests on Windows, including `ps2_elf_tests`. The code-specific MSVC warnings observed in the earlier bootstrap run are absent; the remaining workflow warning is an external `actions/checkout@v4` Node-runtime deprecation notice.

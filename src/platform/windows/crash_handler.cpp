@@ -1,6 +1,5 @@
 #include "platform/windows/crash_handler.h"
 
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <dbghelp.h>
 

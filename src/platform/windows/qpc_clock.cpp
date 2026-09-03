@@ -1,6 +1,5 @@
 #include "platform/windows/qpc_clock.h"
 
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 namespace b3r::platform::windows {
