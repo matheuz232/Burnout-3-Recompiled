@@ -29,12 +29,13 @@ int main() {
     using namespace b3r::tools;
 
     {
-        const auto result = parse({"--elf", "SLUS_210.50", "--output", "analysis.txt", "--max-blocks", "8192"});
+        const auto result = parse({"--elf", "SLUS_210.50", "--output", "analysis.txt", "--max-blocks", "8192", "--follow-direct-calls"});
         expect(result.ok(), "complete CLI options must parse");
         expect(result.options->elf_path == "SLUS_210.50", "ELF path must be retained");
         expect(result.options->output_path.has_value() && *result.options->output_path == "analysis.txt",
                "output path must be retained");
         expect(result.options->max_blocks == 8192u, "max block limit must parse as a positive integer");
+        expect(result.options->follow_direct_calls, "--follow-direct-calls must enable direct callee traversal");
         expect(!result.options->show_help, "normal invocation must not request help");
     }
 
@@ -43,6 +44,7 @@ int main() {
         expect(result.ok(), "ELF-only invocation must use defaults");
         expect(result.options->max_blocks == 4096u, "default max block limit must remain bounded");
         expect(!result.options->output_path.has_value(), "output must default to stdout");
+        expect(!result.options->follow_direct_calls, "direct call traversal must remain disabled by default");
     }
 
     {
