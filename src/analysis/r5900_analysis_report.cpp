@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -16,6 +17,13 @@ namespace {
 std::string hex32(std::uint32_t value) {
     std::ostringstream out;
     out << "0x" << std::uppercase << std::hex << std::setfill('0') << std::setw(8) << value;
+    return out.str();
+}
+
+std::string hex_opcode(std::uint8_t value) {
+    std::ostringstream out;
+    out << "0x" << std::uppercase << std::hex << std::setfill('0') << std::setw(2)
+        << static_cast<unsigned int>(value);
     return out.str();
 }
 
@@ -71,13 +79,26 @@ const char* control_flow_error_name(R5900ControlFlowError error) noexcept {
     return "Unknown";
 }
 
+using InstructionHistogram = std::map<std::string, std::size_t>;
+using UnknownPrimaryHistogram = std::map<std::uint8_t, std::size_t>;
+
 void count_site(const R5900InstructionSite& site,
                 std::size_t& instructions,
                 std::size_t& decoded,
-                std::size_t& unknown) noexcept {
+                std::size_t& unknown,
+                InstructionHistogram& instruction_histogram,
+                UnknownPrimaryHistogram& unknown_primary_histogram) {
     ++instructions;
+
+    const auto instruction_name =
+        std::string(recompiler::r5900_instruction_name(site.decoded.instruction));
+    ++instruction_histogram[instruction_name];
+
     if (site.decoded.instruction == recompiler::R5900Instruction::Unknown) {
         ++unknown;
+        const auto primary_opcode =
+            static_cast<std::uint8_t>((site.decoded.raw >> 26u) & 0x3Fu);
+        ++unknown_primary_histogram[primary_opcode];
     } else {
         ++decoded;
     }
@@ -98,12 +119,24 @@ std::string render_r5900_analysis_report(const R5900ReachabilityGraph& graph) {
     std::size_t instruction_count = 0;
     std::size_t decoded_count = 0;
     std::size_t unknown_count = 0;
+    InstructionHistogram instruction_histogram{};
+    UnknownPrimaryHistogram unknown_primary_histogram{};
     for (const auto* block : blocks) {
         for (const auto& instruction : block->instructions) {
-            count_site(instruction, instruction_count, decoded_count, unknown_count);
+            count_site(instruction,
+                       instruction_count,
+                       decoded_count,
+                       unknown_count,
+                       instruction_histogram,
+                       unknown_primary_histogram);
         }
         if (block->delay_slot.has_value()) {
-            count_site(*block->delay_slot, instruction_count, decoded_count, unknown_count);
+            count_site(*block->delay_slot,
+                       instruction_count,
+                       decoded_count,
+                       unknown_count,
+                       instruction_histogram,
+                       unknown_primary_histogram);
         }
     }
 
@@ -120,7 +153,18 @@ std::string render_r5900_analysis_report(const R5900ReachabilityGraph& graph) {
         << "UNKNOWN " << unknown_count << '\n'
         << "CALLS " << graph.calls.size() << '\n'
         << "INDIRECT_EXITS " << indirect_exit_count << '\n'
-        << "CFG_ISSUES " << graph.issues.size() << "\n\n";
+        << "CFG_ISSUES " << graph.issues.size() << '\n'
+        << "INSTRUCTION_HISTOGRAM " << instruction_histogram.size() << '\n';
+
+    for (const auto& [name, count] : instruction_histogram) {
+        out << "  " << name << ' ' << count << '\n';
+    }
+
+    out << "UNKNOWN_PRIMARY_OPCODES " << unknown_primary_histogram.size() << '\n';
+    for (const auto& [opcode, count] : unknown_primary_histogram) {
+        out << "  " << hex_opcode(opcode) << ' ' << count << '\n';
+    }
+    out << '\n';
 
     for (const auto* block : blocks) {
         out << "BLOCK " << hex32(block->start_pc) << " END " << block_end_name(block->end_kind) << '\n';
