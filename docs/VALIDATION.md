@@ -228,3 +228,50 @@ TDD evidence:
 - GREEN run `33802569842`: Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 built the smoke target and passed 18/18 tests; `win32_window_smoke_tests` completed successfully in 0.05 seconds.
 
 No project-code compiler warning was emitted in the GREEN run. The only workflow warning remains the external `actions/checkout@v4` Node-runtime deprecation notice. This proves automated create/close/message-loop behavior in the hosted Windows environment, but it does not replace visual inspection of the GUI on an interactive Windows 10/11 desktop.
+
+## 2026-09-03 frame-pacing telemetry validation
+
+The frame-pacing telemetry layer is a portable statistical/reporting component in `b3r_core`. It does not change `WindowsFramePacer`, frame scheduling, simulation cadence, or game semantics. It accepts measured frame durations in seconds and reports milliseconds using a deterministic contract.
+
+The summary contains:
+
+- sample count;
+- arithmetic mean;
+- minimum and maximum;
+- population standard deviation;
+- nearest-rank P50, P95 and P99;
+- counts strictly above the 120 Hz period (`1000/120` ms), 9 ms, 10 ms and 12 ms.
+
+The renderer emits stable `B3R_FRAME_PACING_TELEMETRY 1` text with fixed three-decimal formatting. Synthetic tests validate the exact statistics, threshold counts, empty-input behavior and byte-exact report text.
+
+TDD / CI evidence:
+
+- RED run `33805068940`: CMake configured successfully and MSVC failed exactly because `core/frame_pacing_telemetry.h` did not exist yet;
+- pure telemetry GREEN run `33805247593`: Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 built the new core component and passed 19/19 tests including `frame_pacing_telemetry_tests`;
+- Windows pacing integration run `33805412037`: 19/19 tests passed with `frame_pacer_windows_tests` collecting 240 real pacer intervals over approximately two seconds;
+- visible-report run `33805548230`: 19/19 tests passed and a dedicated workflow step executed the pacing smoke again so its telemetry was preserved in the CI log.
+
+Observed hosted-runner report from run `33805548230`:
+
+```text
+B3R_FRAME_PACING_TELEMETRY 1
+SAMPLES 240
+MEAN_MS 8.333
+MIN_MS 8.204
+MAX_MS 8.462
+STDDEV_MS 0.012
+P50_MS 8.333
+P95_MS 8.333
+P99_MS 8.333
+OVER_8_333MS 80
+OVER_9MS 0
+OVER_10MS 0
+OVER_12MS 0
+HIGH_RESOLUTION_TIMER YES
+```
+
+The `OVER_8_333MS` counter uses the exact `1000/120 = 8.333333...` ms threshold while the displayed values are rounded to three decimals, so samples can display as `8.333` and still be slightly above the exact target period. No measured sample in this run exceeded 9 ms.
+
+This is a short hosted-CI smoke, not a physical-desktop performance certification. Scheduler behavior, power management, display composition, GPU work and longer-duration jitter still require capture on a normal interactive Windows 10/11 desktop. The presentation target remains 120 Hz; this milestone does not select or alter the game's simulation cadence.
+
+No project-code compiler warning was emitted in the final telemetry run. The only workflow warning remains the external `actions/checkout@v4` Node-runtime deprecation notice.

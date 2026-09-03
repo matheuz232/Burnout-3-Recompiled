@@ -10,6 +10,7 @@ option(B3R_BUILD_TESTS "Build Burnout3Recompiled tests" ON)
 add_library(b3r_core
   src/core/frame_schedule.cpp
   src/core/frame_stats.cpp
+  src/core/frame_pacing_telemetry.cpp
   src/core/runtime_options.cpp
   src/debug/log.cpp
 )
@@ -121,6 +122,10 @@ if(B3R_BUILD_TESTS)
   add_executable(frame_stats_tests tests/frame_stats_tests.cpp)
   target_link_libraries(frame_stats_tests PRIVATE b3r_core)
   add_test(NAME frame_stats_tests COMMAND frame_stats_tests)
+
+  add_executable(frame_pacing_telemetry_tests tests/frame_pacing_telemetry_tests.cpp)
+  target_link_libraries(frame_pacing_telemetry_tests PRIVATE b3r_core)
+  add_test(NAME frame_pacing_telemetry_tests COMMAND frame_pacing_telemetry_tests)
 
   add_executable(runtime_options_tests tests/runtime_options_tests.cpp)
   target_link_libraries(runtime_options_tests PRIVATE b3r_core)
