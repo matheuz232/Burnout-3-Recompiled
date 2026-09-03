@@ -53,8 +53,10 @@ endif()
 
 add_library(b3r_tools
   src/tools/burnout3_analyze_options.cpp
+  src/tools/burnout3_analyze_app.cpp
 )
 target_include_directories(b3r_tools PUBLIC src)
+target_link_libraries(b3r_tools PUBLIC b3r_analysis)
 if(MSVC)
   target_compile_options(b3r_tools PRIVATE /W4 /permissive- /Zc:__cplusplus)
 else()
