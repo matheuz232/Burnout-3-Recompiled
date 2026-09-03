@@ -26,6 +26,10 @@ Windows 10/11 x64 process/window/timer/crash glue. No cross-platform windowing o
 
 Structured logging and explicit stub diagnostics.
 
+### `src/runtime/`
+
+Guest-runtime state that is independent from Win32. The first component is `Ps2MemoryMap`, which centralizes PS2 virtual-address translation into owned native backing for validated ELF load regions. Full PS2 hardware address-space modeling remains evidence-driven and is not assumed by this layer.
+
 ## Planned boundaries
 
 The repository will expand with focused modules rather than one monolithic translation unit:
