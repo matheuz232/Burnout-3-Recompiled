@@ -40,6 +40,7 @@ endif()
 add_library(b3r_analysis
   src/analysis/r5900_control_flow.cpp
   src/analysis/r5900_reachability.cpp
+  src/analysis/r5900_analysis_report.cpp
 )
 target_include_directories(b3r_analysis PUBLIC src)
 target_link_libraries(b3r_analysis PUBLIC b3r_runtime b3r_recompiler)
@@ -125,6 +126,10 @@ if(B3R_BUILD_TESTS)
   add_executable(r5900_reachability_tests tests/r5900_reachability_tests.cpp)
   target_link_libraries(r5900_reachability_tests PRIVATE b3r_analysis)
   add_test(NAME r5900_reachability_tests COMMAND r5900_reachability_tests)
+
+  add_executable(r5900_analysis_report_tests tests/r5900_analysis_report_tests.cpp)
+  target_link_libraries(r5900_analysis_report_tests PRIVATE b3r_analysis)
+  add_test(NAME r5900_analysis_report_tests COMMAND r5900_analysis_report_tests)
 
   if(WIN32)
     add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
