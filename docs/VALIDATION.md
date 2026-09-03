@@ -305,3 +305,24 @@ The published ZIP was downloaded and inspected independently after the workflow 
 No ELF, game asset, dump or other proprietary Burnout 3 data is present in the package. This validates the analyzer delivery channel only; it does **not** validate real Burnout 3 opcode/CFG coverage. The next evidence gate remains running this analyzer against a legally obtained external game executable and using only the generated text report to drive decoder/recompiler work.
 
 No project-code compiler warning was emitted in the final artifact validation run. Remaining workflow warnings are external action/runtime deprecations from `actions/checkout@v4` / `actions/upload-artifact@v4` and their Node runtime dependencies.
+
+## 2026-09-03 opt-in R5900 direct-call traversal validation
+
+The reachability walker now supports an explicit `follow_direct_calls` option, exposed by `Burnout3Analyze --follow-direct-calls`. The option defaults to `false`, so the original entry-root analysis remains unchanged unless the caller opts in. When enabled, only explicit `DirectCall` targets are placed into the existing deterministic FIFO worklist; ordinary CFG successors and callees share the same `max_blocks` budget and the existing scheduled-target set provides deduplication.
+
+The conservative boundary remains unchanged: direct calls are still recorded as call evidence, `JR`/`JALR` and other register-indirect exits are never resolved by guesswork, and traversing a direct target does not assert a function boundary. If an explicit callee cannot be analyzed, the existing non-fatal `TargetAnalysisFailed` issue path records that evidence while valid queued successors continue to be analyzed.
+
+TDD / CI evidence:
+
+- core RED run `33811079587`: MSVC failed exactly because `R5900ReachabilityOptions::follow_direct_calls` did not exist;
+- core GREEN run `33811230685`: the new option and direct-callee enqueue behavior compiled and all 20/20 tests passed;
+- CLI RED run `33811349684`: MSVC failed exactly because `Burnout3AnalyzeOptions::follow_direct_calls` did not exist;
+- parser GREEN run `33811484381`: the CLI flag parsed successfully, default-off behavior remained explicit, and 20/20 tests passed;
+- app propagation RED run `33811708045`: the project built and 19/20 tests passed; only `burnout3_analyze_app_tests` failed because the parsed flag was not yet forwarded into `R5900ReachabilityOptions`;
+- propagation run `33811825857`: the synthetic direct callee was successfully present in the report, proving propagation worked, but one test-only assertion used the wrong textual spelling for existing call evidence; production behavior was not the cause of that remaining failure;
+- corrected report-contract GREEN run `33812029332`: all 20/20 tests passed, including end-to-end direct-callee analysis through the application layer;
+- regression-coverage run `33812164557`: all 20/20 tests passed while additionally proving shared `max_blocks` accounting, deduplication of a repeated direct callee, preservation of both call-site records, `TargetAnalysisFailed` for an unmapped direct callee, and continued traversal of a valid call continuation.
+
+The application test additionally runs the same synthetic direct-call ELF twice with the option enabled and requires byte-identical reports, preserving deterministic output. Final branch and merge validation must continue to pass that contract before integration.
+
+All fixtures are synthetic and non-proprietary. No Burnout 3 executable or asset was used. Real opcode/CFG coverage remains blocked on a legally obtained external game executable; the recommended evidence run is `Burnout3Analyze --follow-direct-calls` with a sufficiently large `--max-blocks`, followed by inspection of block-limit, failed-target, indirect-exit and unknown-opcode evidence before choosing decoder/recompiler scope.
