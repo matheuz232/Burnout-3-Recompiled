@@ -41,6 +41,7 @@ add_library(b3r_analysis
   src/analysis/r5900_control_flow.cpp
   src/analysis/r5900_reachability.cpp
   src/analysis/r5900_analysis_report.cpp
+  src/analysis/ps2_elf_analysis.cpp
 )
 target_include_directories(b3r_analysis PUBLIC src)
 target_link_libraries(b3r_analysis PUBLIC b3r_runtime b3r_recompiler)
