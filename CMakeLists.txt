@@ -17,6 +17,7 @@ target_include_directories(b3r_core PUBLIC src)
 
 add_library(b3r_recompiler
   src/recompiler/ps2_elf.cpp
+  src/recompiler/r5900_decoder.cpp
 )
 target_include_directories(b3r_recompiler PUBLIC src)
 if(MSVC)
@@ -96,6 +97,10 @@ if(B3R_BUILD_TESTS)
   add_executable(ps2_elf_tests tests/ps2_elf_tests.cpp)
   target_link_libraries(ps2_elf_tests PRIVATE b3r_recompiler)
   add_test(NAME ps2_elf_tests COMMAND ps2_elf_tests)
+
+  add_executable(r5900_decoder_tests tests/r5900_decoder_tests.cpp)
+  target_link_libraries(r5900_decoder_tests PRIVATE b3r_recompiler)
+  add_test(NAME r5900_decoder_tests COMMAND r5900_decoder_tests)
 
   add_executable(ps2_memory_map_tests tests/ps2_memory_map_tests.cpp)
   target_link_libraries(ps2_memory_map_tests PRIVATE b3r_runtime)
