@@ -15,6 +15,16 @@ add_library(b3r_core
 )
 target_include_directories(b3r_core PUBLIC src)
 
+add_library(b3r_recompiler
+  src/recompiler/ps2_elf.cpp
+)
+target_include_directories(b3r_recompiler PUBLIC src)
+if(MSVC)
+  target_compile_options(b3r_recompiler PRIVATE /W4 /permissive- /Zc:__cplusplus)
+else()
+  target_compile_options(b3r_recompiler PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
   target_compile_options(b3r_core PRIVATE /W4 /permissive- /Zc:__cplusplus)
 else()
@@ -71,6 +81,10 @@ if(B3R_BUILD_TESTS)
   add_executable(log_tests tests/log_tests.cpp)
   target_link_libraries(log_tests PRIVATE b3r_core)
   add_test(NAME log_tests COMMAND log_tests)
+
+  add_executable(ps2_elf_tests tests/ps2_elf_tests.cpp)
+  target_link_libraries(ps2_elf_tests PRIVATE b3r_recompiler)
+  add_test(NAME ps2_elf_tests COMMAND ps2_elf_tests)
 
   if(WIN32)
     add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
