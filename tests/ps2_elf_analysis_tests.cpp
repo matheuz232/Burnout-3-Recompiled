@@ -83,6 +83,9 @@ int main() {
         "CALLS 0\n"
         "INDIRECT_EXITS 0\n"
         "CFG_ISSUES 0\n"
+        "INSTRUCTION_HISTOGRAM 1\n"
+        "  BREAK 1\n"
+        "UNKNOWN_PRIMARY_OPCODES 0\n"
         "\n"
         "BLOCK 0x00100000 END Trap\n"
         "  0x00100000 BREAK RAW 0x0000000D\n"
@@ -92,7 +95,7 @@ int main() {
         const auto result = analyze_ps2_elf(make_break_elf());
         expect(result.ok(), "valid executable ELF must produce an analysis report");
         expect(result.report.has_value(), "successful analysis must contain a report");
-        expect(*result.report == expected, "pipeline report must match the deterministic contract");
+        expect(*result.report == expected, "pipeline report must expose coverage metrics end-to-end");
         expect(result.error == Ps2ElfAnalysisError::None, "successful analysis must not report an error");
     }
 
