@@ -92,6 +92,12 @@ int main() {
         "CALLS 2\n"
         "INDIRECT_EXITS 1\n"
         "CFG_ISSUES 2\n"
+        "INSTRUCTION_HISTOGRAM 3\n"
+        "  BEQ 1\n"
+        "  NOP 1\n"
+        "  UNKNOWN 1\n"
+        "UNKNOWN_PRIMARY_OPCODES 1\n"
+        "  0x1C 1\n"
         "\n"
         "BLOCK 0x00001000 END ConditionalBranch\n"
         "  0x00001000 BEQ RAW 0x10800003\n"
@@ -109,10 +115,10 @@ int main() {
         "ISSUE TargetAnalysisFailed SOURCE 0x00001000 TARGET 0x00003000 ERROR UnmappedInstruction\n";
 
     const auto ordered = render_r5900_analysis_report(make_graph(false));
-    expect(ordered == expected, "report must match the stable text contract");
+    expect(ordered == expected, "report must include stable instruction and unknown-primary histograms");
 
     const auto reordered = render_r5900_analysis_report(make_graph(true));
-    expect(reordered == expected, "report must be deterministic regardless of graph container order");
+    expect(reordered == expected, "coverage histograms must remain deterministic regardless of graph container order");
 
     std::cout << "r5900_analysis_report_tests: PASS\n";
     return EXIT_SUCCESS;
