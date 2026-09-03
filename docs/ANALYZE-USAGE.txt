@@ -1,0 +1,26 @@
+Burnout3Analyze - Windows x64
+=============================
+
+This package contains the static PS2 ELF analysis tool only.
+It does not emulate or execute PS2 game code.
+
+Basic analysis to a text report:
+
+  .\Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --output "burnout3-analysis.txt"
+
+Write the report directly to the console:
+
+  .\Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50"
+
+Increase the bounded reachable-CFG worklist when needed:
+
+  .\Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --output "burnout3-analysis.txt" --max-blocks 8192
+
+Show command-line help:
+
+  .\Burnout3Analyze.exe --help
+
+The region/executable filename may differ from the example above.
+Use only an executable extracted from a legally obtained copy of the game.
+Do not commit or distribute the game executable, assets, or other proprietary game data.
+The generated analysis text report is the intended artifact to share back for evidence-driven decoder/recompiler work.
