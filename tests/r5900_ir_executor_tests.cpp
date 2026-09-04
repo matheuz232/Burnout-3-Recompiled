@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -120,6 +121,111 @@ int main() {
         const auto result = execute_r5900_ir({ir}, state);
         expect(result.ok(), "write to GPR zero must be accepted as a discarded architectural write");
         expect(state.gpr[0].low64 == 0u && state.gpr[0].high64 == 0u, "GPR zero must remain immutable zero");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        auto ir = write_ir(R5900IrOpcode::Or64, 1, gpr(32), immediate(1), 0x00100100u);
+        const auto result = execute_r5900_ir({ir}, state);
+        expect(result.error == R5900IrExecutionError::InvalidRegister, "source GPR >31 must fail explicitly");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        auto ir = write_ir(R5900IrOpcode::Or64, 32, immediate(1), immediate(2), 0x00100104u);
+        const auto result = execute_r5900_ir({ir}, state);
+        expect(result.error == R5900IrExecutionError::InvalidRegister, "destination GPR >31 must fail explicitly");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        R5900IrInstruction ir{};
+        ir.guest_pc = 0x00100108u;
+        ir.opcode = R5900IrOpcode::Or64;
+        ir.write_mode = R5900IrGprWriteMode::Low64PreserveUpper64;
+        ir.inputs = {immediate(1), immediate(2)};
+        const auto result = execute_r5900_ir({ir}, state);
+        expect(result.error == R5900IrExecutionError::MalformedInstruction, "write opcode without destination must fail");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        auto ir = write_ir(R5900IrOpcode::AddWordSignExtend, 1, immediate(1), immediate(2), 0x0010010cu);
+        ir.inputs.pop_back();
+        const auto result = execute_r5900_ir({ir}, state);
+        expect(result.error == R5900IrExecutionError::MalformedInstruction, "write opcode with wrong operand count must fail");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        auto ir = write_ir(R5900IrOpcode::Or64, 1, immediate(1), immediate(2), 0x00100110u);
+        ir.write_mode = R5900IrGprWriteMode::None;
+        const auto result = execute_r5900_ir({ir}, state);
+        expect(result.error == R5900IrExecutionError::MalformedInstruction, "write opcode with wrong write mode must fail");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        R5900IrInstruction nop{};
+        nop.guest_pc = 0x00100114u;
+        nop.opcode = R5900IrOpcode::Nop;
+        nop.destination = R5900IrRegister{1};
+        const auto result = execute_r5900_ir({nop}, state);
+        expect(result.error == R5900IrExecutionError::MalformedInstruction, "Nop with destination must fail");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        R5900IrInstruction nop{};
+        nop.guest_pc = 0x00100118u;
+        nop.opcode = R5900IrOpcode::Nop;
+        nop.inputs = {immediate(1)};
+        const auto result = execute_r5900_ir({nop}, state);
+        expect(result.error == R5900IrExecutionError::MalformedInstruction, "Nop with inputs must fail");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        R5900IrInstruction nop{};
+        nop.guest_pc = 0x0010011cu;
+        nop.opcode = R5900IrOpcode::Nop;
+        nop.write_mode = R5900IrGprWriteMode::Low64PreserveUpper64;
+        const auto result = execute_r5900_ir({nop}, state);
+        expect(result.error == R5900IrExecutionError::MalformedInstruction, "Nop with a write mode must fail");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        auto ir = write_ir(R5900IrOpcode::Or64, 1, immediate(1), immediate(2), 0x00100120u);
+        ir.inputs[0].kind = static_cast<R5900IrOperandKind>(0xff);
+        const auto result = execute_r5900_ir({ir}, state);
+        expect(result.error == R5900IrExecutionError::MalformedInstruction, "unknown operand kind must fail explicitly");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        R5900IrInstruction ir{};
+        ir.guest_pc = 0x00100124u;
+        ir.opcode = static_cast<R5900IrOpcode>(0xff);
+        const auto result = execute_r5900_ir({ir}, state);
+        expect(result.error == R5900IrExecutionError::UnsupportedOpcode, "unknown opcode must fail explicitly");
+        expect(result.message.find("IR instruction 0") != std::string::npos, "error must include instruction index");
+        expect(result.message.find("100124") != std::string::npos, "error must include guest PC");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[1].low64 = 1u;
+        state.gpr[3].low64 = 0xaaaaaaaaaaaaaaaaull;
+
+        const auto first = write_ir(R5900IrOpcode::Or64, 2, gpr(1), immediate(2), 0x00100130u);
+        const auto bad = write_ir(R5900IrOpcode::Or64, 3, gpr(32), immediate(4), 0x00100134u);
+        const auto later = write_ir(R5900IrOpcode::Or64, 3, immediate(8), immediate(16), 0x00100138u);
+
+        const auto result = execute_r5900_ir({first, bad, later}, state);
+        expect(result.error == R5900IrExecutionError::InvalidRegister, "malformed middle instruction must stop execution");
+        expect(state.gpr[2].low64 == 3u, "earlier valid instruction must remain committed");
+        expect(state.gpr[3].low64 == 0xaaaaaaaaaaaaaaaaull, "failing and later instructions must not mutate state");
     }
 
     std::cout << "r5900_ir_executor_tests: PASS\n";
