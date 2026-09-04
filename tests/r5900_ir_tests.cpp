@@ -50,6 +50,8 @@ int main() {
         expect(result.ok(), "NOP must lower successfully");
         expect(result.instructions.size() == 1u, "NOP lowering must emit one provenance-carrying IR instruction");
         expect(result.instructions[0].opcode == R5900IrOpcode::Nop, "NOP must lower to IR Nop");
+        expect(result.instructions[0].write_mode == R5900IrGprWriteMode::None,
+               "NOP must not claim a GPR write");
         expect(result.instructions[0].guest_pc == 0x00100000u, "IR must retain the guest PC");
         expect(result.instructions[0].guest_raw == 0u, "IR must retain the original guest word");
     }
@@ -63,6 +65,8 @@ int main() {
         const auto& ir = result.instructions[0];
         expect(ir.opcode == R5900IrOpcode::AddWordSignExtend, "ADDU must preserve 32-bit add/sign-extend semantics");
         expect(ir.destination.has_value() && ir.destination->index == 8u, "ADDU destination must be rd");
+        expect(ir.write_mode == R5900IrGprWriteMode::Low64PreserveUpper64,
+               "ADDU must explicitly preserve the upper 64 bits of the 128-bit EE GPR");
         expect(ir.inputs.size() == 2u, "ADDU must have two inputs");
         expect(ir.inputs[0].kind == R5900IrOperandKind::Gpr && ir.inputs[0].gpr_index == 9u,
                "ADDU first input must be rs");
@@ -78,6 +82,8 @@ int main() {
         const auto& ir = result.instructions[0];
         expect(ir.opcode == R5900IrOpcode::AddWordSignExtend, "ADDIU must share non-trapping word-add semantics");
         expect(ir.destination.has_value() && ir.destination->index == 29u, "ADDIU destination must be rt");
+        expect(ir.write_mode == R5900IrGprWriteMode::Low64PreserveUpper64,
+               "ADDIU must explicitly preserve the upper 64 bits of the 128-bit EE GPR");
         expect(ir.inputs.size() == 2u, "ADDIU must have register plus immediate inputs");
         expect(ir.inputs[0].kind == R5900IrOperandKind::Gpr && ir.inputs[0].gpr_index == 29u,
                "ADDIU register input must be rs");
@@ -93,9 +99,31 @@ int main() {
         const auto& ir = result.instructions[0];
         expect(ir.opcode == R5900IrOpcode::Or64, "ORI must lower to 64-bit OR semantics");
         expect(ir.destination.has_value() && ir.destination->index == 5u, "ORI destination must be rt");
+        expect(ir.write_mode == R5900IrGprWriteMode::Low64PreserveUpper64,
+               "ORI must explicitly preserve the upper 64 bits of the 128-bit EE GPR");
         expect(ir.inputs.size() == 2u, "ORI must have register plus immediate inputs");
         expect(ir.inputs[1].kind == R5900IrOperandKind::Immediate && ir.inputs[1].immediate == 0xFF00,
                "ORI immediate must be zero-extended before entering IR");
+    }
+
+    {
+        const auto decoded = decode_r5900(r_type(9, 10, 0, 0, 0x21)); // addu zero,t1,t2
+        const auto result = lower_r5900_instruction(decoded, 0x00100034u);
+        expect(result.ok(), "ADDU targeting GPR zero must still lower successfully");
+        expect(result.instructions.size() == 1u, "discarded GPR-zero write must retain one provenance IR site");
+        expect(result.instructions[0].opcode == R5900IrOpcode::Nop,
+               "side-effect-free ADDU targeting GPR zero must lower to Nop");
+        expect(!result.instructions[0].destination.has_value(), "discarded GPR-zero write must have no destination");
+        expect(result.instructions[0].write_mode == R5900IrGprWriteMode::None,
+               "discarded GPR-zero write must not claim a write mode");
+    }
+
+    {
+        const auto decoded = decode_r5900(i_type(0x0D, 4, 0, 0xFF00)); // ori zero,a0,0xff00
+        const auto result = lower_r5900_instruction(decoded, 0x00100038u);
+        expect(result.ok(), "ORI targeting GPR zero must still lower successfully");
+        expect(result.instructions.size() == 1u && result.instructions[0].opcode == R5900IrOpcode::Nop,
+               "side-effect-free ORI targeting GPR zero must lower to Nop");
     }
 
     {
