@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <sstream>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -22,6 +23,10 @@ static_assert(sizeof(R5900IrGprValue) == 16u);
 static_assert(offsetof(R5900IrGprValue, low64) == 0u);
 static_assert(offsetof(R5900IrGprValue, high64) == 8u);
 static_assert(offsetof(R5900IrExecutionState, gpr) == 0u);
+
+constexpr std::uint32_t gpr_low64_offset(std::uint8_t index) {
+    return static_cast<std::uint32_t>(index) * 16u;
+}
 
 R5900X64CompileError map_validation_error(R5900IrValidationError error) {
     switch (error) {
@@ -56,10 +61,63 @@ void emit_store_rax_to_state(std::vector<std::uint8_t>& bytes, std::uint32_t dis
     emit_u32(bytes, displacement);
 }
 
+void emit_load_eax_from_state(std::vector<std::uint8_t>& bytes, std::uint32_t displacement) {
+    bytes.push_back(0x8bu);
+    bytes.push_back(0x81u);
+    emit_u32(bytes, displacement);
+}
+
+void emit_load_edx_from_state(std::vector<std::uint8_t>& bytes, std::uint32_t displacement) {
+    bytes.push_back(0x8bu);
+    bytes.push_back(0x91u);
+    emit_u32(bytes, displacement);
+}
+
+void emit_mov_eax_imm32(std::vector<std::uint8_t>& bytes, std::uint32_t immediate) {
+    bytes.push_back(0xb8u);
+    emit_u32(bytes, immediate);
+}
+
+void emit_mov_edx_imm32(std::vector<std::uint8_t>& bytes, std::uint32_t immediate) {
+    bytes.push_back(0xbau);
+    emit_u32(bytes, immediate);
+}
+
+void emit_operand32_to_eax(std::vector<std::uint8_t>& bytes, const R5900IrOperand& operand) {
+    if (operand.kind == R5900IrOperandKind::Gpr) {
+        emit_load_eax_from_state(bytes, gpr_low64_offset(operand.gpr_index));
+        return;
+    }
+    emit_mov_eax_imm32(bytes, static_cast<std::uint32_t>(operand.immediate));
+}
+
+void emit_operand32_to_edx(std::vector<std::uint8_t>& bytes, const R5900IrOperand& operand) {
+    if (operand.kind == R5900IrOperandKind::Gpr) {
+        emit_load_edx_from_state(bytes, gpr_low64_offset(operand.gpr_index));
+        return;
+    }
+    emit_mov_edx_imm32(bytes, static_cast<std::uint32_t>(operand.immediate));
+}
+
 void emit_zero_gpr0(std::vector<std::uint8_t>& bytes) {
     emit_xor_eax_eax(bytes);
     emit_store_rax_to_state(bytes, 0u);
     emit_store_rax_to_state(bytes, 8u);
+}
+
+void emit_add_word_sign_extend(std::vector<std::uint8_t>& bytes,
+                               const R5900IrInstruction& instruction) {
+    emit_operand32_to_eax(bytes, instruction.inputs[0]);
+    emit_operand32_to_edx(bytes, instruction.inputs[1]);
+
+    bytes.push_back(0x01u);
+    bytes.push_back(0xd0u); // add eax, edx
+    bytes.push_back(0x48u);
+    bytes.push_back(0x98u); // cdqe
+
+    if (instruction.destination->index != 0u) {
+        emit_store_rax_to_state(bytes, gpr_low64_offset(instruction.destination->index));
+    }
 }
 
 R5900X64CompileResult failure(R5900X64CompileError error, std::string message) {
@@ -67,6 +125,14 @@ R5900X64CompileResult failure(R5900X64CompileError error, std::string message) {
     result.error = error;
     result.message = std::move(message);
     return result;
+}
+
+R5900X64CompileResult unsupported_backend_opcode(std::size_t index,
+                                                  const R5900IrInstruction& instruction) {
+    std::ostringstream message;
+    message << "IR instruction " << index << " at guest PC 0x" << std::hex
+            << instruction.guest_pc << ": opcode not implemented by x64 backend";
+    return failure(R5900X64CompileError::UnsupportedOpcode, message.str());
 }
 
 } // namespace
@@ -118,17 +184,24 @@ R5900X64CompileResult compile_r5900_ir_x64(
         }
     }
 
-    for (const auto& instruction : instructions) {
-        if (instruction.opcode != R5900IrOpcode::Nop) {
-            return failure(R5900X64CompileError::UnsupportedOpcode,
-                           "R5900 x64 backend v0 foundation only emits Nop");
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(32u + instructions.size() * 24u);
+    emit_zero_gpr0(bytes);
+
+    for (std::size_t index = 0; index < instructions.size(); ++index) {
+        const auto& instruction = instructions[index];
+        switch (instruction.opcode) {
+        case R5900IrOpcode::Nop:
+            break;
+        case R5900IrOpcode::AddWordSignExtend:
+            emit_add_word_sign_extend(bytes, instruction);
+            break;
+        case R5900IrOpcode::Or64:
+        default:
+            return unsupported_backend_opcode(index, instruction);
         }
     }
 
-    std::vector<std::uint8_t> bytes;
-    bytes.reserve(32u);
-
-    emit_zero_gpr0(bytes);
     emit_zero_gpr0(bytes);
     bytes.push_back(0xc3u);
 
