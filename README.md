@@ -14,7 +14,7 @@ The current source tree contains:
 - QueryPerformanceCounter clock and 120 Hz Windows frame pacer;
 - validated PS2 ELF32/MIPS structural loading;
 - PT_LOAD-backed guest memory mapping;
-- initial R5900 decoder;
+- an initial R5900 decoder, now including the narrow EE/MMI/COP1 startup subset `SYNC`, `MTSAH`, `MTHI1`, `MTLO1`, `PADDUW`, `MTC1`, `CTC1`, and `ADDA.S` identified from an externally supplied legal game ELF;
 - initial provenance-carrying R5900 IR v0 with explicit lowering for NOP, ADDU, ADDIU, and ORI;
 - deterministic R5900 IR reference execution for the current `Nop`, `AddWordSignExtend`, and `Or64` subset;
 - an initial Windows x86-64 machine-code backend for the same IR subset, with executable-page ownership and W^X allocation/protection;
@@ -32,7 +32,7 @@ A first Windows x86-64 backend now compiles that same IR subset into callable na
 
 On Windows, `R5900BlockDispatcher` now bridges the existing basic-block analyzer to the current lowering and x86-64 backend for straight-line NOP/ADDU/ADDIU/ORI prefixes. It supports bounded multi-block sequential dispatch, per-run progress/cache accounting, exact guest-word cache validation using a deterministic FNV-1a fingerprint plus byte-exact word comparison, automatic recompilation of changed supported code, and fail-fast stops before control flow, traps, or unsupported instructions. Architectural delay slots are deliberately not executed by dispatcher v0.
 
-This remains a narrow native-execution milestone. The project **has not yet validated real Burnout 3 guest basic blocks from an externally supplied game ELF**, does not execute native branch/jump/call control flow or delay slots, does not implement guest memory loads/stores in the native backend, and does not boot the game or provide graphics, audio, input, menus, or gameplay.
+An externally supplied legal Burnout 3 ELF has now been used out-of-repository to identify the first real startup decoder blockers. The narrow startup decoder extension is CI-validated, but the project **does not yet execute those real startup instructions natively**: the IR/backend still lack the required MMI/COP1/special-register semantics, guest loads/stores, native branch/jump/call handling and delay slots. The game does not boot and graphics, audio, input, menus, and gameplay remain unimplemented.
 
 ## Legal data policy
 
