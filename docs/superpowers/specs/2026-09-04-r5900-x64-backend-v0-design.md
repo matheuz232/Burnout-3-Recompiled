@@ -21,7 +21,7 @@ Included:
 - Windows x64 only;
 - manual, dependency-free machine-code emission for the current IR subset;
 - executable code-buffer ownership and lifetime;
-- Win32 W^X memory transition (`RW` while emitting, then `RX` before execution; never persistent `RWX`);
+- Win32 W^X memory transition (`RW` while copying emitted bytes, then `RX` before execution; never persistent `RWX`);
 - shared structural IR validation used by both the reference executor and x86-64 compiler;
 - exact 32x128-bit EE GPR state layout already defined by `R5900IrExecutionState`;
 - architectural GPR zero normalization;
@@ -62,10 +62,32 @@ This would provide optimization and mature code generation, but it is substantia
 
 ### Shared IR validation
 
-The validation logic currently embedded inside `r5900_ir_executor.cpp` will be extracted into a focused reusable unit, tentatively:
+The validation logic currently embedded inside `r5900_ir_executor.cpp` will be extracted into:
 
 - `src/recompiler/r5900_ir_validation.h`
 - `src/recompiler/r5900_ir_validation.cpp`
+
+The public validation API is:
+
+```cpp
+enum class R5900IrValidationError {
+    None = 0,
+    MalformedInstruction,
+    InvalidRegister,
+    UnsupportedOpcode,
+};
+
+struct R5900IrValidationResult {
+    R5900IrValidationError error{R5900IrValidationError::None};
+    std::string message{};
+
+    [[nodiscard]] bool ok() const noexcept;
+};
+
+[[nodiscard]] R5900IrValidationResult validate_r5900_ir_instruction(
+    const R5900IrInstruction& instruction,
+    std::size_t instruction_index);
+```
 
 The validator owns structural checks only:
 
@@ -77,14 +99,43 @@ The validator owns structural checks only:
 - supported operand kinds;
 - source GPR indices in `[0, 31]`.
 
-Both the reference executor and the x86-64 compiler must call this validator before reading operands or generating/executing code. The executor keeps its execution-specific result type, while the backend maps validation failures into its own compile result.
+The reference executor calls the validator immediately before each instruction executes, preserving its existing fail-fast/partial-commit behavior: earlier valid instructions remain committed if a later instruction is malformed. The x86-64 compiler validates the complete input vector before emission/allocation, because failed compilation must expose no partial native block.
+
+### Backend files
+
+The Windows-specific backend is:
+
+- `src/recompiler/windows/r5900_x64_backend.h`
+- `src/recompiler/windows/r5900_x64_backend.cpp`
+
+The namespace remains `b3r::recompiler`.
 
 ### Backend public API
 
-Add a Windows x64 backend API under the recompiler namespace, with a shape equivalent to:
+The backend API is:
 
 ```cpp
-struct R5900X64CompiledBlock;
+class R5900X64CompiledBlock {
+public:
+    R5900X64CompiledBlock() noexcept = default;
+    ~R5900X64CompiledBlock();
+
+    R5900X64CompiledBlock(const R5900X64CompiledBlock&) = delete;
+    R5900X64CompiledBlock& operator=(const R5900X64CompiledBlock&) = delete;
+    R5900X64CompiledBlock(R5900X64CompiledBlock&& other) noexcept;
+    R5900X64CompiledBlock& operator=(R5900X64CompiledBlock&& other) noexcept;
+
+    [[nodiscard]] bool valid() const noexcept;
+    void execute(R5900IrExecutionState& state) const noexcept;
+
+private:
+    friend struct R5900X64CompileResult;
+    friend R5900X64CompileResult compile_r5900_ir_x64(
+        const std::vector<R5900IrInstruction>& instructions);
+
+    void* code_{};
+    std::size_t size_{};
+};
 
 enum class R5900X64CompileError {
     None = 0,
@@ -93,40 +144,46 @@ enum class R5900X64CompileError {
     UnsupportedOpcode,
     AllocationFailed,
     ProtectionFailed,
+    CacheFlushFailed,
 };
 
 struct R5900X64CompileResult {
-    R5900X64CompileError error;
-    std::string message;
-    R5900X64CompiledBlock block;
-    bool ok() const noexcept;
+    R5900X64CompileError error{R5900X64CompileError::None};
+    std::string message{};
+    std::optional<R5900X64CompiledBlock> block{};
+
+    [[nodiscard]] bool ok() const noexcept;
 };
 
-R5900X64CompileResult compile_r5900_ir_x64(
+[[nodiscard]] R5900X64CompileResult compile_r5900_ir_x64(
     const std::vector<R5900IrInstruction>& instructions);
 ```
 
-The exact ownership wrapper may differ to preserve move-only RAII cleanly, but the observable contract is fixed:
+Implementation may use a private constructor/helper rather than the shown friend declaration if required for valid C++ declaration ordering, but these observable semantics are fixed:
 
-- successful compilation owns an executable code buffer;
-- failed compilation owns no executable buffer;
-- the compiled block is movable and non-copyable;
-- execution accepts `R5900IrExecutionState&` and mutates it in place;
-- destruction releases the Win32 allocation.
+- successful compilation returns `error == None` and a valid owned block;
+- failed compilation returns no block;
+- compiled blocks are movable and non-copyable;
+- `execute()` accepts `R5900IrExecutionState&` and mutates it in place;
+- block destruction releases its Win32 allocation;
+- `execute()` is only valid on a valid block; tests never invoke an empty/moved-from block.
 
-### Executable buffer
+### Emission staging and executable buffer
 
-The backend will use Win32 virtual memory directly:
+Machine bytes are first emitted into a normal `std::vector<std::uint8_t>`. Only after the entire IR vector validates and all bytes are available does the backend create executable storage:
 
-1. `VirtualAlloc` with read/write pages;
-2. emit all machine code;
-3. `VirtualProtect` to executable/read;
-4. `FlushInstructionCache` before first execution;
-5. `VirtualFree` in RAII destruction.
+1. `VirtualAlloc` with `PAGE_READWRITE`;
+2. copy the completed byte vector into the allocation;
+3. `VirtualProtect` to `PAGE_EXECUTE_READ`;
+4. `FlushInstructionCache` for the generated range;
+5. expose the compiled block;
+6. `VirtualFree` in RAII destruction.
 
-No page remains writable and executable simultaneously after compilation.
+If allocation, protection, or instruction-cache flushing fails, compilation returns the corresponding explicit error and releases any allocation already made.
 
-This is deliberately Windows-specific and should be built only under the existing `WIN32` CMake path. Portable analysis/tests remain unaffected on non-Windows hosts.
+No page is requested or retained as writable and executable simultaneously.
+
+This is deliberately Windows-specific and is built only under the existing Windows CMake path. Portable analysis/tests remain unaffected on non-Windows hosts.
 
 ## Calling convention and state layout
 
@@ -143,7 +200,9 @@ The state pointer arrives in `RCX`.
 - offset `index * 16 + 0`: low64;
 - offset `index * 16 + 8`: high64.
 
-The v0 backend may use volatile scratch registers such as `RAX` and `RDX`; it must not depend on preserved registers or require a stack frame.
+The implementation must use `static_assert`/`offsetof` checks so generated displacement assumptions are tied to the C++ layout. The v0 backend uses only volatile scratch registers `RAX` and `RDX`; it does not require a stack frame and does not modify nonvolatile registers.
+
+To minimize encoder surface area, register operands use `[RCX + disp32]` memory forms even where a shorter displacement is possible.
 
 ## Opcode lowering
 
@@ -155,31 +214,28 @@ Emits no guest-semantic instruction bytes. Entry/exit architectural housekeeping
 
 Semantics must exactly match the reference executor:
 
-1. read both operands as low 32-bit values;
-2. perform unsigned modulo-2^32 addition;
-3. sign-extend the resulting 32-bit word to 64 bits;
-4. if destination is not GPR zero, store only destination `low64`;
-5. never modify destination `high64`.
+1. materialize lhs low32 into `EAX`;
+2. materialize rhs low32 into `EDX`;
+3. execute 32-bit `ADD EAX, EDX`, which wraps modulo 2^32;
+4. execute `CDQE` to sign-extend EAX into RAX;
+5. if destination is not GPR zero, store RAX only to destination low64;
+6. never modify destination high64.
 
-A representative sequence is:
+For a GPR operand, materialization loads from `[RCX + gpr_offset]`. For an immediate operand, materialization uses the low 32 bits of the IR immediate, matching the current reference executor.
 
-- materialize lhs into `EAX`;
-- `ADD EAX, rhs`;
-- `CDQE` to sign-extend EAX into RAX;
-- store RAX to destination low64 when destination != 0.
-
-Aliasing such as `sp = sp + immediate` must work naturally because operands are read before the destination store.
+Aliasing such as `sp = sp + immediate` works because both operands are materialized before the destination store.
 
 ### Or64
 
 Semantics:
 
-1. read both operands as full low64 values;
-2. bitwise OR in 64 bits;
-3. if destination is not GPR zero, store only destination low64;
-4. preserve destination high64.
+1. materialize lhs low64 into `RAX`;
+2. materialize rhs low64 into `RDX`;
+3. execute 64-bit `OR RAX, RDX`;
+4. if destination is not GPR zero, store only destination low64;
+5. preserve destination high64.
 
-Register operands may use memory forms. Immediate operands must preserve the full IR immediate bit pattern. The emitter must not incorrectly rely on x86-64 sign-extended imm32 OR encoding for arbitrary 64-bit IR immediates; loading a 64-bit immediate into a scratch register is acceptable for v0.
+For 64-bit immediate operands, use `MOV r64, imm64` so the complete IR immediate bit pattern is preserved. Do not rely on x86-64 `OR r64, imm32`, whose immediate is sign-extended and cannot represent every 64-bit IR operand.
 
 ## GPR zero behavior
 
@@ -187,7 +243,7 @@ The reference executor normalizes GPR0 to zero on entry and on every return path
 
 - clear GPR0 low64 and high64 at generated-function entry;
 - discard destination writes targeting GPR0;
-- clear GPR0 again before returning.
+- clear GPR0 low64 and high64 again before `RET`.
 
 This guarantees source reads from GPR0 observe zero even if a test intentionally supplies a corrupt incoming state.
 
@@ -197,14 +253,14 @@ Compilation is fail-fast and deterministic.
 
 For malformed or unsupported IR:
 
-- no native function is returned;
-- no executable buffer survives the failed compile;
-- diagnostics include the IR instruction index and guest PC when available;
+- no native function/block is returned;
+- no executable allocation is created because validation occurs before emission allocation;
+- diagnostics include the IR instruction index and guest PC;
 - no partial native code is exposed for execution.
 
-Win32 allocation/protection failures return explicit backend errors and release any temporary allocation.
+Win32 allocation/protection/cache-flush failures return explicit backend errors and release any temporary allocation.
 
-Execution itself has no recoverable error path in v0: only successfully compiled blocks may be invoked.
+Execution itself has no recoverable error path in v0: only successfully compiled blocks are invoked.
 
 ## Testing strategy
 
@@ -212,7 +268,7 @@ Development follows TDD.
 
 ### RED 1 — public backend contract
 
-Add Windows-only tests that include the backend header and declare the required compile/execute behavior before implementation exists. CI must fail for the missing backend API, not for unrelated infrastructure.
+Add Windows-only tests that include `recompiler/windows/r5900_x64_backend.h` and declare the required compile/execute behavior before implementation exists. CI must fail for the missing backend API, not for unrelated infrastructure.
 
 ### GREEN 1 — minimal native execution
 
@@ -220,6 +276,7 @@ Implement enough buffer/emitter functionality to execute deterministic NOP, AddW
 
 Required cases:
 
+- empty program normalizes GPR0 and otherwise preserves state;
 - NOP preserves nonzero registers;
 - ADDU-like positive result;
 - ADDU-like negative 32-bit result with sign extension;
@@ -229,7 +286,8 @@ Required cases:
 - full 64-bit immediate OR case to prevent accidental imm32-sign-extension semantics;
 - destination/source aliasing;
 - high64 preservation;
-- GPR0 normalization and discarded writes.
+- GPR0 normalization and discarded writes;
+- move construction/assignment preserve executable ownership and leave moved-from blocks invalid.
 
 ### RED/GREEN 2 — validation sharing
 
@@ -244,7 +302,7 @@ For each valid test vector:
 3. compile and run the same IR through the x86-64 backend;
 4. compare all 32 GPRs, both low64 and high64, bit-for-bit.
 
-At least one multi-instruction sequence must include destination/source aliasing and writes to GPR0.
+At least one multi-instruction sequence includes destination/source aliasing and a discarded write to GPR0.
 
 ### Decoder -> IR -> x86-64 integration
 
@@ -254,26 +312,37 @@ No proprietary game binary is used.
 
 ## CMake integration
 
-The backend source and its native-execution tests are Windows-only. The existing portable `b3r_recompiler` target must continue to configure/build on non-Windows systems without including Win32 headers.
+The existing portable `b3r_recompiler` target gains only the shared portable validation source.
 
-Preferred structure:
+On 64-bit Windows, add:
 
-- keep portable IR/validation/executor in `b3r_recompiler`;
-- add a Windows-only `b3r_recompiler_x64` static library containing the executable buffer and x86-64 emitter;
-- link it publicly/private as appropriate to `b3r_recompiler`;
-- add `r5900_x64_backend_windows_tests` only inside the existing `if(WIN32)` test block.
+```text
+b3r_recompiler_x64
+  src/recompiler/windows/r5900_x64_backend.cpp
+  links: b3r_recompiler
+```
 
-The backend must compile only for a 64-bit Windows target. Configuration should fail clearly or skip the backend if a 32-bit Windows generator is used; the project’s supported CI remains VS2022 x64.
+The backend header is exposed through the existing `src` include root. The Windows backend test target is:
+
+```text
+r5900_x64_backend_windows_tests
+```
+
+and exists only inside the current `if(WIN32)` test section.
+
+On non-Windows systems the x86-64 backend library and native-execution tests are skipped; portable recompiler tests still build. On Windows, `CMAKE_SIZEOF_VOID_P` must equal 8; a 32-bit Windows configuration fails at CMake configure time with a clear unsupported-target message.
 
 ## Security and correctness constraints
 
-- never emit or retain RWX memory;
+- never request or retain RWX memory;
 - generated code only dereferences the caller-provided execution-state pointer at compile-time-known GPR offsets;
 - no guest-controlled native addresses exist in v0;
 - no native branches/calls are generated from guest targets in v0;
-- validate every GPR index before code generation;
-- integer arithmetic uses defined unsigned host operations/encodings consistent with the reference semantics;
-- preserve all high64 GPR halves except GPR0 architectural normalization.
+- validate every GPR index before emission;
+- emitted arithmetic matches the reference executor’s defined unsigned/wrapping semantics;
+- preserve all high64 GPR halves except GPR0 architectural normalization;
+- emitted code uses only Windows-x64 volatile registers RAX/RDX/RCX and therefore needs no prologue/epilogue beyond `RET`;
+- no stack access is emitted.
 
 ## Completion criteria
 
@@ -281,11 +350,13 @@ This milestone is complete only when all of the following are observed on the fi
 
 1. Windows x64 Release build succeeds with MSVC;
 2. the full CTest suite is green;
-3. the new backend differential/native execution test is green;
-4. existing frame-pacing telemetry and pacing-probe gates remain green;
-5. package staging/validation remains green;
-6. PR review finds no unresolved critical/important correctness issue;
-7. documentation states clearly that this is native execution of the synthetic/current IR subset, not Burnout 3 gameplay or general guest execution.
+3. `r5900_x64_backend_windows_tests` is green and executes generated machine code;
+4. differential comparisons cover all current IR opcodes and compare every GPR low64/high64;
+5. synthetic decoder -> lowering -> native execution coverage is green;
+6. existing frame-pacing telemetry and pacing-probe gates remain green;
+7. analyzer/probe package staging and validation remain green;
+8. PR review finds no unresolved critical/important correctness issue;
+9. documentation states clearly that this is native execution of the synthetic/current IR subset, not Burnout 3 gameplay or general guest execution.
 
 ## Next milestone after v0
 
