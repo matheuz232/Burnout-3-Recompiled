@@ -51,6 +51,14 @@ int main() {
                report.find("PERFORMANCE_FAIL") == std::string::npos,
            "probe must not classify desktop performance as pass/fail");
 
+    Burnout3PacingProbeOptions zero{};
+    zero.seconds = 0u;
+    std::ostringstream zero_output;
+    const auto zero_result = run_burnout3_pacing_probe(zero, zero_output);
+    expect(!zero_result.ok(), "zero-second app invocation must be rejected defensively");
+    expect(zero_result.error == Burnout3PacingProbeRunError::InvalidDuration,
+           "zero-second app invocation must have an invalid-duration error");
+
     Burnout3PacingProbeOptions overflow{};
     overflow.seconds = std::numeric_limits<std::size_t>::max();
     std::ostringstream ignored;
