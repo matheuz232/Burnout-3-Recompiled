@@ -89,7 +89,8 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
 
     if (max_blocks == 0u) {
         result.reason = R5900DispatchStopReason::InvalidBlockBudget;
-        result.message = "R5900 dispatcher block budget must be non-zero";
+        result.message = format_stage_error(
+            "budget", start_pc, "R5900 dispatcher block budget must be non-zero");
         return result;
     }
 
