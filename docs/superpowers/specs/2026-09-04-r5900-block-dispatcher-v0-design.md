@@ -206,16 +206,22 @@ If the first instruction is already a control-flow terminator or unsupported ins
 
 The dispatcher uses the existing control-flow analysis as the source of block boundaries and end classification. It must not reimplement branch target analysis or delay-slot discovery.
 
+Support eligibility is determined before lowering by an explicit decoded-instruction predicate. For v0, the eligible decoded instructions are exactly those with established complete lowering into the current backend subset: `Nop`, `Addu`, `Addiu`, and `Ori`. Control-flow and trap classification is checked before this eligibility predicate.
+
+The dispatcher must not call lowering merely to discover whether an instruction is supported. This keeps the normal intentional boundary (`UnsupportedInstruction`) distinct from an unexpected failure after an instruction was already classified as eligible (`LoweringFailure`).
+
 For a returned `R5900BasicBlock`:
 
 1. Walk `block.instructions` in PC order.
-2. Stop before any instruction that cannot lower completely to the current IR subset.
-3. A control-flow terminator is never included in the compiled prefix in v0.
-4. A trap is never included in the compiled prefix.
-5. `block.delay_slot`, when present, is never compiled or executed in v0.
-6. Only a non-empty supported prefix can become a native cached block.
+2. Stop before a control-flow instruction or trap.
+3. Stop before the first decoded instruction that is not eligible for dispatcher v0.
+4. A control-flow terminator is never included in the compiled prefix in v0.
+5. A trap is never included in the compiled prefix.
+6. `block.delay_slot`, when present, is never compiled or executed in v0.
+7. Only a non-empty supported prefix can become a native cached block.
+8. Lower every selected eligible instruction; if that lowering unexpectedly fails, return `LoweringFailure` and do not execute the candidate.
 
-When the analyzer returns `InstructionLimit`, all supported instructions in that chunk may be compiled. After execution, the dispatcher may continue at the sequential next PC if budget remains.
+When the analyzer returns `InstructionLimit`, all eligible instructions in that chunk may be compiled. After execution, the dispatcher may continue at the sequential next PC if budget remains.
 
 When the analyzer returns a control-flow end kind, unsupported end, or trap, the supported straight-line prefix before that boundary may execute once; dispatch then stops at the first unexecuted instruction.
 
@@ -223,9 +229,11 @@ When the analyzer returns a control-flow end kind, unsupported end, or trap, the
 
 ### 8.1 `BlockBudgetExhausted`
 
-Returned after `max_blocks` native blocks have successfully executed and the next sequential PC is known.
+Returned after `max_blocks` native blocks have successfully executed and continuation is otherwise a supported sequential fallthrough produced by an `InstructionLimit` chunk.
 
 The budget counts only blocks that reached native execution. Analysis attempts, cache probes, lowering attempts, and compile failures do not consume block budget.
+
+A semantic boundary already known from the just-analyzed block takes precedence over budget exhaustion. Therefore, if the executed prefix is immediately followed by control flow, an unsupported instruction, or a trap, the dispatcher returns `ControlFlow`, `UnsupportedInstruction`, or `Trap` respectively even when `blocks_executed == max_blocks`. `BlockBudgetExhausted` is reserved for a sequential continuation that could otherwise proceed into another dispatcher chunk.
 
 ### 8.2 `ControlFlow`
 
@@ -235,7 +243,7 @@ No terminator or delay-slot side effect is performed.
 
 ### 8.3 `UnsupportedInstruction`
 
-Returned when the next unexecuted instruction is decoded but is not lowerable to the current supported IR subset, or when analysis classifies an unknown/unsupported instruction boundary.
+Returned when the next unexecuted instruction is decoded but is not eligible for the current dispatcher/lowering subset, or when analysis classifies an unknown/unsupported instruction boundary.
 
 ### 8.4 `Trap`
 
@@ -257,7 +265,7 @@ Maps failures from `analyze_r5900_basic_block()`, including unaligned, unmapped,
 
 ### 8.7 `LoweringFailure`
 
-Used for a failure while lowering an instruction that was selected as part of the supported prefix. This is distinct from the intentional `UnsupportedInstruction` boundary.
+Used only when lowering unexpectedly fails for an instruction already selected by the explicit v0 eligibility predicate. This is distinct from the intentional `UnsupportedInstruction` boundary.
 
 ### 8.8 `CompileFailure`
 
@@ -319,6 +327,8 @@ A stale mismatch increments `recompilations` when recompilation is attempted. Th
 
 If recompilation fails, no current valid entry exists for those guest words and the call returns the corresponding failure. Future calls may retry compilation.
 
+If the code at a cached `start_pc` changes so that no non-empty v0-eligible prefix exists, the dispatcher stops before execution and does not consult or execute that old native block. v0 does not require eager physical eviction in this case; logical validity is defined exclusively by an exact current candidate match. `clear_cache()` remains the explicit full-eviction operation.
+
 ### 9.5 Cache lifetime
 
 `R5900BlockDispatcher` owns all cached `R5900X64CompiledBlock` objects. Existing backend RAII remains responsible for `VirtualFree` and move ownership.
@@ -332,7 +342,7 @@ No eviction policy is added in v0.
 Compilation of a candidate prefix follows this order:
 
 1. Obtain successful block analysis.
-2. Select non-empty supported prefix.
+2. Select non-empty supported prefix using the explicit v0 eligibility predicate.
 3. Capture exact guest raw words.
 4. Validate/reuse cache entry if possible.
 5. Lower every selected instruction to IR.
@@ -420,6 +430,8 @@ Validate:
 - recompilation occurs;
 - the new semantic result is observed.
 
+Also cover the case where mutation changes the first instruction from eligible to unsupported: the old native block may remain allocated until replacement or `clear_cache()`, but it must not execute.
+
 ### 14.5 Control-flow boundary
 
 Test supported prefix followed by representative `BEQ`, `J`, `JAL`, and `JR` terminators.
@@ -430,7 +442,8 @@ Validate:
 - terminator does not execute;
 - delay slot does not execute;
 - `next_pc` equals terminator PC;
-- stop reason is `ControlFlow`.
+- stop reason is `ControlFlow`;
+- semantic boundary stop reason wins over simultaneous budget exhaustion.
 
 ### 14.6 Unsupported boundary
 
