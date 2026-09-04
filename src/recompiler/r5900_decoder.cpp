@@ -47,6 +47,7 @@ void decode_special(R5900DecodedInstruction& decoded) noexcept {
     case 0x09: mark_jump(decoded, R5900Instruction::Jalr, true); break;
     case 0x0C: set_instruction(decoded, R5900Instruction::Syscall, R5900InstructionClass::System); break;
     case 0x0D: set_instruction(decoded, R5900Instruction::Break, R5900InstructionClass::System); break;
+    case 0x0F: set_instruction(decoded, R5900Instruction::Sync, R5900InstructionClass::Alu); break;
     case 0x10: set_instruction(decoded, R5900Instruction::Mfhi, R5900InstructionClass::Alu); break;
     case 0x11: set_instruction(decoded, R5900Instruction::Mthi, R5900InstructionClass::Alu); break;
     case 0x12: set_instruction(decoded, R5900Instruction::Mflo, R5900InstructionClass::Alu); break;
@@ -79,7 +80,44 @@ void decode_regimm(R5900DecodedInstruction& decoded) noexcept {
     case 0x11: mark_branch(decoded, R5900Instruction::Bgezal, false, true); break;
     case 0x12: mark_branch(decoded, R5900Instruction::Bltzall, true, true); break;
     case 0x13: mark_branch(decoded, R5900Instruction::Bgezall, true, true); break;
+    case 0x19: set_instruction(decoded, R5900Instruction::Mtsah, R5900InstructionClass::Alu); break;
     default: break;
+    }
+}
+
+void decode_cop1(R5900DecodedInstruction& decoded) noexcept {
+    switch (decoded.rs) {
+    case 0x04:
+        set_instruction(decoded, R5900Instruction::Mtc1, R5900InstructionClass::Alu);
+        break;
+    case 0x06:
+        set_instruction(decoded, R5900Instruction::Ctc1, R5900InstructionClass::Alu);
+        break;
+    case 0x10:
+        if (decoded.funct == 0x18u) {
+            set_instruction(decoded, R5900Instruction::AddaS, R5900InstructionClass::Alu);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+void decode_mmi(R5900DecodedInstruction& decoded) noexcept {
+    switch (decoded.funct) {
+    case 0x11:
+        set_instruction(decoded, R5900Instruction::Mthi1, R5900InstructionClass::Alu);
+        break;
+    case 0x13:
+        set_instruction(decoded, R5900Instruction::Mtlo1, R5900InstructionClass::Alu);
+        break;
+    case 0x28:
+        if (decoded.sa == 0x10u) {
+            set_instruction(decoded, R5900Instruction::Padduw, R5900InstructionClass::Alu);
+        }
+        break;
+    default:
+        break;
     }
 }
 
@@ -142,6 +180,7 @@ R5900DecodedInstruction decode_r5900(std::uint32_t word) noexcept {
     case 0x0D: set_instruction(decoded, R5900Instruction::Ori, R5900InstructionClass::Alu); break;
     case 0x0E: set_instruction(decoded, R5900Instruction::Xori, R5900InstructionClass::Alu); break;
     case 0x0F: set_instruction(decoded, R5900Instruction::Lui, R5900InstructionClass::Alu); break;
+    case 0x11: decode_cop1(decoded); break;
     case 0x14: mark_branch(decoded, R5900Instruction::Beql, true); break;
     case 0x15: mark_branch(decoded, R5900Instruction::Bnel, true); break;
     case 0x16: mark_branch(decoded, R5900Instruction::Blezl, true); break;
@@ -150,6 +189,7 @@ R5900DecodedInstruction decode_r5900(std::uint32_t word) noexcept {
     case 0x19: set_instruction(decoded, R5900Instruction::Daddiu, R5900InstructionClass::Alu); break;
     case 0x1A: set_instruction(decoded, R5900Instruction::Ldl, R5900InstructionClass::Load, R5900MemoryWidth::Doubleword64); break;
     case 0x1B: set_instruction(decoded, R5900Instruction::Ldr, R5900InstructionClass::Load, R5900MemoryWidth::Doubleword64); break;
+    case 0x1C: decode_mmi(decoded); break;
     case 0x1E: set_instruction(decoded, R5900Instruction::Lq, R5900InstructionClass::Load, R5900MemoryWidth::Quadword128); break;
     case 0x1F: set_instruction(decoded, R5900Instruction::Sq, R5900InstructionClass::Store, R5900MemoryWidth::Quadword128); break;
     case 0x20: set_instruction(decoded, R5900Instruction::Lb, R5900InstructionClass::Load, R5900MemoryWidth::Byte); break;
@@ -193,10 +233,14 @@ const char* r5900_instruction_name(R5900Instruction instruction) noexcept {
     case R5900Instruction::Jalr: return "JALR";
     case R5900Instruction::Syscall: return "SYSCALL";
     case R5900Instruction::Break: return "BREAK";
+    case R5900Instruction::Sync: return "SYNC";
     case R5900Instruction::Mfhi: return "MFHI";
     case R5900Instruction::Mthi: return "MTHI";
     case R5900Instruction::Mflo: return "MFLO";
     case R5900Instruction::Mtlo: return "MTLO";
+    case R5900Instruction::Mthi1: return "MTHI1";
+    case R5900Instruction::Mtlo1: return "MTLO1";
+    case R5900Instruction::Mtsah: return "MTSAH";
     case R5900Instruction::Mult: return "MULT";
     case R5900Instruction::Multu: return "MULTU";
     case R5900Instruction::Div: return "DIV";
@@ -211,6 +255,10 @@ const char* r5900_instruction_name(R5900Instruction instruction) noexcept {
     case R5900Instruction::Nor: return "NOR";
     case R5900Instruction::Slt: return "SLT";
     case R5900Instruction::Sltu: return "SLTU";
+    case R5900Instruction::Padduw: return "PADDUW";
+    case R5900Instruction::Mtc1: return "MTC1";
+    case R5900Instruction::Ctc1: return "CTC1";
+    case R5900Instruction::AddaS: return "ADDA.S";
     case R5900Instruction::Bltz: return "BLTZ";
     case R5900Instruction::Bgez: return "BGEZ";
     case R5900Instruction::Bltzl: return "BLTZL";
