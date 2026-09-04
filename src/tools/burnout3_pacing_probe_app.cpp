@@ -31,17 +31,19 @@ Burnout3PacingProbeRunResult fail(Burnout3PacingProbeRunError error,
 Burnout3PacingProbeRunResult
 run_burnout3_pacing_probe(const Burnout3PacingProbeOptions& options,
                           std::ostream& standard_output) {
-    if (options.seconds > std::numeric_limits<std::size_t>::max() / kTargetHz) {
+    if (options.seconds == 0u ||
+        options.seconds > std::numeric_limits<std::size_t>::max() / kTargetHz) {
         return fail(Burnout3PacingProbeRunError::InvalidDuration,
-                    "requested duration is too large to represent at 120 Hz");
+                    "requested duration must be a positive value representable at 120 Hz");
     }
 
     const std::size_t frame_count = options.seconds * kTargetHz;
     std::vector<double> frame_durations;
-    frame_durations.reserve(frame_count);
 
     bool high_resolution_timer = false;
     try {
+        frame_durations.reserve(frame_count);
+
         b3r::platform::windows::WindowsFramePacer pacer{static_cast<double>(kTargetHz)};
         high_resolution_timer = pacer.using_high_resolution_timer();
 
