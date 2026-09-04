@@ -351,6 +351,53 @@ int main() {
                "clear_cache must destroy all native entries");
     }
 
+    {
+        R5900BlockDispatcherOptions options{};
+        options.block_options.max_instructions = 1u;
+        const auto addiu_one = i_type(0x09, 0, 1, 1u);
+        const auto addiu_seven = i_type(0x09, 0, 1, 7u);
+        const auto andi = i_type(0x0c, 1, 2, 0xffu);
+        auto memory = make_memory({addiu_one}, base);
+        R5900BlockDispatcher dispatcher(memory, options);
+
+        R5900IrExecutionState first_state{};
+        const auto first = dispatcher.run(base, first_state, 1u);
+        expect(first_state.gpr[1].low64 == 1u,
+               "initial native block must execute original guest word");
+        expect(first.cache_misses == 1u && first.recompilations == 0u,
+               "initial compile must be a plain cache miss");
+        expect(dispatcher.cache_size() == 1u,
+               "initial compile must create one cache entry");
+
+        expect(memory.write_u32(base, addiu_seven),
+               "guest code mutation must succeed");
+        R5900IrExecutionState second_state{};
+        const auto second = dispatcher.run(base, second_state, 1u);
+        expect(second_state.gpr[1].low64 == 7u,
+               "stale native code must never execute");
+        expect(second.recompilations == 1u,
+               "changed guest code must count as recompilation");
+        expect(second.cache_hits == 0u && second.cache_misses == 0u,
+               "stale lookup is neither a hit nor a plain miss");
+        expect(dispatcher.cache_size() == 1u,
+               "successful stale replacement keeps one entry per start PC");
+
+        expect(memory.write_u32(base, andi),
+               "mutation to unsupported instruction must succeed");
+        R5900IrExecutionState third_state{};
+        third_state.gpr[1].low64 = 0x55u;
+        const auto third = dispatcher.run(base, third_state, 1u);
+        expect(third.reason == R5900DispatchStopReason::UnsupportedInstruction,
+               "unsupported mutated code must stop before cache lookup");
+        expect(third.blocks_executed == 0u && third.instructions_executed == 0u,
+               "unsupported mutated code must execute nothing");
+        expect(third.cache_hits == 0u && third.cache_misses == 0u &&
+                   third.recompilations == 0u,
+               "unsupported mutated code must not touch cache accounting");
+        expect(third_state.gpr[1].low64 == 0x55u,
+               "old cached native block must not execute for unsupported code");
+    }
+
     std::cout << "r5900_block_dispatcher_windows_tests: PASS\n";
     return EXIT_SUCCESS;
 }
