@@ -15,7 +15,7 @@ The repository already has:
 - an R5900 decoder;
 - provenance-carrying IR v0;
 - lowering for `NOP`, `ADDU`, `ADDIU`, and `ORI`;
-- `R5900IrOpcode::Nop`, `R5900IrOpcode::AddWord`, and `R5900IrOpcode::Or64`-style semantics represented by the current IR contract;
+- `R5900IrOpcode::Nop`, `R5900IrOpcode::AddWordSignExtend`, and `R5900IrOpcode::Or64` semantics represented by the current IR contract;
 - explicit `Low64PreserveUpper64` writes for EE GPRs;
 - lowering-time elision of side-effect-free writes to GPR zero.
 
@@ -93,6 +93,8 @@ Any GPR operand with an index greater than 31 is an explicit `InvalidRegister` e
 Requirements:
 
 - no destination;
+- zero inputs;
+- `write_mode == R5900IrGprWriteMode::None`;
 - no register-state changes;
 - provenance fields are ignored by execution but remain available for diagnostics.
 
@@ -142,7 +144,9 @@ Validation includes:
 
 - invalid GPR indices;
 - missing destination for write opcodes;
-- unexpected destination for `Nop` if one would make the instruction structurally ambiguous;
+- any destination on `Nop`;
+- any `Nop` inputs;
+- any `Nop` write mode other than `None`;
 - incorrect operand counts;
 - unsupported operand kinds;
 - write opcodes using a write mode other than `Low64PreserveUpper64`;
