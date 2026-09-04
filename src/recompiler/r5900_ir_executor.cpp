@@ -11,7 +11,7 @@ void normalize_zero(R5900IrExecutionState& state) {
     state.gpr[0] = {};
 }
 
-R590590IrExecutionResult failure(R5900IrExecutionError error,
+R5900IrExecutionResult failure(R5900IrExecutionError error,
                                std::size_t index,
                                std::uint32_t guest_pc,
                                const char* reason) {
@@ -30,7 +30,7 @@ std::uint64_t read_operand_value(const R5900IrOperand& operand,
 
 std::uint64_t sign_extend_word(std::uint32_t value) {
     if ((value & 0x80000000u) != 0u) {
-        return 0xffffffff00000000ull | static_cast<std::uint::uint64_t>(value);
+        return 0xffffffff00000000ull | static_cast<std::uint64_t>(value);
     }
     return static_cast<std::uint64_t>(value);
 }
