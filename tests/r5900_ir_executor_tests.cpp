@@ -96,13 +96,13 @@ int main() {
         R5900IrExecutionState state{};
         state.gpr[9].low64 = 0x000000007fffffffull;
         state.gpr[10].low64 = 1u;
-        state.gpr[8].high64 = 0x0123456788abcdefull;
+        state.gpr[8].high64 = 0x0123456789abcdefull;
 
         const auto ir = write_ir(R5900IrOpcode::AddWordSignExtend, 8, gpr(9), gpr(10), 0x00100010u);
         const auto result = execute_r5900_ir({ir}, state);
         expect(result.ok(), "word add must execute");
         expect(state.gpr[8].low64 == 0xffffffff80000000ull, "negative word result must sign-extend to 64 bits");
-        expect(state.gpr[8].high64 == 0x0123456788abcdefull, "word add must preserve destination high64");
+        expect(state.gpr[8].high64 == 0x0123456789abcdefull, "word add must preserve destination high64");
     }
 
     {
