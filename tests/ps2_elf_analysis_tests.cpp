@@ -87,6 +87,7 @@ int main() {
         "  BREAK 1\n"
         "UNKNOWN_PRIMARY_OPCODES 0\n"
         "UNKNOWN_SITES 0\n"
+        "DIRECT_CALL_TARGETS 0\n"
         "\n"
         "BLOCK 0x00100000 END Trap\n"
         "  0x00100000 BREAK RAW 0x0000000D\n"
