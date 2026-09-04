@@ -171,6 +171,10 @@ if(B3R_BUILD_TESTS)
   target_link_libraries(burnout3_analyze_options_tests PRIVATE b3r_tools)
   add_test(NAME burnout3_analyze_options_tests COMMAND burnout3_analyze_options_tests)
 
+  add_executable(burnout3_pacing_probe_options_tests tests/burnout3_pacing_probe_options_tests.cpp)
+  target_link_libraries(burnout3_pacing_probe_options_tests PRIVATE b3r_tools)
+  add_test(NAME burnout3_pacing_probe_options_tests COMMAND burnout3_pacing_probe_options_tests)
+
   add_executable(burnout3_analyze_app_tests tests/burnout3_analyze_app_tests.cpp)
   target_link_libraries(burnout3_analyze_app_tests PRIVATE b3r_tools)
   add_test(NAME burnout3_analyze_app_tests COMMAND burnout3_analyze_app_tests)
