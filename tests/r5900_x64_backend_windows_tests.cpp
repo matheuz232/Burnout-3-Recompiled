@@ -151,6 +151,42 @@ int main() {
                "native ADDIU-style add must preserve high64");
     }
 
+    {
+        R5900IrExecutionState state{};
+        state.gpr[4].low64 = 0x1234567800000000ull;
+        state.gpr[5].high64 = 0x5555666677778888ull;
+
+        const auto ir = write_ir(
+            R5900IrOpcode::Or64, 5, gpr(4), immediate(0xff00), 0x00103200u);
+        auto compiled = compile_r5900_ir_x64({ir});
+        expect(compiled.ok() && compiled.block.has_value(), "ORI-style IR must compile");
+        compiled.block->execute(state);
+        expect(state.gpr[5].low64 == 0x123456780000ff00ull,
+               "native Or64 must OR across full low64");
+        expect(state.gpr[5].high64 == 0x5555666677778888ull,
+               "native Or64 must preserve high64");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[6].low64 = 0x00000000000000ffull;
+        state.gpr[6].high64 = 0x123456789abcdef0ull;
+
+        const auto ir = write_ir(
+            R5900IrOpcode::Or64,
+            6,
+            gpr(6),
+            immediate(static_cast<std::int64_t>(0x8000000100000000ull)),
+            0x00103204u);
+        auto compiled = compile_r5900_ir_x64({ir});
+        expect(compiled.ok() && compiled.block.has_value(), "full-imm64 Or64 IR must compile");
+        compiled.block->execute(state);
+        expect(state.gpr[6].low64 == 0x80000001000000ffull,
+               "native Or64 must preserve full 64-bit immediate bit pattern");
+        expect(state.gpr[6].high64 == 0x123456789abcdef0ull,
+               "aliased native Or64 must preserve high64");
+    }
+
     std::cout << "r5900_x64_backend_windows_tests: PASS\n";
     return EXIT_SUCCESS;
 }
