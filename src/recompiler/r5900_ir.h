@@ -20,6 +20,13 @@ enum class R5900IrOperandKind {
     Immediate,
 };
 
+// Standard EE integer instructions used by IR v0 update only the low 64 bits
+// of a 128-bit GPR. The upper 64 bits remain architecturally unchanged.
+enum class R5900IrGprWriteMode {
+    None = 0,
+    Low64PreserveUpper64,
+};
+
 struct R5900IrRegister {
     std::uint8_t index{};
 };
@@ -35,6 +42,7 @@ struct R5900IrInstruction {
     std::uint32_t guest_raw{};
     R5900IrOpcode opcode{R5900IrOpcode::Nop};
     std::optional<R5900IrRegister> destination{};
+    R5900IrGprWriteMode write_mode{R5900IrGprWriteMode::None};
     std::vector<R5900IrOperand> inputs{};
 };
 
