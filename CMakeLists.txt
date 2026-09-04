@@ -186,6 +186,13 @@ if(B3R_BUILD_TESTS)
     target_link_libraries(frame_pacer_windows_tests PRIVATE b3r_windows_runtime)
     add_test(NAME frame_pacer_windows_tests COMMAND frame_pacer_windows_tests)
 
+    add_executable(burnout3_pacing_probe_options_tests tests/burnout3_pacing_probe_options_tests.cpp)
+    target_link_libraries(burnout3_pacing_probe_options_tests PRIVATE b3r_core)
+    if(MSVC)
+      target_compile_options(burnout3_pacing_probe_options_tests PRIVATE /W4 /permissive- /Zc:__cplusplus)
+    endif()
+    add_test(NAME burnout3_pacing_probe_options_tests COMMAND burnout3_pacing_probe_options_tests)
+
     add_executable(win32_window_smoke_tests tests/win32_window_smoke_tests.cpp)
     target_link_libraries(win32_window_smoke_tests PRIVATE b3r_windows_runtime)
     if(MSVC)
