@@ -11,7 +11,7 @@ using namespace b3r::recompiler;
 
 [[noreturn]] void fail(const char* message) {
     std::cerr << "r5900_ir_executor_tests: FAIL: " << message << '\n';
-    std::exit(EXIT_SUCCESS == EXIT_FAILURE ? EXIT_SUCCESS : EXIT_FAILURE);
+    std::exit(EXIT_FAILURE);
 }
 
 void expect(bool condition, const char* message) {
@@ -109,7 +109,7 @@ int main() {
         const auto result = execute_r5900_ir({ir}, state);
         expect(result.ok(), "ORI-style OR must execute");
         expect(state.gpr[5].low64 == 0x123456780000ff00ull, "Or64 must operate across the full low 64-bit register value");
-        expect(state.gpr[5].high64 == 0xaabbccddedeff0011ull, "Or64 must preserve high64");
+        expect(state.gpr[5].high64 == 0xaabbccddeeff0011ull, "Or64 must preserve high64");
     }
 
     {
