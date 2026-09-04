@@ -2,6 +2,7 @@
 #include "tools/burnout3_pacing_probe_options.h"
 
 #include <cstddef>
+#include <fstream>
 #include <iostream>
 #include <string_view>
 #include <vector>
@@ -28,8 +29,27 @@ int main(int argc, char* argv[]) {
     }
 
     if (parsed.options->output_path.has_value()) {
-        std::cerr << "Burnout3PacingProbe: file output is not available yet\n";
-        return 3;
+        std::ofstream output(*parsed.options->output_path, std::ios::out | std::ios::trunc);
+        if (!output) {
+            std::cerr << "Burnout3PacingProbe: failed to open output file: "
+                      << *parsed.options->output_path << '\n';
+            return 3;
+        }
+
+        const auto result = b3r::platform::windows::run_burnout3_pacing_probe(
+            *parsed.options, output);
+        if (!result.ok()) {
+            std::cerr << "Burnout3PacingProbe: " << result.message << '\n';
+            return 4;
+        }
+
+        output.flush();
+        if (!output) {
+            std::cerr << "Burnout3PacingProbe: failed to write output file: "
+                      << *parsed.options->output_path << '\n';
+            return 3;
+        }
+        return 0;
     }
 
     const auto result = b3r::platform::windows::run_burnout3_pacing_probe(
