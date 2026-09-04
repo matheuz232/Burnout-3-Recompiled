@@ -21,6 +21,7 @@ add_library(b3r_recompiler
   src/recompiler/r5900_decoder.cpp
   src/recompiler/r5900_ir.cpp
   src/recompiler/r5900_ir_executor.cpp
+  src/recompiler/r5900_ir_validation.cpp
 )
 target_include_directories(b3r_recompiler PUBLIC src)
 if(MSVC)
