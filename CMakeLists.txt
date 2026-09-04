@@ -101,6 +101,15 @@ if(WIN32)
     target_compile_options(b3r_windows_runtime PRIVATE /W4 /permissive- /Zc:__cplusplus)
   endif()
 
+  add_library(b3r_pacing_probe STATIC
+    src/tools/burnout3_pacing_probe_options.cpp
+  )
+  target_include_directories(b3r_pacing_probe PUBLIC src)
+  target_link_libraries(b3r_pacing_probe PUBLIC b3r_windows_runtime)
+  if(MSVC)
+    target_compile_options(b3r_pacing_probe PRIVATE /W4 /permissive- /Zc:__cplusplus)
+  endif()
+
   add_executable(Burnout3Recompiled_Test WIN32
     src/platform/windows/win_main.cpp
   )
@@ -187,7 +196,7 @@ if(B3R_BUILD_TESTS)
     add_test(NAME frame_pacer_windows_tests COMMAND frame_pacer_windows_tests)
 
     add_executable(burnout3_pacing_probe_options_tests tests/burnout3_pacing_probe_options_tests.cpp)
-    target_link_libraries(burnout3_pacing_probe_options_tests PRIVATE b3r_core)
+    target_link_libraries(burnout3_pacing_probe_options_tests PRIVATE b3r_pacing_probe)
     if(MSVC)
       target_compile_options(burnout3_pacing_probe_options_tests PRIVATE /W4 /permissive- /Zc:__cplusplus)
     endif()
