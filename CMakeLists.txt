@@ -206,6 +206,15 @@ if(B3R_BUILD_TESTS)
       TIMEOUT 15
     )
 
+    add_test(
+      NAME burnout3_pacing_probe_output
+      COMMAND ${CMAKE_COMMAND}
+        -DPROBE=$<TARGET_FILE:Burnout3PacingProbe>
+        -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/pacing-probe-output.txt
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_pacing_probe_output_test.cmake
+    )
+    set_tests_properties(burnout3_pacing_probe_output PROPERTIES TIMEOUT 15)
+
     add_executable(win32_window_smoke_tests tests/win32_window_smoke_tests.cpp)
     target_link_libraries(win32_window_smoke_tests PRIVATE b3r_windows_runtime)
     if(MSVC)
