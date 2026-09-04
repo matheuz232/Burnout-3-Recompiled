@@ -265,6 +265,92 @@ int main() {
         }
     }
 
+    {
+        const std::vector<std::uint32_t> words = {
+            i_type(0x09, 0, 1, 1u),
+            i_type(0x09, 1, 1, 1u),
+            i_type(0x09, 1, 1, 1u),
+            i_type(0x09, 1, 1, 1u),
+            i_type(0x09, 1, 1, 1u),
+            i_type(0x0c, 1, 2, 0x00ff),
+        };
+        R5900BlockDispatcherOptions options{};
+        options.block_options.max_instructions = 2u;
+
+        {
+            auto memory = make_memory(words, base);
+            R5900BlockDispatcher dispatcher(memory, options);
+            R5900IrExecutionState state{};
+            const auto result = dispatcher.run(base, state, 1u);
+            expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+                   "one-block budget must stop at sequential chunk boundary");
+            expect(result.next_pc == base + 8u && result.blocks_executed == 1u &&
+                       result.instructions_executed == 2u,
+                   "one-block budget must execute exactly two guest instructions");
+            expect(state.gpr[1].low64 == 2u,
+                   "first analyzer chunk must execute before budget stop");
+        }
+
+        {
+            auto memory = make_memory(words, base);
+            R5900BlockDispatcher dispatcher(memory, options);
+            R5900IrExecutionState state{};
+            const auto result = dispatcher.run(base, state, 2u);
+            expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+                   "two-block budget must stop after second sequential chunk");
+            expect(result.next_pc == base + 16u && result.blocks_executed == 2u &&
+                       result.instructions_executed == 4u,
+                   "two-block budget must accumulate exact progress");
+            expect(state.gpr[1].low64 == 4u,
+                   "two analyzer chunks must execute sequentially");
+        }
+
+        {
+            auto memory = make_memory(words, base);
+            R5900BlockDispatcher dispatcher(memory, options);
+            R5900IrExecutionState state{};
+            const auto result = dispatcher.run(base, state, 3u);
+            expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
+                   "known unsupported boundary must beat exhausted budget");
+            expect(result.next_pc == base + 20u && result.blocks_executed == 3u &&
+                       result.instructions_executed == 5u,
+                   "third chunk must execute only its supported prefix");
+            expect(state.gpr[1].low64 == 5u,
+                   "all five supported ADDIU instructions must execute");
+        }
+    }
+
+    {
+        const std::vector<std::uint32_t> words = {
+            i_type(0x09, 0, 1, 3u),
+            i_type(0x0d, 1, 2, 0x20u),
+        };
+        auto memory = make_memory(words, base);
+        R5900BlockDispatcherOptions options{};
+        options.block_options.max_instructions = 2u;
+        R5900BlockDispatcher dispatcher(memory, options);
+
+        R5900IrExecutionState first_state{};
+        const auto first = dispatcher.run(base, first_state, 1u);
+        expect(first.cache_misses == 1u && first.cache_hits == 0u,
+               "first native candidate must be a cache miss");
+        expect(dispatcher.cache_size() == 1u,
+               "successful compile must populate one cache entry");
+
+        R5900IrExecutionState second_state{};
+        const auto second = dispatcher.run(base, second_state, 1u);
+        expect(second.cache_hits == 1u && second.cache_misses == 0u,
+               "identical native candidate must hit cache");
+        expect(dispatcher.cache_size() == 1u,
+               "cache hit must not duplicate native entry");
+        expect(first_state.gpr[2].low64 == second_state.gpr[2].low64,
+               "cached native execution must preserve semantics");
+
+        dispatcher.clear_cache();
+        expect(dispatcher.cache_size() == 0u,
+               "clear_cache must destroy all native entries");
+    }
+
     std::cout << "r5900_block_dispatcher_windows_tests: PASS\n";
     return EXIT_SUCCESS;
 }
