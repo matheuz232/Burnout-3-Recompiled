@@ -81,6 +81,7 @@ const char* control_flow_error_name(R5900ControlFlowError error) noexcept {
 
 using InstructionHistogram = std::map<std::string, std::size_t>;
 using UnknownPrimaryHistogram = std::map<std::uint8_t, std::size_t>;
+using DirectCallTargetHistogram = std::map<std::uint32_t, std::size_t>;
 
 struct UnknownSite {
     std::uint32_t pc{};
@@ -153,6 +154,13 @@ std::string render_r5900_analysis_report(const R5900ReachabilityGraph& graph) {
         return std::tuple{lhs.pc, lhs.raw} < std::tuple{rhs.pc, rhs.raw};
     });
 
+    DirectCallTargetHistogram direct_call_targets{};
+    for (const auto& call : graph.calls) {
+        if (!call.indirect && call.target.has_value()) {
+            ++direct_call_targets[*call.target];
+        }
+    }
+
     const auto indirect_exit_count = static_cast<std::size_t>(std::count_if(
         graph.issues.begin(), graph.issues.end(), [](const auto& issue) {
             return issue.kind == R5900ReachabilityIssueKind::UnresolvedIndirectExit;
@@ -194,6 +202,11 @@ std::string render_r5900_analysis_report(const R5900ReachabilityGraph& graph) {
             << " RD " << hex_opcode(rd)
             << " SA " << hex_opcode(sa)
             << " FUNCT " << hex_opcode(funct) << '\n';
+    }
+
+    out << "DIRECT_CALL_TARGETS " << direct_call_targets.size() << '\n';
+    for (const auto& [target, call_sites] : direct_call_targets) {
+        out << "  TARGET " << hex32(target) << " CALL_SITES " << call_sites << '\n';
     }
     out << '\n';
 
