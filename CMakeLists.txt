@@ -191,6 +191,12 @@ if(B3R_BUILD_TESTS)
     target_link_libraries(frame_pacer_windows_tests PRIVATE b3r_windows_runtime)
     add_test(NAME frame_pacer_windows_tests COMMAND frame_pacer_windows_tests)
 
+    add_test(NAME burnout3_pacing_probe_smoke COMMAND Burnout3PacingProbe --seconds 1)
+    set_tests_properties(burnout3_pacing_probe_smoke PROPERTIES
+      PASS_REGULAR_EXPRESSION "B3R_PACING_PROBE 1"
+      TIMEOUT 15
+    )
+
     add_executable(win32_window_smoke_tests tests/win32_window_smoke_tests.cpp)
     target_link_libraries(win32_window_smoke_tests PRIVATE b3r_windows_runtime)
     if(MSVC)
