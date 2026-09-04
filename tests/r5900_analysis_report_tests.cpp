@@ -51,7 +51,10 @@ b3r::analysis::R5900ReachabilityGraph make_graph(bool reverse_order) {
 
     graph.blocks = {second, first};
     graph.calls = {
+        R5900ReachabilityCall{0x1040u, 0x1044u, false, std::nullopt},
+        R5900ReachabilityCall{0x1030u, 0x1034u, false, 0x3000u},
         R5900ReachabilityCall{0x1020u, 0x1024u, true, std::nullopt},
+        R5900ReachabilityCall{0x1018u, 0x1018u, false, 0x2000u},
         R5900ReachabilityCall{0x1008u, 0x1008u, false, 0x2000u},
     };
     graph.issues = {
@@ -89,7 +92,7 @@ int main() {
         "INSTRUCTIONS 3\n"
         "DECODED 1\n"
         "UNKNOWN 2\n"
-        "CALLS 2\n"
+        "CALLS 5\n"
         "INDIRECT_EXITS 1\n"
         "CFG_ISSUES 2\n"
         "INSTRUCTION_HISTOGRAM 2\n"
@@ -101,6 +104,9 @@ int main() {
         "UNKNOWN_SITES 2\n"
         "  PC 0x00001004 RAW 0x4BEF1234 PRIMARY 0x12 RS 0x1F RT 0x0F RD 0x02 SA 0x08 FUNCT 0x34\n"
         "  PC 0x00001010 RAW 0x712A4CC1 PRIMARY 0x1C RS 0x09 RT 0x0A RD 0x09 SA 0x13 FUNCT 0x01\n"
+        "DIRECT_CALL_TARGETS 2\n"
+        "  TARGET 0x00002000 CALL_SITES 2\n"
+        "  TARGET 0x00003000 CALL_SITES 1\n"
         "\n"
         "BLOCK 0x00001000 END ConditionalBranch\n"
         "  0x00001000 BEQ RAW 0x10800003\n"
@@ -112,18 +118,21 @@ int main() {
         "  0x00001010 UNKNOWN RAW 0x712A4CC1\n"
         "\n"
         "CALL 0x00001008 PC 0x00001008 DIRECT 0x00002000\n"
+        "CALL 0x00001018 PC 0x00001018 DIRECT 0x00002000\n"
         "CALL 0x00001020 PC 0x00001024 INDIRECT unresolved\n"
+        "CALL 0x00001030 PC 0x00001034 DIRECT 0x00003000\n"
+        "CALL 0x00001040 PC 0x00001044 DIRECT unresolved\n"
         "\n"
         "ISSUE UnresolvedIndirectExit SOURCE 0x00001020\n"
         "ISSUE TargetAnalysisFailed SOURCE 0x00001000 TARGET 0x00003000 ERROR UnmappedInstruction\n";
 
     const auto ordered = render_r5900_analysis_report(make_graph(false));
     expect(ordered == expected,
-           "report must include deterministic unknown-site bitfield evidence including delay slots");
+           "report must aggregate resolved direct call targets by static call-site count");
 
     const auto reordered = render_r5900_analysis_report(make_graph(true));
     expect(reordered == expected,
-           "unknown-site evidence must remain deterministic regardless of graph container order");
+           "direct-call target aggregation must remain deterministic regardless of graph container order");
 
     std::cout << "r5900_analysis_report_tests: PASS\n";
     return EXIT_SUCCESS;

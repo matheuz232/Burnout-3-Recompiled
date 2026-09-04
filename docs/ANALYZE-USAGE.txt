@@ -24,6 +24,8 @@ Direct call traversal is disabled by default. When enabled, explicit direct call
 
 Generated reports include UNKNOWN_PRIMARY_OPCODES plus deterministic UNKNOWN_SITES records with PC, RAW, PRIMARY, RS, RT, RD, SA and FUNCT bit positions for unresolved instructions, including reachable delay slots. These are raw diagnostic bitfields only; they do not imply decoded operand semantics.
 
+DIRECT_CALL_TARGETS groups resolved direct-call evidence by guest target address and reports static CALL_SITES counts. Indirect/unresolved calls are excluded from that aggregation but remain visible as CALL records. CALL_SITES is not runtime frequency and does not infer functions or function boundaries.
+
 Show command-line help:
 
   .\Burnout3Analyze.exe --help

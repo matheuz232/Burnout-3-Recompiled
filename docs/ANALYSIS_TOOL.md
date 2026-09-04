@@ -51,7 +51,7 @@ BLOCKS 2
 INSTRUCTIONS 3
 DECODED 2
 UNKNOWN 1
-CALLS 2
+CALLS 4
 INDIRECT_EXITS 1
 CFG_ISSUES 2
 INSTRUCTION_HISTOGRAM 3
@@ -62,6 +62,9 @@ UNKNOWN_PRIMARY_OPCODES 1
   0x1C 1
 UNKNOWN_SITES 1
   PC 0x00100020 RAW 0x712A4CC1 PRIMARY 0x1C RS 0x09 RT 0x0A RD 0x09 SA 0x13 FUNCT 0x01
+DIRECT_CALL_TARGETS 2
+  TARGET 0x00123450 CALL_SITES 3
+  TARGET 0x00208000 CALL_SITES 1
 ```
 
 `INSTRUCTION_HISTOGRAM` counts every reachable instruction site represented by the graph, including architectural delay slots, and sorts instruction names deterministically. `UNKNOWN_PRIMARY_OPCODES` counts only unresolved instructions and groups them by the six-bit MIPS primary opcode extracted from the raw word.
@@ -70,9 +73,13 @@ UNKNOWN_SITES 1
 
 Those fields are **diagnostic bitfields, not decoded operands**. Their semantic meaning depends on the instruction format and opcode family; for an unsupported instruction some listed fields may not represent registers, shift amounts, or function selectors at all. The section exists to make unresolved SPECIAL/MMI/COP families easier to group from real evidence without claiming instruction semantics that the decoder does not yet implement.
 
-The unknown-primary histogram and unknown-site records are diagnostic evidence, not a decoder. A primary opcode does not by itself identify all SPECIAL/MMI/COP sub-operations, but the frequency and site-level raw fields show which unresolved families are worth investigating first when a real executable is supplied.
+`DIRECT_CALL_TARGETS` groups resolved direct-call evidence by target guest address and reports the number of static call sites that reference each target. Targets are sorted by address. Indirect calls and direct calls without a resolved target are excluded from this aggregation but remain visible in the ordinary `CALL` records.
 
-The report then records blocks, instruction raw words, delay slots, edges, calls and analysis issues in deterministic order. Equivalent graph evidence must produce byte-identical output regardless of internal container ordering. Enabling `--follow-direct-calls` can increase block/instruction coverage, but does not change the report format.
+`CALL_SITES` is a static-reference count from the analyzed graph. It is **not** an execution-frequency profile, does not prove that a target was executed, and does not label the target as a function or infer function boundaries.
+
+The unknown-primary histogram, unknown-site records and direct-call target aggregation are diagnostic evidence, not a decoder or profiler. They expose where unresolved instruction work and repeated direct references exist so real executable evidence can drive implementation priority.
+
+The report then records blocks, instruction raw words, delay slots, edges, calls and analysis issues in deterministic order. Equivalent graph evidence must produce byte-identical output regardless of internal container ordering. Enabling `--follow-direct-calls` can increase block/instruction coverage and therefore the available evidence, but does not change the report schema.
 
 ## Conservative rules
 
@@ -82,7 +89,8 @@ The tool deliberately does **not**:
 - emulate the PS2 CPU or hardware;
 - follow direct call targets unless `--follow-direct-calls` is explicitly requested;
 - invent destinations for `JR`/`JALR` or other register-indirect control flow;
-- infer function boundaries from call traversal;
+- infer function boundaries from call traversal or call-target aggregation;
+- treat static `CALL_SITES` counts as runtime frequency;
 - translate guest code to x86-64;
 - modify the supplied ELF.
 
@@ -94,4 +102,4 @@ No Burnout 3 executable or asset belongs in this repository. Point `--elf` at a 
 
 ## Next evidence gate
 
-Run the tool against a legally supplied Burnout 3 executable and retain only the generated non-proprietary analysis report/coverage evidence needed to guide further work. For the broadest evidence, run once with `--follow-direct-calls` and a sufficiently large `--max-blocks` value, then inspect `BlockLimitReached`, `TargetAnalysisFailed`, unresolved indirect exits, instruction histograms, unknown-primary coverage, and `UNKNOWN_SITES` before expanding decoder or recompiler scope.
+Run the tool against a legally supplied Burnout 3 executable and retain only the generated non-proprietary analysis report/coverage evidence needed to guide further work. For the broadest evidence, run once with `--follow-direct-calls` and a sufficiently large `--max-blocks` value, then inspect `BlockLimitReached`, `TargetAnalysisFailed`, unresolved indirect exits, instruction histograms, unknown-primary coverage, `UNKNOWN_SITES`, and `DIRECT_CALL_TARGETS` before expanding decoder or recompiler scope.
