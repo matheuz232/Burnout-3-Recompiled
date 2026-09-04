@@ -49,6 +49,12 @@ void emit_u32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
     bytes.push_back(static_cast<std::uint8_t>((value >> 24u) & 0xffu));
 }
 
+void emit_u64(std::vector<std::uint8_t>& bytes, std::uint64_t value) {
+    for (unsigned shift = 0; shift < 64u; shift += 8u) {
+        bytes.push_back(static_cast<std::uint8_t>((value >> shift) & 0xffu));
+    }
+}
+
 void emit_xor_eax_eax(std::vector<std::uint8_t>& bytes) {
     bytes.push_back(0x31u);
     bytes.push_back(0xc0u);
@@ -73,6 +79,20 @@ void emit_load_edx_from_state(std::vector<std::uint8_t>& bytes, std::uint32_t di
     emit_u32(bytes, displacement);
 }
 
+void emit_load_rax_from_state(std::vector<std::uint8_t>& bytes, std::uint32_t displacement) {
+    bytes.push_back(0x48u);
+    bytes.push_back(0x8bu);
+    bytes.push_back(0x81u);
+    emit_u32(bytes, displacement);
+}
+
+void emit_load_rdx_from_state(std::vector<std::uint8_t>& bytes, std::uint32_t displacement) {
+    bytes.push_back(0x48u);
+    bytes.push_back(0x8bu);
+    bytes.push_back(0x91u);
+    emit_u32(bytes, displacement);
+}
+
 void emit_mov_eax_imm32(std::vector<std::uint8_t>& bytes, std::uint32_t immediate) {
     bytes.push_back(0xb8u);
     emit_u32(bytes, immediate);
@@ -81,6 +101,18 @@ void emit_mov_eax_imm32(std::vector<std::uint8_t>& bytes, std::uint32_t immediat
 void emit_mov_edx_imm32(std::vector<std::uint8_t>& bytes, std::uint32_t immediate) {
     bytes.push_back(0xbau);
     emit_u32(bytes, immediate);
+}
+
+void emit_mov_rax_imm64(std::vector<std::uint8_t>& bytes, std::uint64_t immediate) {
+    bytes.push_back(0x48u);
+    bytes.push_back(0xb8u);
+    emit_u64(bytes, immediate);
+}
+
+void emit_mov_rdx_imm64(std::vector<std::uint8_t>& bytes, std::uint64_t immediate) {
+    bytes.push_back(0x48u);
+    bytes.push_back(0xbau);
+    emit_u64(bytes, immediate);
 }
 
 void emit_operand32_to_eax(std::vector<std::uint8_t>& bytes, const R5900IrOperand& operand) {
@@ -99,6 +131,22 @@ void emit_operand32_to_edx(std::vector<std::uint8_t>& bytes, const R5900IrOperan
     emit_mov_edx_imm32(bytes, static_cast<std::uint32_t>(operand.immediate));
 }
 
+void emit_operand64_to_rax(std::vector<std::uint8_t>& bytes, const R5900IrOperand& operand) {
+    if (operand.kind == R5900IrOperandKind::Gpr) {
+        emit_load_rax_from_state(bytes, gpr_low64_offset(operand.gpr_index));
+        return;
+    }
+    emit_mov_rax_imm64(bytes, static_cast<std::uint64_t>(operand.immediate));
+}
+
+void emit_operand64_to_rdx(std::vector<std::uint8_t>& bytes, const R5900IrOperand& operand) {
+    if (operand.kind == R5900IrOperandKind::Gpr) {
+        emit_load_rdx_from_state(bytes, gpr_low64_offset(operand.gpr_index));
+        return;
+    }
+    emit_mov_rdx_imm64(bytes, static_cast<std::uint64_t>(operand.immediate));
+}
+
 void emit_zero_gpr0(std::vector<std::uint8_t>& bytes) {
     emit_xor_eax_eax(bytes);
     emit_store_rax_to_state(bytes, 0u);
@@ -114,6 +162,20 @@ void emit_add_word_sign_extend(std::vector<std::uint8_t>& bytes,
     bytes.push_back(0xd0u); // add eax, edx
     bytes.push_back(0x48u);
     bytes.push_back(0x98u); // cdqe
+
+    if (instruction.destination->index != 0u) {
+        emit_store_rax_to_state(bytes, gpr_low64_offset(instruction.destination->index));
+    }
+}
+
+void emit_or64(std::vector<std::uint8_t>& bytes,
+               const R5900IrInstruction& instruction) {
+    emit_operand64_to_rax(bytes, instruction.inputs[0]);
+    emit_operand64_to_rdx(bytes, instruction.inputs[1]);
+
+    bytes.push_back(0x48u);
+    bytes.push_back(0x09u);
+    bytes.push_back(0xd0u); // or rax, rdx
 
     if (instruction.destination->index != 0u) {
         emit_store_rax_to_state(bytes, gpr_low64_offset(instruction.destination->index));
@@ -185,7 +247,7 @@ R5900X64CompileResult compile_r5900_ir_x64(
     }
 
     std::vector<std::uint8_t> bytes;
-    bytes.reserve(32u + instructions.size() * 24u);
+    bytes.reserve(32u + instructions.size() * 32u);
     emit_zero_gpr0(bytes);
 
     for (std::size_t index = 0; index < instructions.size(); ++index) {
@@ -197,6 +259,8 @@ R5900X64CompileResult compile_r5900_ir_x64(
             emit_add_word_sign_extend(bytes, instruction);
             break;
         case R5900IrOpcode::Or64:
+            emit_or64(bytes, instruction);
+            break;
         default:
             return unsupported_backend_opcode(index, instruction);
         }
