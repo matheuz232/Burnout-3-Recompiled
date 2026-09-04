@@ -55,6 +55,7 @@ endif()
 add_library(b3r_tools
   src/tools/burnout3_analyze_options.cpp
   src/tools/burnout3_analyze_app.cpp
+  src/tools/burnout3_pacing_probe_options.cpp
 )
 target_include_directories(b3r_tools PUBLIC src)
 target_link_libraries(b3r_tools PUBLIC b3r_analysis)
@@ -99,6 +100,15 @@ if(WIN32)
   target_link_libraries(b3r_windows_runtime PUBLIC b3r_core dbghelp winmm)
   if(MSVC)
     target_compile_options(b3r_windows_runtime PRIVATE /W4 /permissive- /Zc:__cplusplus)
+  endif()
+
+  add_executable(Burnout3PacingProbe
+    src/platform/windows/burnout3_pacing_probe_app.cpp
+    src/platform/windows/burnout3_pacing_probe_main.cpp
+  )
+  target_link_libraries(Burnout3PacingProbe PRIVATE b3r_windows_runtime b3r_tools)
+  if(MSVC)
+    target_compile_options(Burnout3PacingProbe PRIVATE /W4 /permissive- /Zc:__cplusplus)
   endif()
 
   add_executable(Burnout3Recompiled_Test WIN32
@@ -171,6 +181,10 @@ if(B3R_BUILD_TESTS)
   target_link_libraries(burnout3_analyze_options_tests PRIVATE b3r_tools)
   add_test(NAME burnout3_analyze_options_tests COMMAND burnout3_analyze_options_tests)
 
+  add_executable(burnout3_pacing_probe_options_tests tests/burnout3_pacing_probe_options_tests.cpp)
+  target_link_libraries(burnout3_pacing_probe_options_tests PRIVATE b3r_tools)
+  add_test(NAME burnout3_pacing_probe_options_tests COMMAND burnout3_pacing_probe_options_tests)
+
   add_executable(burnout3_analyze_app_tests tests/burnout3_analyze_app_tests.cpp)
   target_link_libraries(burnout3_analyze_app_tests PRIVATE b3r_tools)
   add_test(NAME burnout3_analyze_app_tests COMMAND burnout3_analyze_app_tests)
@@ -185,6 +199,21 @@ if(B3R_BUILD_TESTS)
     add_executable(frame_pacer_windows_tests tests/frame_pacer_windows_tests.cpp)
     target_link_libraries(frame_pacer_windows_tests PRIVATE b3r_windows_runtime)
     add_test(NAME frame_pacer_windows_tests COMMAND frame_pacer_windows_tests)
+
+    add_test(NAME burnout3_pacing_probe_smoke COMMAND Burnout3PacingProbe --seconds 1)
+    set_tests_properties(burnout3_pacing_probe_smoke PROPERTIES
+      PASS_REGULAR_EXPRESSION "B3R_PACING_PROBE 1"
+      TIMEOUT 15
+    )
+
+    add_test(
+      NAME burnout3_pacing_probe_output
+      COMMAND ${CMAKE_COMMAND}
+        -DPROBE=$<TARGET_FILE:Burnout3PacingProbe>
+        -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/pacing-probe-output.txt
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_pacing_probe_output_test.cmake
+    )
+    set_tests_properties(burnout3_pacing_probe_output PROPERTIES TIMEOUT 15)
 
     add_executable(win32_window_smoke_tests tests/win32_window_smoke_tests.cpp)
     target_link_libraries(win32_window_smoke_tests PRIVATE b3r_windows_runtime)

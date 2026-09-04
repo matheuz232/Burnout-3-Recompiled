@@ -1,6 +1,6 @@
 # Progress
 
-Status date: 2026-09-03
+Status date: 2026-09-04
 
 Completion rule: `implemented -> compiled -> executed/tested -> validated`.
 
@@ -10,12 +10,14 @@ Completion rule: `implemented -> compiled -> executed/tested -> validated`.
 | Portable 120 Hz frame schedule | DONE | Deterministic unit tests pass on host and Windows CI |
 | Frame statistics | DONE | Unit tests pass on host and Windows CI |
 | Frame pacing telemetry | CI_VALIDATED | Pure mean/min/max/stddev/P50/P95/P99/threshold metrics are deterministic; Windows CI captures 240 real pacer samples and surfaces the report |
+| `Burnout3PacingProbe` | CI_VALIDATED | Windows x64 console probe reuses the production 120 Hz pacer/QPC path; parser, 1-second/120-frame smoke, stdout report and file-output contract pass Windows/MSVC CI; physical 60-second-or-longer desktop capture remains pending |
+| `Burnout3PacingProbe` Windows artifact | READY_FOR_MAIN_PUBLICATION | Feature-branch CI stages and validates the isolated package containing `Burnout3PacingProbe.exe` plus `PACING-PROBE-USAGE.txt`; publication is restricted to `main`/manual workflow runs and remains the post-merge gate |
 | Runtime option parser | DONE | Unit tests pass on host and Windows CI |
 | Structured logging | DONE | Unit tests pass on host and Windows CI |
 | Win32 executable target | COMPILED_IN_CI | `Burnout3Recompiled_Test.exe` builds with MSVC 19.44 / Visual Studio 2022; interactive launch still required |
 | Win32 window | READY_FOR_INTERACTIVE_VALIDATION | Windows CI smoke creates a real `HWND`, verifies it is live, posts `WM_CLOSE`, observes `WM_QUIT` and confirms destruction; visual/interactive Windows 10/11 validation still required |
 | QPC high-resolution clock | DONE | Windows integration test executes successfully in GitHub Actions |
-| 120 FPS Windows frame pacer | WORKING | 240-frame CI telemetry measured 8.333 ms mean, 8.333 ms P95/P99 and 8.462 ms max with high-resolution timer; longer normal-desktop capture remains the validation gate |
+| 120 FPS Windows frame pacer | WORKING | Short CI telemetry validates the production pacing path; `Burnout3PacingProbe` now provides a reproducible 60-second-or-longer desktop capture path, but a normal physical Windows desktop capture remains the validation gate |
 | Crash handler/minidump | CI_VALIDATED | Controlled child-process access violation on Windows CI verifies `last_crash.txt`, PS2/native execution markers and a non-empty `.dmp`; GUI/window validation remains separate |
 | PS2 ELF loader | CI_VALIDATED | Synthetic ELF32 little-endian MIPS tests pass with GCC, Clang and MSVC; next gate is a legally supplied real game ELF |
 | PS2 memory mapping | CI_VALIDATED | ELF PT_LOAD-backed mapper passes GCC/Clang tests and 8/8 Windows/MSVC CI suite; next gate is real executable metadata |
@@ -27,7 +29,7 @@ Completion rule: `implemented -> compiled -> executed/tested -> validated`.
 | R5900 direct-call target metrics | CI_VALIDATED | `DIRECT_CALL_TARGETS` groups resolved direct references by guest target address and counts static call sites deterministically; indirect/unresolved calls remain ordinary evidence and no function boundary is inferred |
 | External PS2 ELF analysis pipeline | CI_VALIDATED | Synthetic ELF is parsed, mapped, traversed and rendered end-to-end; current byte-exact report contract passes Windows/MSVC CI |
 | `Burnout3Analyze` CLI | CI_VALIDATED | Console executable builds with VS2022/MSVC; `--follow-direct-calls` is opt-in, defaults off, propagates end-to-end and preserves deterministic reporting; current Windows suite passes 20/20 |
-| `Burnout3Analyze` Windows artifact | CI_VALIDATED | `main`/manual Windows CI publishes `Burnout3Analyze-windows-x64`; latest verified current-main artifact ID `9917475746` contains the analyzer executable plus usage guide |
+| `Burnout3Analyze` Windows artifact | CI_VALIDATED | `main`/manual Windows CI publishes `Burnout3Analyze-windows-x64`; latest verified current-main artifact ID `9921137059` was published by run `33829442535` from `main` commit `79b83039df6d58d3d997a1536021c32cadac6a33` |
 | Static/binary recompiler | TODO | Strategy intentionally not selected yet; real ELF coverage should drive the instruction/IR/backend plan |
 | Graphics | TODO | No D3D initialization yet |
 | Audio | TODO | No XAudio2 initialization yet |
@@ -67,9 +69,11 @@ Direct-call traversal used three explicit RED/GREEN evidence gates. Core RED run
 
 `UNKNOWN_SITES` diagnostics used an explicit report-contract RED/GREEN sequence. RED run `33817785688` built successfully and passed 19/20 tests; only `r5900_analysis_report_tests` failed because the new site-level diagnostics were absent. Renderer run `33817933590` proved the new report section itself: `r5900_analysis_report_tests` passed, while the only remaining failure was the older byte-exact `ps2_elf_analysis_tests` expected text missing `UNKNOWN_SITES 0`. After updating that test-only end-to-end contract, GREEN run `33818075117` passed 20/20 with telemetry plus analyzer package staging/validation. PR #15 merge-ref run `33818605215` passed 20/20 on temporary merge SHA `a0b4694779bf4dadd5bfe3f958428e66fc6347ee`; merge commit `d493761463d33249fa17ab26916d9d44b51a7164` then passed 20/20 in main run `33818702279` and published analyzer artifact ID `9917475746` (61,394-byte ZIP; SHA-256 `ba5a626be85e5904f624cb1731c433c9e22a1ad5e44ee263d198b8830e368c9e`). Synthetic coverage verifies two unknown sites, including an architectural delay slot, raw-field extraction for `PRIMARY/RS/RT/RD/SA/FUNCT`, PC ordering and byte-identical output under reordered graph containers.
 
-`DIRECT_CALL_TARGETS` diagnostics used the same report-contract TDD pattern. RED run `33828724619` built successfully and passed 19/20 tests; only `r5900_analysis_report_tests` failed because target aggregation was absent. Renderer run `33828875766` proved grouping/filtering/order: `r5900_analysis_report_tests` passed, while the only remaining failure was the older byte-exact `ps2_elf_analysis_tests` expectation missing `DIRECT_CALL_TARGETS 0`. After updating only that expected text, GREEN run `33828970350` passed 20/20 plus frame-pacing telemetry and analyzer package staging/validation. The synthetic fixture proves two static call sites grouped under target `0x00002000`, one under `0x00003000`, exclusion of an indirect call and a direct unresolved call, deterministic target ordering and byte-identical rendering when the graph call container is reversed.
+`DIRECT_CALL_TARGETS` diagnostics used the same report-contract TDD pattern. RED run `33828724619` built successfully and passed 19/20 tests; only `r5900_analysis_report_tests` failed because target aggregation was absent. Renderer run `33828875766` proved grouping/filtering/order: `r5900_analysis_report_tests` passed, while the only remaining failure was the older byte-exact `ps2_elf_analysis_tests` expectation missing `DIRECT_CALL_TARGETS 0`. After updating only that expected text, GREEN run `33828970350` passed 20/20 plus frame-pacing telemetry and analyzer package staging/validation. PR #16 merged as `79b83039df6d58d3d997a1536021c32cadac6a33`; post-merge run `33829442535` passed 20/20 and published current analyzer artifact ID `9921137059`.
 
-No decoder instruction support, reachability behavior, guest execution semantics, CLI options, renderer backend, audio or input behavior was added by the report-only evidence milestones. No project-code compiler warnings were emitted in the final GREEN runs; remaining workflow warnings are external action/runtime deprecations.
+`Burnout3PacingProbe` uses four explicit TDD/packaging gates. Parser RED run `33833425537` failed compilation exactly because `tools/burnout3_pacing_probe_options.h` was absent; parser GREEN run `33833561650` passed 21/21. Executable-smoke RED run `33833683371` passed 21/22 with only `burnout3_pacing_probe_smoke` Not Run because `Burnout3PacingProbe.exe` did not yet exist; executable GREEN run `33833827722` passed 22/22 and captured a real 1-second/120-frame 120 Hz smoke. File-output RED run `33833988815` passed 22/23 and failed only `burnout3_pacing_probe_output` because file output was deliberately unavailable; output GREEN run `33834065915` passed 23/23 and verified the requested report file plus no duplicate stdout. Package RED run `33834158018` passed 23/23, existing pacing telemetry, the visible probe smoke, and analyzer package staging/validation, then failed only because `docs/PACING-PROBE-USAGE.txt` was absent. Package GREEN run `33834235339` passed 23/23 plus visible probe smoke and both analyzer/probe package staging/validation, with uploads correctly skipped on the feature branch.
+
+No game execution, simulation timing, decoder/recompiler semantics, graphics, audio, or input behavior is changed by `Burnout3PacingProbe`. The tool measures only the existing 120 Hz Windows pacing path. Hosted CI smoke evidence is not treated as physical-desktop performance certification.
 
 The first CI attempt failed before compilation because `windows-latest` had moved to a Windows Server 2025 / Visual Studio 2026 image while the project explicitly requested the Visual Studio 2022 CMake generator. The workflow remains pinned to `windows-2022`.
 
@@ -78,5 +82,5 @@ The first CI attempt failed before compilation because `windows-latest` had move
 The bootstrap is materially further along but **Test Build 0.1 is not yet complete**. Remaining bootstrap validation gates are:
 
 1. visually inspect the GUI executable on an interactive Windows 10/11 desktop; automated create/`WM_CLOSE`/`WM_QUIT` lifecycle is already covered by Windows CI smoke;
-2. capture frame pacing/jitter over a longer interval on a normal desktop session; the 240-frame hosted-CI telemetry is evidence only, not a physical-desktop benchmark;
+2. run `Burnout3PacingProbe --seconds 60 --output <report>` (or longer) during a normal physical Windows 10/11 desktop session and review the generated pacing report; hosted-CI 1-second/120-frame and 240-frame telemetry are evidence only, not a physical-desktop benchmark;
 3. download/use the CI-published `Burnout3Analyze-windows-x64` (or a local build) against an externally supplied legal Burnout 3 executable, preferably with `--follow-direct-calls` and a sufficiently large `--max-blocks`, without committing proprietary data; use `UNKNOWN_PRIMARY_OPCODES`, `UNKNOWN_SITES`, and `DIRECT_CALL_TARGETS` to measure real unresolved opcode/subfield coverage and static direct-reference structure before choosing decoder/recompiler scope.
