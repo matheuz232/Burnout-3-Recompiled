@@ -2,6 +2,7 @@
 
 #include "recompiler/r5900_ir.h"
 
+#include <cstdint>
 #include <iomanip>
 #include <optional>
 #include <sstream>
@@ -11,6 +12,9 @@
 
 namespace b3r::recompiler {
 namespace {
+
+constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
+constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 
 std::string format_stage_error(std::string_view stage,
                                std::uint32_t pc,
@@ -32,6 +36,35 @@ bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
     default:
         return false;
     }
+}
+
+void fnv_byte(std::uint64_t& hash, std::uint8_t byte) noexcept {
+    hash ^= byte;
+    hash *= kFnvPrime;
+}
+
+void fnv_u32_le(std::uint64_t& hash, std::uint32_t value) noexcept {
+    for (unsigned shift = 0u; shift < 32u; shift += 8u) {
+        fnv_byte(hash, static_cast<std::uint8_t>((value >> shift) & 0xffu));
+    }
+}
+
+void fnv_u64_le(std::uint64_t& hash, std::uint64_t value) noexcept {
+    for (unsigned shift = 0u; shift < 64u; shift += 8u) {
+        fnv_byte(hash, static_cast<std::uint8_t>((value >> shift) & 0xffu));
+    }
+}
+
+std::uint64_t fingerprint_guest_words(
+    std::uint32_t start_pc,
+    const std::vector<std::uint32_t>& words) noexcept {
+    std::uint64_t hash = kFnvOffset;
+    fnv_u32_le(hash, start_pc);
+    fnv_u64_le(hash, static_cast<std::uint64_t>(words.size()));
+    for (const auto word : words) {
+        fnv_u32_le(hash, word);
+    }
+    return hash;
 }
 
 } // namespace
@@ -118,19 +151,36 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
         std::vector<std::uint32_t> guest_words{};
         guest_words.reserve(prefix.size());
         for (const auto& site : prefix) {
-            guest_words.push_back(site.decoded.raw);
+            const auto word = memory_.read_u32(site.pc);
+            if (!word.has_value()) {
+                result.reason = R5900DispatchStopReason::AnalysisFailure;
+                result.next_pc = site.pc;
+                result.message = format_stage_error(
+                    "analysis", site.pc, "selected guest instruction became unreadable");
+                return result;
+            }
+            guest_words.push_back(*word);
         }
 
+        const auto fingerprint = fingerprint_guest_words(current_pc, guest_words);
         auto cached = cache_.find(current_pc);
         const bool exact_cache_hit =
             cached != cache_.end() &&
+            cached->second.start_pc == current_pc &&
             cached->second.guest_instruction_count == guest_words.size() &&
+            cached->second.fingerprint == fingerprint &&
             cached->second.guest_words == guest_words;
 
         if (exact_cache_hit) {
             ++result.cache_hits;
             cached->second.native_block.execute(state);
         } else {
+            if (cached == cache_.end()) {
+                ++result.cache_misses;
+            } else {
+                ++result.recompilations;
+            }
+
             std::vector<R5900IrInstruction> ir{};
             ir.reserve(prefix.size());
             for (const auto& site : prefix) {
@@ -153,11 +203,11 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                 return result;
             }
 
-            ++result.cache_misses;
             CachedBlock replacement{};
             replacement.start_pc = current_pc;
             replacement.end_pc_exclusive = current_pc +
                                              static_cast<std::uint32_t>(prefix.size() * 4u);
+            replacement.fingerprint = fingerprint;
             replacement.guest_words = guest_words;
             replacement.guest_instruction_count = guest_words.size();
             replacement.native_block = std::move(*compiled.block);
