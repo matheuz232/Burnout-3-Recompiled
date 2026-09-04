@@ -4,47 +4,47 @@
 
 **Goal:** Add a Windows x86-64 R5900 dispatcher that analyzes guest basic blocks, executes only the current supported straight-line prefix through the native backend, caches compiled blocks by guest PC plus exact-code fingerprint, and returns deterministic stop/accounting data.
 
-**Architecture:** Introduce a Windows-only dispatcher target layered over `b3r_analysis`, `b3r_runtime`, and `b3r_recompiler_x64`. The dispatcher owns guest-PC progression and a native block cache; it does not change `R5900IrExecutionState`, the x64 generated-function ABI, CFG semantics, or the executable-memory policy. Current control-flow instructions, traps, delay slots, guest loads/stores, and unsupported decoded instructions remain non-executed boundaries.
+**Architecture:** Add a Windows-only dispatcher target layered over `b3r_analysis`, `b3r_runtime`, and `b3r_recompiler_x64`. The dispatcher owns guest-PC progression and native-block cache lifetime; it does not change `R5900IrExecutionState`, the generated x64 ABI, CFG semantics, or executable-memory policy. Control-flow instructions, traps, delay slots, guest loads/stores, and decoded instructions outside NOP/ADDU/ADDIU/ORI remain non-executed boundaries.
 
-**Tech Stack:** C++20, CMake 3.25+, Visual Studio 2022 x64 / MSVC, Windows 10+ APIs through the existing x64 backend, CTest, GitHub Actions `windows-2022`.
+**Tech Stack:** C++20, CMake 3.25+, Visual Studio 2022 x64 / MSVC, CTest, GitHub Actions `windows-2022`, existing Windows x64 backend.
 
 **Spec:** `docs/superpowers/specs/2026-09-04-r5900-block-dispatcher-v0-design.md`
 
 ## Global Constraints
 
-- Windows x86-64 only; keep all portable analysis/recompiler targets buildable on non-Windows hosts.
-- Do not add third-party dependencies.
-- Do not change `R5900IrExecutionState`; guest PC remains dispatcher-owned.
+- Windows x86-64 only; portable analysis/recompiler targets must remain buildable on non-Windows hosts.
+- Add no third-party dependency.
+- Do not modify `R5900IrExecutionState`; guest PC remains dispatcher-owned.
 - Do not execute branches, jumps, calls, traps, branch-likely semantics, or delay slots in v0.
 - Do not add guest load/store execution, direct native block chaining, register allocation, cache eviction, or thread-safe dispatch.
-- Preserve the existing x64 backend's RW -> RX W^X publication, instruction-cache flush, and RAII ownership; the dispatcher must not allocate executable memory itself.
+- Preserve the x64 backend's RW -> RX W^X publication, instruction-cache flush, and RAII ownership; the dispatcher allocates no executable memory itself.
 - Cache validity requires `start_pc`, instruction count, FNV-1a fingerprint, and exact guest-word vector equality.
-- Metrics in `R5900DispatchResult` are per `run()` call.
-- A semantic boundary (`ControlFlow`, `UnsupportedInstruction`, `Trap`) takes precedence over `BlockBudgetExhausted` after an executed prefix.
-- Existing 27 tests must remain green; the new dispatcher suite increases the Windows CTest count.
+- `R5900DispatchResult` metrics are per `run()` call.
+- A known semantic boundary (`ControlFlow`, `UnsupportedInstruction`, `Trap`) takes precedence over `BlockBudgetExhausted` after an executed prefix.
+- Existing 27 tests must remain green; the dispatcher suite becomes the 28th Windows CTest unless another independent test is added first.
 - Do not claim real Burnout 3 ELF/game execution after this milestone.
 
 ---
 
 ## File Structure
 
-**Create:**
+**Create**
 
-- `src/recompiler/windows/r5900_block_dispatcher.h` — public dispatcher contract, options/result types, cache ownership.
-- `src/recompiler/windows/r5900_block_dispatcher.cpp` — supported-prefix selection, fingerprinting, cache validation, lowering/compile-on-demand, native execution, stop/accounting semantics.
-- `tests/r5900_block_dispatcher_windows_tests.cpp` — synthetic executable guest-memory fixtures and all dispatcher TDD coverage.
+- `src/recompiler/windows/r5900_block_dispatcher.h` — public contract and native cache ownership.
+- `src/recompiler/windows/r5900_block_dispatcher.cpp` — prefix selection, compile-on-demand, cache validation, native execution, PC/stop/accounting logic.
+- `tests/r5900_block_dispatcher_windows_tests.cpp` — synthetic ELF/memory fixtures and all dispatcher tests.
 
-**Modify:**
+**Modify**
 
-- `CMakeLists.txt` — add Windows-only `b3r_recompiler_dispatcher_x64` and `r5900_block_dispatcher_windows_tests` targets.
-- `README.md` — document the native block-dispatch bridge and its deliberate limitations.
-- `PROGRESS.md` — record dispatcher v0 status and Windows CI evidence after implementation is green.
+- `CMakeLists.txt` — Windows-only dispatcher library and test target.
+- `README.md` — user-facing capability and limitations.
+- `PROGRESS.md` — milestone status and exact CI evidence.
 
-The existing `src/recompiler/windows/r5900_x64_backend.*`, CFG analyzer, IR lowering, executor, and `Ps2MemoryMap` remain behaviorally unchanged.
+The existing CFG analyzer, IR lowering/executor/validator, `Ps2MemoryMap`, and x64 backend remain behaviorally unchanged.
 
 ---
 
-### Task 1: Public dispatcher contract and failure-safe entry path
+### Task 1: Public contract, build target, and failure-safe entry path
 
 **Files:**
 - Create: `src/recompiler/windows/r5900_block_dispatcher.h`
@@ -54,9 +54,203 @@ The existing `src/recompiler/windows/r5900_x64_backend.*`, CFG analyzer, IR lowe
 
 **Interfaces:**
 - Consumes: `analysis::R5900ControlFlowOptions`, `runtime::Ps2MemoryMap`, `R5900IrExecutionState`, `R5900X64CompiledBlock`.
-- Produces:
+- Produces: `R5900DispatchStopReason`, `R5900DispatchResult`, `R5900BlockDispatcherOptions`, `R5900BlockDispatcher`.
+
+- [ ] **Step 1: Write the failing build/contract test**
+
+Add the production target inside the existing `if(WIN32)` block after `b3r_recompiler_x64`:
+
+```cmake
+add_library(b3r_recompiler_dispatcher_x64 STATIC
+  src/recompiler/windows/r5900_block_dispatcher.cpp
+)
+target_include_directories(b3r_recompiler_dispatcher_x64 PUBLIC src)
+target_link_libraries(b3r_recompiler_dispatcher_x64 PUBLIC
+  b3r_analysis
+  b3r_recompiler_x64
+)
+if(MSVC)
+  target_compile_options(b3r_recompiler_dispatcher_x64 PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+```
+
+Add the test target inside the existing Windows test block:
+
+```cmake
+add_executable(r5900_block_dispatcher_windows_tests
+  tests/r5900_block_dispatcher_windows_tests.cpp
+)
+target_link_libraries(r5900_block_dispatcher_windows_tests PRIVATE
+  b3r_recompiler_dispatcher_x64
+)
+add_test(NAME r5900_block_dispatcher_windows_tests COMMAND r5900_block_dispatcher_windows_tests)
+```
+
+Create `tests/r5900_block_dispatcher_windows_tests.cpp` with these exact reusable fixture helpers:
 
 ```cpp
+#include "recompiler/ps2_elf.h"
+#include "recompiler/windows/r5900_block_dispatcher.h"
+#include "runtime/ps2_memory_map.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <utility>
+#include <vector>
+
+namespace {
+
+using Bytes = std::vector<std::uint8_t>;
+
+[[noreturn]] void fail(const char* message) {
+    std::cerr << "r5900_block_dispatcher_windows_tests: FAIL: " << message << '\n';
+    std::exit(EXIT_FAILURE);
+}
+
+void expect(bool condition, const char* message) {
+    if (!condition) {
+        fail(message);
+    }
+}
+
+void put_u16(Bytes& bytes, std::size_t offset, std::uint16_t value) {
+    bytes[offset + 0] = static_cast<std::uint8_t>(value & 0xffu);
+    bytes[offset + 1] = static_cast<std::uint8_t>((value >> 8u) & 0xffu);
+}
+
+void put_u32(Bytes& bytes, std::size_t offset, std::uint32_t value) {
+    bytes[offset + 0] = static_cast<std::uint8_t>(value & 0xffu);
+    bytes[offset + 1] = static_cast<std::uint8_t>((value >> 8u) & 0xffu);
+    bytes[offset + 2] = static_cast<std::uint8_t>((value >> 16u) & 0xffu);
+    bytes[offset + 3] = static_cast<std::uint8_t>((value >> 24u) & 0xffu);
+}
+
+b3r::runtime::Ps2MemoryMap make_memory(const std::vector<std::uint32_t>& words,
+                                       std::uint32_t base,
+                                       std::uint32_t flags = 5u) {
+    constexpr std::uint32_t kProgramHeaderOffset = 52u;
+    constexpr std::uint32_t kPayloadOffset = 0x100u;
+    const std::uint32_t payload_size = static_cast<std::uint32_t>(words.size() * 4u);
+    Bytes bytes(static_cast<std::size_t>(kPayloadOffset + payload_size + 0x40u), 0u);
+
+    bytes[0] = 0x7fu;
+    bytes[1] = 'E';
+    bytes[2] = 'L';
+    bytes[3] = 'F';
+    bytes[4] = 1u;
+    bytes[5] = 1u;
+    bytes[6] = 1u;
+    put_u16(bytes, 16u, 2u);
+    put_u16(bytes, 18u, 8u);
+    put_u32(bytes, 20u, 1u);
+    put_u32(bytes, 24u, base);
+    put_u32(bytes, 28u, kProgramHeaderOffset);
+    put_u16(bytes, 40u, 52u);
+    put_u16(bytes, 42u, 32u);
+    put_u16(bytes, 44u, 1u);
+
+    put_u32(bytes, kProgramHeaderOffset + 0u, 1u);
+    put_u32(bytes, kProgramHeaderOffset + 4u, kPayloadOffset);
+    put_u32(bytes, kProgramHeaderOffset + 8u, base);
+    put_u32(bytes, kProgramHeaderOffset + 12u, base);
+    put_u32(bytes, kProgramHeaderOffset + 16u, payload_size);
+    put_u32(bytes, kProgramHeaderOffset + 20u, payload_size);
+    put_u32(bytes, kProgramHeaderOffset + 24u, flags);
+    put_u32(bytes, kProgramHeaderOffset + 28u, 0x1000u);
+
+    for (std::size_t index = 0; index < words.size(); ++index) {
+        put_u32(bytes, static_cast<std::size_t>(kPayloadOffset) + index * 4u, words[index]);
+    }
+
+    auto parsed = b3r::recompiler::parse_ps2_elf(bytes);
+    expect(parsed.ok(), "synthetic dispatcher ELF must parse");
+    auto built = b3r::runtime::Ps2MemoryMap::from_elf(*parsed.image);
+    expect(built.ok(), "synthetic dispatcher memory must map");
+    return std::move(*built.memory);
+}
+
+} // namespace
+```
+
+Then add the first contract cases:
+
+```cpp
+int main() {
+    using namespace b3r::recompiler;
+
+    constexpr std::uint32_t base = 0x00100000u;
+    auto memory = make_memory({0u}, base);
+    R5900BlockDispatcher dispatcher(memory);
+    R5900IrExecutionState state{};
+    state.gpr[1] = {0x1122334455667788ull, 0x8877665544332211ull};
+
+    const auto zero_budget = dispatcher.run(base, state, 0u);
+    expect(zero_budget.reason == R5900DispatchStopReason::InvalidBlockBudget,
+           "zero block budget must reject explicitly");
+    expect(zero_budget.next_pc == base,
+           "zero block budget must retain start PC");
+    expect(zero_budget.blocks_executed == 0u && zero_budget.instructions_executed == 0u,
+           "zero block budget must execute nothing");
+    expect(zero_budget.cache_hits == 0u && zero_budget.cache_misses == 0u &&
+               zero_budget.recompilations == 0u,
+           "zero block budget must not touch cache accounting");
+    expect(state.gpr[1].low64 == 0x1122334455667788ull &&
+               state.gpr[1].high64 == 0x8877665544332211ull,
+           "zero block budget must not mutate state");
+
+    const auto unaligned = dispatcher.run(base + 2u, state, 1u);
+    expect(unaligned.reason == R5900DispatchStopReason::AnalysisFailure,
+           "unaligned PC must map analyzer failure");
+    expect(unaligned.next_pc == base + 2u,
+           "analysis failure must report failing PC");
+    expect(unaligned.blocks_executed == 0u,
+           "analysis failure must not consume budget");
+
+    std::cout << "r5900_block_dispatcher_windows_tests: PASS\n";
+    return EXIT_SUCCESS;
+}
+```
+
+- [ ] **Step 2: Run RED verification**
+
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DB3R_BUILD_TESTS=ON
+cmake --build build --config Release --parallel
+```
+
+Expected: build fails because `r5900_block_dispatcher.h/.cpp` do not exist.
+
+Commit RED:
+
+```bash
+git add CMakeLists.txt tests/r5900_block_dispatcher_windows_tests.cpp
+git commit -m "test: define R5900 block dispatcher contract"
+```
+
+For GitHub-only execution, verify the feature-branch Windows CI failure is the expected missing-dispatcher build failure.
+
+- [ ] **Step 3: Implement the public header exactly**
+
+Create `src/recompiler/windows/r5900_block_dispatcher.h`:
+
+```cpp
+#pragma once
+
+#include "analysis/r5900_control_flow.h"
+#include "recompiler/r5900_ir_executor.h"
+#include "recompiler/windows/r5900_x64_backend.h"
+#include "runtime/ps2_memory_map.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace b3r::recompiler {
+
 enum class R5900DispatchStopReason {
     BlockBudgetExhausted,
     ControlFlow,
@@ -85,142 +279,76 @@ struct R5900BlockDispatcherOptions {
 
 class R5900BlockDispatcher {
 public:
-    explicit R5900BlockDispatcher(
-        const runtime::Ps2MemoryMap& memory,
-        R5900BlockDispatcherOptions options = {});
+    explicit R5900BlockDispatcher(const runtime::Ps2MemoryMap& memory,
+                                  R5900BlockDispatcherOptions options = {});
 
-    [[nodiscard]] R5900DispatchResult run(
-        std::uint32_t start_pc,
-        R5900IrExecutionState& state,
-        std::size_t max_blocks);
+    [[nodiscard]] R5900DispatchResult run(std::uint32_t start_pc,
+                                          R5900IrExecutionState& state,
+                                          std::size_t max_blocks);
 
     void clear_cache() noexcept;
     [[nodiscard]] std::size_t cache_size() const noexcept;
+
+private:
+    struct CachedBlock {
+        std::uint32_t start_pc{};
+        std::uint32_t end_pc_exclusive{};
+        std::uint64_t fingerprint{};
+        std::vector<std::uint32_t> guest_words{};
+        std::size_t guest_instruction_count{};
+        R5900X64CompiledBlock native_block{};
+    };
+
+    const runtime::Ps2MemoryMap& memory_;
+    R5900BlockDispatcherOptions options_{};
+    std::unordered_map<std::uint32_t, CachedBlock> cache_{};
 };
+
+} // namespace b3r::recompiler
 ```
 
-- [ ] **Step 1: Add the Windows test target and write the first failing contract tests**
+- [ ] **Step 4: Implement minimal GREEN entry behavior**
 
-Add to the `if(WIN32)` test section in `CMakeLists.txt`:
-
-```cmake
-add_executable(r5900_block_dispatcher_windows_tests
-  tests/r5900_block_dispatcher_windows_tests.cpp
-)
-target_link_libraries(r5900_block_dispatcher_windows_tests PRIVATE
-  b3r_recompiler_dispatcher_x64
-)
-add_test(NAME r5900_block_dispatcher_windows_tests COMMAND r5900_block_dispatcher_windows_tests)
-```
-
-Add the production target beside `b3r_recompiler_x64`:
-
-```cmake
-add_library(b3r_recompiler_dispatcher_x64 STATIC
-  src/recompiler/windows/r5900_block_dispatcher.cpp
-)
-target_include_directories(b3r_recompiler_dispatcher_x64 PUBLIC src)
-target_link_libraries(b3r_recompiler_dispatcher_x64 PUBLIC
-  b3r_analysis
-  b3r_recompiler_x64
-)
-if(MSVC)
-  target_compile_options(b3r_recompiler_dispatcher_x64 PRIVATE /W4 /permissive- /Zc:__cplusplus)
-endif()
-```
-
-Start `tests/r5900_block_dispatcher_windows_tests.cpp` with the repository's existing `fail()` / `expect()` style and synthetic ELF helpers copied in focused form from `ps2_memory_map_tests.cpp`. The helper must produce an executable PT_LOAD (`flags = 5`) containing little-endian instruction words.
+Create `r5900_block_dispatcher.cpp` with constructor, cache methods, PC formatting, budget validation, and analyzer failure mapping:
 
 ```cpp
 #include "recompiler/windows/r5900_block_dispatcher.h"
-#include "recompiler/ps2_elf.h"
-#include "runtime/ps2_memory_map.h"
 
-// ... fail/expect, put_u16, put_u32, make_executable_memory helpers ...
+#include <iomanip>
+#include <sstream>
+#include <string_view>
 
-int main() {
-    using namespace b3r::recompiler;
+namespace b3r::recompiler {
+namespace {
 
-    auto memory = make_executable_memory({0u}, 0x00100000u);
-    R5900BlockDispatcher dispatcher(memory);
-    R5900IrExecutionState state{};
-    state.gpr[1] = {0x1122334455667788ull, 0x8877665544332211ull};
-
-    const auto zero_budget = dispatcher.run(0x00100000u, state, 0u);
-    expect(zero_budget.reason == R5900DispatchStopReason::InvalidBlockBudget,
-           "zero block budget must reject explicitly");
-    expect(zero_budget.next_pc == 0x00100000u,
-           "zero block budget must retain start PC");
-    expect(zero_budget.blocks_executed == 0u && zero_budget.instructions_executed == 0u,
-           "zero block budget must execute nothing");
-    expect(zero_budget.cache_hits == 0u && zero_budget.cache_misses == 0u &&
-               zero_budget.recompilations == 0u,
-           "zero block budget must not touch cache accounting");
-    expect(state.gpr[1].low64 == 0x1122334455667788ull &&
-               state.gpr[1].high64 == 0x8877665544332211ull,
-           "zero block budget must not mutate state");
-
-    const auto unaligned = dispatcher.run(0x00100002u, state, 1u);
-    expect(unaligned.reason == R5900DispatchStopReason::AnalysisFailure,
-           "unaligned PC must map analyzer failure");
-    expect(unaligned.next_pc == 0x00100002u,
-           "analysis failure must report failing PC");
-    expect(unaligned.blocks_executed == 0u,
-           "analysis failure must not consume budget");
-
-    std::cout << "r5900_block_dispatcher_windows_tests: PASS\n";
-    return EXIT_SUCCESS;
+std::string format_stage_error(std::string_view stage,
+                               std::uint32_t pc,
+                               const std::string& detail) {
+    std::ostringstream out;
+    out << stage << " at guest PC 0x"
+        << std::hex << std::setw(8) << std::setfill('0') << pc
+        << ": " << detail;
+    return out.str();
 }
-```
 
-- [ ] **Step 2: Run RED verification**
+} // namespace
 
-Run:
+R5900BlockDispatcher::R5900BlockDispatcher(const runtime::Ps2MemoryMap& memory,
+                                           R5900BlockDispatcherOptions options)
+    : memory_(memory), options_(options) {}
 
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DB3R_BUILD_TESTS=ON
-cmake --build build --config Release --parallel
-```
+void R5900BlockDispatcher::clear_cache() noexcept {
+    cache_.clear();
+}
 
-Expected: build fails because `recompiler/windows/r5900_block_dispatcher.h` / dispatcher implementation does not exist yet.
+std::size_t R5900BlockDispatcher::cache_size() const noexcept {
+    return cache_.size();
+}
 
-Commit the RED state:
-
-```bash
-git add CMakeLists.txt tests/r5900_block_dispatcher_windows_tests.cpp
-git commit -m "test: define R5900 block dispatcher contract"
-```
-
-On GitHub-only execution, confirm the corresponding Windows CI run fails for the expected missing-dispatcher reason before implementing GREEN.
-
-- [ ] **Step 3: Implement the public contract and entry-path validation**
-
-Create `r5900_block_dispatcher.h` with the exact public types above. Keep cache representation private. A straightforward v0 representation is:
-
-```cpp
-struct CachedBlock {
-    std::uint32_t start_pc{};
-    std::uint32_t end_pc_exclusive{};
-    std::uint64_t fingerprint{};
-    std::vector<std::uint32_t> guest_words{};
-    std::size_t guest_instruction_count{};
-    R5900X64CompiledBlock native_block{};
-};
-
-const runtime::Ps2MemoryMap& memory_;
-R5900BlockDispatcherOptions options_{};
-std::unordered_map<std::uint32_t, CachedBlock> cache_{};
-```
-
-Create `r5900_block_dispatcher.cpp`. Implement constructor, `clear_cache()`, `cache_size()`, and the first two `run()` guards:
-
-```cpp
-R5900DispatchResult R5900BlockDispatcher::run(
-    std::uint32_t start_pc,
-    R5900IrExecutionState& state,
-    std::size_t max_blocks) {
+R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
+                                              R5900IrExecutionState& state,
+                                              std::size_t max_blocks) {
     (void)state;
-
     R5900DispatchResult result{};
     result.next_pc = start_pc;
 
@@ -238,35 +366,23 @@ R5900DispatchResult R5900BlockDispatcher::run(
         return result;
     }
 
-    // Temporary GREEN for Task 1 only: a successfully analyzed block is not executed yet.
     result.reason = R5900DispatchStopReason::UnsupportedInstruction;
-    result.message = "R5900 dispatcher execution bridge not reached by Task 1 tests";
+    result.message = "R5900 dispatcher Task 1 supports entry validation only";
     return result;
 }
+
+} // namespace b3r::recompiler
 ```
 
-Implement a private `format_stage_error(stage, pc, detail)` with zero-padded 8-digit hexadecimal guest PC, e.g. `analysis at guest PC 0x00100002: ...`.
-
-- [ ] **Step 4: Run GREEN verification for Task 1**
-
-Run:
+- [ ] **Step 5: Run GREEN and commit**
 
 ```powershell
 cmake --build build --config Release --parallel
 ctest --test-dir build -C Release -R r5900_block_dispatcher_windows_tests --output-on-failure
-```
-
-Expected: dispatcher test passes for invalid-budget and unaligned-analysis cases.
-
-Also run:
-
-```powershell
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Expected: all existing tests plus the new dispatcher test pass.
-
-- [ ] **Step 5: Commit Task 1 GREEN**
+Expected: dispatcher contract tests and all pre-existing tests pass.
 
 ```bash
 git add CMakeLists.txt src/recompiler/windows/r5900_block_dispatcher.h src/recompiler/windows/r5900_block_dispatcher.cpp tests/r5900_block_dispatcher_windows_tests.cpp
@@ -283,15 +399,11 @@ git commit -m "feat: add R5900 block dispatcher contract"
 
 **Interfaces:**
 - Consumes: `analysis::R5900BasicBlock`, `lower_r5900_instruction()`, `compile_r5900_ir_x64()`.
-- Produces internal behavior:
-  - eligibility predicate for exactly `Nop`, `Addu`, `Addiu`, `Ori`;
-  - boundary classification to `ControlFlow`, `UnsupportedInstruction`, `Trap`;
-  - complete-prefix lowering and native execution;
-  - `next_pc = block_start + instruction_count * 4`.
+- Produces: exact v0 eligibility for NOP/ADDU/ADDIU/ORI, semantic boundary mapping, complete-prefix native execution, first-unexecuted `next_pc`.
 
-- [ ] **Step 1: Write failing tests for a supported prefix and boundaries**
+- [ ] **Step 1: Add failing instruction-encoding and boundary tests**
 
-Add encoding helpers:
+Add these helpers inside the test namespace:
 
 ```cpp
 constexpr std::uint32_t r_type(std::uint8_t rs, std::uint8_t rt,
@@ -318,66 +430,68 @@ constexpr std::uint32_t j_type(std::uint8_t op, std::uint32_t target) {
 }
 ```
 
-Add one mixed supported-prefix test using:
+Add a supported-prefix test with:
 
 ```cpp
-const std::uint32_t words[] = {
-    0u,                                  // NOP
-    r_type(9, 10, 8, 0, 0x21),         // ADDU r8,r9,r10
-    i_type(0x09, 29, 29, 0xfff0),      // ADDIU r29,r29,-16
-    i_type(0x0d, 4, 5, 0xff00),        // ORI r5,r4,0xff00
-    i_type(0x0c, 1, 2, 0x00ff),        // ANDI: decoded, unsupported by IR v0
+const std::vector<std::uint32_t> words = {
+    0u,
+    r_type(9, 10, 8, 0, 0x21),
+    i_type(0x09, 29, 29, 0xfff0),
+    i_type(0x0d, 4, 5, 0xff00),
+    i_type(0x0c, 1, 2, 0x00ff),
 };
 ```
 
-Use `block_options.max_instructions = 1024`. Expect the first four instructions to execute once, then:
+Initialize `r9 = 5`, `r10 = 7`, `r29.low64 = 0x1000`, `r4.low64 = 0x1234567800000000`, and nonzero high halves for destinations. Expect the first four instructions to execute, then:
 
 ```cpp
 expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
-       "supported prefix must stop before unsupported decoded instruction");
-expect(result.next_pc == base + 16u, "unsupported boundary PC must be exact");
+       "supported prefix must stop before ANDI");
+expect(result.next_pc == base + 16u,
+       "unsupported boundary must report first unexecuted PC");
 expect(result.blocks_executed == 1u && result.instructions_executed == 4u,
-       "only supported prefix must be accounted");
+       "only supported prefix must count as executed");
 ```
 
-Add boundary-at-entry tests:
+Add boundary-at-entry cases:
 
-- `ANDI` -> `UnsupportedInstruction`, zero blocks/instructions, unchanged state.
-- `SYSCALL` raw word `0x0000000cu` -> `Trap`, zero blocks/instructions.
-- `BEQ` with mapped NOP delay slot -> `ControlFlow`, zero blocks/instructions.
-
-Add prefix + control-flow tests for representative terminators:
-
-```text
-ADDIU + BEQ + NOP delay slot
-ADDIU + J   + NOP delay slot
-ADDIU + JAL + NOP delay slot
-ADDIU + JR  + NOP delay slot
+```cpp
+const auto andi = i_type(0x0c, 1, 2, 0x00ff);
+const std::uint32_t syscall_word = 0x0000000cu;
+const auto beq = i_type(0x04, 1, 2, 1u);
 ```
 
-For each, expect the ADDIU side effect only, `next_pc` at the terminator, `ControlFlow`, and no delay-slot side effect.
+For BEQ include a mapped NOP delay-slot word. Expect `UnsupportedInstruction`, `Trap`, and `ControlFlow` respectively, with zero blocks/instructions and unchanged state.
 
-- [ ] **Step 2: Run RED verification**
+Add four prefix-plus-control-flow fixtures:
 
-Run:
+```cpp
+const auto prefix = i_type(0x09, 0, 1, 7u);
+const auto beq_term = i_type(0x04, 1, 2, 1u);
+const auto j_term = j_type(0x02, base + 0x20u);
+const auto jal_term = j_type(0x03, base + 0x20u);
+const auto jr_term = r_type(31, 0, 0, 0, 0x08);
+```
+
+Each fixture is `{prefix, terminator, 0u}`. Expect `r1 == 7`, one block, one executed instruction, `next_pc == base + 4`, `ControlFlow`, and no execution of the NOP delay slot.
+
+- [ ] **Step 2: Run RED and commit the failing tests**
 
 ```powershell
 cmake --build build --config Release --parallel
 ctest --test-dir build -C Release -R r5900_block_dispatcher_windows_tests --output-on-failure
 ```
 
-Expected: FAIL because Task 1 implementation does not compile/execute supported prefixes or classify all boundaries.
-
-Commit RED:
+Expected: dispatcher suite fails because Task 1 has no prefix execution.
 
 ```bash
 git add tests/r5900_block_dispatcher_windows_tests.cpp
 git commit -m "test: cover R5900 dispatcher prefix boundaries"
 ```
 
-- [ ] **Step 3: Implement explicit eligibility and candidate selection**
+- [ ] **Step 3: Implement explicit eligibility and boundary selection**
 
-Add a private predicate:
+Add:
 
 ```cpp
 bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
@@ -393,7 +507,7 @@ bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
 }
 ```
 
-Walk `block.instructions` in PC order. Before eligibility, classify:
+For each `block.instructions` site, classify control flow and system/trap before eligibility. Store eligible sites in `std::vector<analysis::R5900InstructionSite> prefix`. Keep `std::optional<R5900DispatchStopReason> boundary_reason` and `boundary_pc`.
 
 ```cpp
 if (site.decoded.is_branch() || site.decoded.is_jump()) {
@@ -414,26 +528,27 @@ if (!is_dispatcher_v0_eligible(site.decoded.instruction)) {
 prefix.push_back(site);
 ```
 
-Never inspect or append `block.delay_slot`.
+Never append `block.delay_slot`. If `prefix.empty()`, return the boundary with `next_pc = boundary_pc` and zero mutation/accounting.
 
-If `prefix.empty()`, return the boundary immediately with zero state/cache/budget mutation.
+- [ ] **Step 4: Implement complete lowering, compile, and one-candidate execution**
 
-- [ ] **Step 4: Implement complete lowering, native compile, and one-block execution**
-
-For each selected site:
+Build one IR vector from the complete prefix:
 
 ```cpp
-const auto lowered = lower_r5900_instruction(site.decoded, site.pc);
-if (!lowered.ok()) {
-    result.reason = R5900DispatchStopReason::LoweringFailure;
-    result.next_pc = site.pc;
-    result.message = format_stage_error("lowering", site.pc, lowered.message);
-    return result;
+std::vector<R5900IrInstruction> ir;
+for (const auto& site : prefix) {
+    const auto lowered = lower_r5900_instruction(site.decoded, site.pc);
+    if (!lowered.ok()) {
+        result.reason = R5900DispatchStopReason::LoweringFailure;
+        result.next_pc = site.pc;
+        result.message = format_stage_error("lowering", site.pc, lowered.message);
+        return result;
+    }
+    ir.insert(ir.end(), lowered.instructions.begin(), lowered.instructions.end());
 }
-ir.insert(ir.end(), lowered.instructions.begin(), lowered.instructions.end());
 ```
 
-Compile the complete IR vector only after all selected sites lower successfully:
+Compile only after all selected instructions lower:
 
 ```cpp
 auto compiled = compile_r5900_ir_x64(ir);
@@ -450,13 +565,9 @@ result.instructions_executed = prefix.size();
 result.next_pc = prefix.front().pc + static_cast<std::uint32_t>(prefix.size() * 4u);
 ```
 
-Task 2 may temporarily compile every candidate without reuse; cache semantics are Task 3/4.
+If a semantic boundary follows the prefix, return that reason even when the consumed budget is 1. If analysis ended with `InstructionLimit`, return `BlockBudgetExhausted` after this one execution for Task 2.
 
-After execution, if a boundary was selected, return its semantic reason even when `max_blocks == 1`. For an `InstructionLimit` chunk with no boundary, return `BlockBudgetExhausted` when the single-block budget has been consumed.
-
-- [ ] **Step 5: Run GREEN verification and commit**
-
-Run:
+- [ ] **Step 5: Run GREEN and commit**
 
 ```powershell
 ctest --test-dir build -C Release -R r5900_block_dispatcher_windows_tests --output-on-failure
@@ -465,8 +576,6 @@ ctest --test-dir build -C Release --output-on-failure
 
 Expected: all tests pass.
 
-Commit:
-
 ```bash
 git add src/recompiler/windows/r5900_block_dispatcher.cpp tests/r5900_block_dispatcher_windows_tests.cpp
 git commit -m "feat: execute supported R5900 block prefixes"
@@ -474,69 +583,77 @@ git commit -m "feat: execute supported R5900 block prefixes"
 
 ---
 
-### Task 3: Multi-block run loop, budget semantics, and cache hits
+### Task 3: Multi-block run loop and native cache reuse
 
 **Files:**
-- Modify: `src/recompiler/windows/r5900_block_dispatcher.h`
 - Modify: `src/recompiler/windows/r5900_block_dispatcher.cpp`
 - Modify: `tests/r5900_block_dispatcher_windows_tests.cpp`
 
 **Interfaces:**
-- Consumes: Task 2 candidate selection and compile/execute path.
-- Produces:
-  - looped `run()` across `InstructionLimit` chunks;
-  - per-call cumulative block/instruction metrics;
-  - cache lookup by `start_pc`;
-  - exact cache hit/miss accounting;
-  - `cache_size()` and `clear_cache()` behavior.
+- Consumes: Task 2 prefix selection and compile path.
+- Produces: repeated `InstructionLimit` dispatch, budget accounting, start-PC cache reuse, `cache_size()`, `clear_cache()`.
 
-- [ ] **Step 1: Write failing multi-block and cache tests**
+- [ ] **Step 1: Write failing multi-block budget tests**
 
-Create a sequence of five eligible instructions followed by `ANDI`. Configure:
+Use five eligible words followed by unsupported ANDI:
 
 ```cpp
+const std::vector<std::uint32_t> words = {
+    i_type(0x09, 0, 1, 1u),
+    i_type(0x09, 1, 1, 1u),
+    i_type(0x09, 1, 1, 1u),
+    i_type(0x09, 1, 1, 1u),
+    i_type(0x09, 1, 1, 1u),
+    i_type(0x0c, 1, 2, 0xffu),
+};
 R5900BlockDispatcherOptions options{};
 options.block_options.max_instructions = 2u;
-R5900BlockDispatcher dispatcher(memory, options);
 ```
 
-Validate:
+With fresh dispatcher/state instances validate:
 
-- `run(base, state, 1)` executes 2 instructions, returns `BlockBudgetExhausted`, `next_pc == base + 8`, `blocks_executed == 1`.
-- fresh dispatcher/state with budget 2 executes 4 instructions, returns `BlockBudgetExhausted`, `next_pc == base + 16`, `blocks_executed == 2`.
-- fresh dispatcher/state with budget 3 executes the fifth supported instruction, then returns `UnsupportedInstruction` at `base + 20`; semantic boundary wins over budget exhaustion.
+- budget 1 -> 2 instructions, one block, `next_pc == base + 8`, `BlockBudgetExhausted`;
+- budget 2 -> 4 instructions, two blocks, `next_pc == base + 16`, `BlockBudgetExhausted`;
+- budget 3 -> fifth supported instruction executes, then `UnsupportedInstruction` at `base + 20`, three blocks, five instructions; boundary wins over exhausted budget.
 
-Add cache reuse test using a two-instruction `InstructionLimit` chunk:
+- [ ] **Step 2: Write failing cache hit/clear tests**
+
+With `max_instructions = 2` and two eligible words, run twice from the same PC using separate execution states:
 
 ```cpp
 const auto first = dispatcher.run(base, state1, 1u);
 expect(first.cache_misses == 1u && first.cache_hits == 0u,
-       "first candidate must be a cache miss");
-expect(dispatcher.cache_size() == 1u, "successful compile must populate cache");
+       "first native candidate must be a cache miss");
+expect(dispatcher.cache_size() == 1u,
+       "successful compile must populate one cache entry");
 
 const auto second = dispatcher.run(base, state2, 1u);
 expect(second.cache_hits == 1u && second.cache_misses == 0u,
-       "identical guest code must reuse native block");
-expect(dispatcher.cache_size() == 1u, "cache hit must not duplicate entry");
+       "identical native candidate must hit cache");
+expect(dispatcher.cache_size() == 1u,
+       "cache hit must not duplicate native entry");
 
 dispatcher.clear_cache();
-expect(dispatcher.cache_size() == 0u, "clear_cache must destroy all entries");
+expect(dispatcher.cache_size() == 0u,
+       "clear_cache must destroy all native entries");
 ```
 
-- [ ] **Step 2: Run RED verification**
+- [ ] **Step 3: Run RED and commit tests**
 
-Run the dispatcher test; expect failures because Task 2 executes at most one candidate and does not retain native blocks.
+```powershell
+ctest --test-dir build -C Release -R r5900_block_dispatcher_windows_tests --output-on-failure
+```
 
-Commit RED:
+Expected: failures because Task 2 executes at most one candidate and retains no compiled block.
 
 ```bash
 git add tests/r5900_block_dispatcher_windows_tests.cpp
 git commit -m "test: cover dispatcher budgets and cache reuse"
 ```
 
-- [ ] **Step 3: Refactor one-candidate logic into the run loop**
+- [ ] **Step 4: Implement run loop and exact-word cache reuse**
 
-Use local `current_pc = start_pc`. At the top of each iteration, analyze/select the current candidate. After a valid native execution:
+Initialize `current_pc = start_pc`. Each successful native execution updates cumulative metrics:
 
 ```cpp
 ++result.blocks_executed;
@@ -545,123 +662,136 @@ current_pc += static_cast<std::uint32_t>(prefix.size() * 4u);
 result.next_pc = current_pc;
 ```
 
-If the just-analyzed candidate has a semantic boundary after the prefix, return that boundary immediately. Otherwise, the analyzer chunk ended by `InstructionLimit`:
+If a semantic boundary was identified in the just-analyzed block, return it immediately. Otherwise the chunk ended only because of `InstructionLimit`. Return `BlockBudgetExhausted` when `result.blocks_executed == max_blocks`; otherwise analyze again at `current_pc`.
+
+Before compilation, capture the selected words from the analyzed sites:
 
 ```cpp
-if (result.blocks_executed == max_blocks) {
-    result.reason = R5900DispatchStopReason::BlockBudgetExhausted;
-    return result;
+std::vector<std::uint32_t> guest_words;
+guest_words.reserve(prefix.size());
+for (const auto& site : prefix) {
+    guest_words.push_back(site.decoded.raw);
 }
 ```
 
-Then loop at `current_pc`.
+Task 3 cache-hit condition is exact `guest_words` plus instruction count. Keep `fingerprint = 0` until Task 4.
 
-Do not increment block budget for analysis, cache probe, lowering, or compile failures.
-
-- [ ] **Step 4: Add cache insertion/reuse without fingerprint invalidation yet**
-
-Before compiling, capture `guest_words` from the selected sites' current raw words. Look up `cache_.find(prefix.front().pc)`.
-
-For Task 3 GREEN, reuse only if `guest_words` and instruction count are exactly equal; Task 4 adds the specified FNV fingerprint and stale accounting.
-
-On exact hit:
-
-```cpp
-++result.cache_hits;
-it->second.native_block.execute(state);
-```
-
-On no entry:
+No entry:
 
 ```cpp
 ++result.cache_misses;
-// lower + compile
-cache_.emplace(start_pc, CachedBlock{...});
-cache_.at(start_pc).native_block.execute(state);
+auto compiled = compile_r5900_ir_x64(ir);
+if (!compiled.ok()) {
+    result.reason = R5900DispatchStopReason::CompileFailure;
+    result.next_pc = current_pc;
+    result.message = format_stage_error("x64 compile", current_pc, compiled.message);
+    return result;
+}
+
+CachedBlock cached{};
+cached.start_pc = current_pc;
+cached.end_pc_exclusive = current_pc + static_cast<std::uint32_t>(prefix.size() * 4u);
+cached.guest_words = guest_words;
+cached.guest_instruction_count = guest_words.size();
+cached.native_block = std::move(*compiled.block);
+auto [inserted, did_insert] = cache_.emplace(current_pc, std::move(cached));
+(void)did_insert;
+inserted->second.native_block.execute(state);
 ```
 
-The cache must own the move-only `R5900X64CompiledBlock`; do not copy compiled blocks.
+Exact Task 3 hit:
 
-- [ ] **Step 5: Run GREEN verification and commit**
+```cpp
+auto cached = cache_.find(current_pc);
+if (cached != cache_.end() &&
+    cached->second.guest_instruction_count == guest_words.size() &&
+    cached->second.guest_words == guest_words) {
+    ++result.cache_hits;
+    cached->second.native_block.execute(state);
+}
+```
 
-Run dispatcher-only then full CTest. Expected: all pass.
+Do not execute a mismatched entry. Task 4 supplies stale replacement semantics.
 
-Commit:
+- [ ] **Step 5: Run GREEN and commit**
+
+```powershell
+ctest --test-dir build -C Release -R r5900_block_dispatcher_windows_tests --output-on-failure
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Expected: all tests pass.
 
 ```bash
-git add src/recompiler/windows/r5900_block_dispatcher.h src/recompiler/windows/r5900_block_dispatcher.cpp tests/r5900_block_dispatcher_windows_tests.cpp
+git add src/recompiler/windows/r5900_block_dispatcher.cpp tests/r5900_block_dispatcher_windows_tests.cpp
 git commit -m "feat: add R5900 dispatcher run loop and cache"
 ```
 
 ---
 
-### Task 4: Exact fingerprint validation and automatic stale-code recompilation
+### Task 4: FNV fingerprint and automatic stale-code recompilation
 
 **Files:**
 - Modify: `src/recompiler/windows/r5900_block_dispatcher.cpp`
 - Modify: `tests/r5900_block_dispatcher_windows_tests.cpp`
 
 **Interfaces:**
-- Consumes: Task 3 cache keyed by `start_pc`.
-- Produces:
-  - deterministic 64-bit FNV-1a fingerprint over start PC, fixed-width instruction count, and guest words;
-  - exact-word collision guard;
-  - stale-code rejection and `recompilations` accounting.
+- Consumes: Task 3 start-PC cache.
+- Produces: spec-defined FNV-1a validation, exact-word collision guard, `recompilations` accounting, stale-code rejection.
 
-- [ ] **Step 1: Write failing automatic-invalidation tests**
+- [ ] **Step 1: Write failing stale-code tests**
 
-Use `block_options.max_instructions = 1` with:
+Configure one instruction per analyzer chunk:
 
 ```cpp
-const auto addiu_one = i_type(0x09, 0, 1, 1);  // r1 = 1
-const auto addiu_seven = i_type(0x09, 0, 1, 7); // r1 = 7
+R5900BlockDispatcherOptions options{};
+options.block_options.max_instructions = 1u;
+const auto addiu_one = i_type(0x09, 0, 1, 1u);
+const auto addiu_seven = i_type(0x09, 0, 1, 7u);
+auto memory = make_memory({addiu_one}, base);
+R5900BlockDispatcher dispatcher(memory, options);
 ```
 
-First run:
+First run must yield `r1 == 1`, `cache_misses == 1`, `recompilations == 0`.
+
+Mutate through the same non-const memory object:
 
 ```cpp
-const auto first = dispatcher.run(base, state1, 1u);
-expect(state1.gpr[1].low64 == 1u, "first compiled word must execute");
-expect(first.cache_misses == 1u && first.recompilations == 0u,
-       "first compile must be a miss");
+expect(memory.write_u32(base, addiu_seven),
+       "guest code mutation must succeed");
 ```
 
-Mutate guest code through the original non-const memory object:
+Run again from reset state and expect:
 
 ```cpp
-expect(memory.write_u32(base, addiu_seven), "guest code mutation must succeed");
-```
-
-Second run from a reset state:
-
-```cpp
-const auto second = dispatcher.run(base, state2, 1u);
 expect(state2.gpr[1].low64 == 7u,
-       "stale native block must never execute after guest code change");
+       "stale native code must never execute");
 expect(second.recompilations == 1u,
-       "stale candidate must be counted as recompilation");
+       "changed guest code must count as recompilation");
 expect(second.cache_hits == 0u && second.cache_misses == 0u,
-       "stale candidate is neither hit nor plain miss");
+       "stale lookup is neither hit nor plain miss");
 expect(dispatcher.cache_size() == 1u,
-       "successful replacement must keep one cache entry per start PC");
+       "successful replacement keeps one entry per start PC");
 ```
 
-Also mutate the cached start word to unsupported `ANDI`. Expect `UnsupportedInstruction`, zero blocks, zero cache hit/miss/recompile for that call, and no stale execution. The old physical cache entry may remain, but it must be logically unusable.
+Then mutate the same PC to decoded unsupported ANDI. Run again and expect `UnsupportedInstruction`, zero executed blocks/instructions, zero cache hit/miss/recompile for that call, and unchanged execution state. The old physical cache entry may remain but must not execute.
 
-- [ ] **Step 2: Run RED verification**
+- [ ] **Step 2: Run RED and commit tests**
 
-Run dispatcher test. Expected: stale-code test fails because Task 3 has no required fingerprint/recompilation semantics.
+```powershell
+ctest --test-dir build -C Release -R r5900_block_dispatcher_windows_tests --output-on-failure
+```
 
-Commit RED:
+Expected: stale-code accounting/behavior fails under Task 3 cache rules.
 
 ```bash
 git add tests/r5900_block_dispatcher_windows_tests.cpp
 git commit -m "test: require dispatcher cache invalidation"
 ```
 
-- [ ] **Step 3: Implement exact FNV-1a fingerprint**
+- [ ] **Step 3: Implement deterministic FNV-1a**
 
-Use the spec-defined constants and fixed little-endian encoding:
+Add:
 
 ```cpp
 constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
@@ -683,46 +813,83 @@ void fnv_u64_le(std::uint64_t& hash, std::uint64_t value) noexcept {
         fnv_byte(hash, static_cast<std::uint8_t>((value >> shift) & 0xffu));
     }
 }
-```
 
-Fingerprint order:
-
-```cpp
-std::uint64_t hash = kFnvOffset;
-fnv_u32_le(hash, start_pc);
-fnv_u64_le(hash, static_cast<std::uint64_t>(guest_words.size()));
-for (const auto word : guest_words) {
-    fnv_u32_le(hash, word);
+std::uint64_t fingerprint_guest_words(std::uint32_t start_pc,
+                                      const std::vector<std::uint32_t>& words) noexcept {
+    std::uint64_t hash = kFnvOffset;
+    fnv_u32_le(hash, start_pc);
+    fnv_u64_le(hash, static_cast<std::uint64_t>(words.size()));
+    for (const auto word : words) {
+        fnv_u32_le(hash, word);
+    }
+    return hash;
 }
 ```
 
-Re-read each selected word with `memory_.read_u32(site.pc)` before cache validation. If a selected word can no longer be read, return `AnalysisFailure` at that site without executing the candidate.
+Before cache validation, re-read every selected word:
 
-- [ ] **Step 4: Implement exact cache validity and stale replacement**
+```cpp
+std::vector<std::uint32_t> guest_words;
+guest_words.reserve(prefix.size());
+for (const auto& site : prefix) {
+    const auto word = memory_.read_u32(site.pc);
+    if (!word.has_value()) {
+        result.reason = R5900DispatchStopReason::AnalysisFailure;
+        result.next_pc = site.pc;
+        result.message = format_stage_error(
+            "analysis", site.pc, "selected guest instruction became unreadable");
+        return result;
+    }
+    guest_words.push_back(*word);
+}
+const auto fingerprint = fingerprint_guest_words(current_pc, guest_words);
+```
 
-A hit requires all fields:
+- [ ] **Step 4: Implement exact hit/miss/stale transaction**
+
+Exact hit requires:
 
 ```cpp
 const bool exact_match =
-    cached.start_pc == start_pc &&
+    cached.start_pc == current_pc &&
     cached.guest_instruction_count == guest_words.size() &&
     cached.fingerprint == fingerprint &&
     cached.guest_words == guest_words;
 ```
 
-If exact: increment `cache_hits` and execute cached native block.
+Rules:
 
-If no entry: increment `cache_misses`, compile, then insert.
+```text
+no cache entry                  -> ++cache_misses, compile, insert
+exact current candidate match   -> ++cache_hits, execute cached block
+existing entry but mismatch     -> ++recompilations, compile replacement, never execute old block
+no non-empty eligible prefix    -> return boundary before cache lookup
+```
 
-If entry exists but differs: increment `recompilations` when compilation of the current eligible candidate is attempted. Never execute the stale entry. Compile the new IR into a temporary `R5900X64CompiledBlock`; only on success move it into the cache entry and replace metadata.
+For stale replacement, compile into a temporary result first. Only after success assign metadata and move the new native block into the existing cache entry:
 
-If current code produces no non-empty eligible prefix, return the semantic boundary before cache lookup. This intentionally leaves any old physical entry untouched but unreachable by exact current-candidate validation.
+```cpp
+CachedBlock replacement{};
+replacement.start_pc = current_pc;
+replacement.end_pc_exclusive = current_pc + static_cast<std::uint32_t>(prefix.size() * 4u);
+replacement.fingerprint = fingerprint;
+replacement.guest_words = guest_words;
+replacement.guest_instruction_count = guest_words.size();
+replacement.native_block = std::move(*compiled.block);
+cache_[current_pc] = std::move(replacement);
+cache_.at(current_pc).native_block.execute(state);
+```
 
-- [ ] **Step 5: Run GREEN verification and commit**
+If lowering or compile fails, return the corresponding stop reason without executing the candidate. An older physically retained stale block must never be selected by exact-match validation.
 
-Run dispatcher-only and full CTest. Expected: all pass.
+- [ ] **Step 5: Run GREEN and commit**
 
-Commit:
+```powershell
+ctest --test-dir build -C Release -R r5900_block_dispatcher_windows_tests --output-on-failure
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Expected: all tests pass.
 
 ```bash
 git add src/recompiler/windows/r5900_block_dispatcher.cpp tests/r5900_block_dispatcher_windows_tests.cpp
@@ -731,19 +898,33 @@ git commit -m "feat: invalidate stale R5900 native blocks"
 
 ---
 
-### Task 5: Differential semantics, analysis failures, diagnostics, and full regression
+### Task 5: Differential state semantics and complete failure coverage
 
 **Files:**
 - Modify: `tests/r5900_block_dispatcher_windows_tests.cpp`
-- Modify if required by discovered test failures: `src/recompiler/windows/r5900_block_dispatcher.cpp`
+- Modify: `src/recompiler/windows/r5900_block_dispatcher.cpp` only if these tests expose a spec violation.
 
 **Interfaces:**
-- Consumes: complete dispatcher v0 from Tasks 1-4.
-- Produces: final semantic confidence across all 32 GPRs and failure-stage diagnostics.
+- Consumes: completed dispatcher behavior from Tasks 1-4.
+- Produces: full-state equivalence evidence and final diagnostics/error-atomicity coverage.
 
-- [ ] **Step 1: Add differential full-state test**
+- [ ] **Step 1: Add all-32-GPR differential test**
 
-Initialize every GPR low/high half with distinct values, including nonzero GPR0 and aliasing-sensitive registers. Use the existing supported sequence:
+Initialize every GPR low/high half distinctly:
+
+```cpp
+R5900IrExecutionState initial{};
+for (std::size_t index = 0; index < initial.gpr.size(); ++index) {
+    initial.gpr[index].low64 =
+        0x0101010101010101ull * static_cast<std::uint64_t>(index + 1u);
+    initial.gpr[index].high64 =
+        0xf000000000000000ull | static_cast<std::uint64_t>(index);
+}
+initial.gpr[0] = {0xffffffffffffffffull, 0xffffffffffffffffull};
+initial.gpr[29].low64 = 0x1000u;
+```
+
+Use:
 
 ```cpp
 const std::vector<std::uint32_t> words = {
@@ -754,52 +935,63 @@ const std::vector<std::uint32_t> words = {
 };
 ```
 
-Set `block_options.max_instructions = words.size()` so exactly one native chunk is dispatched. Build reference IR independently with `decode_r5900()` + `lower_r5900_instruction()` and run `execute_r5900_ir()` on `expected`. Run dispatcher on `actual` with budget 1. Compare every `gpr[index].low64` and `high64`.
-
-Expect:
-
-- exact equality for all 32 GPRs;
-- GPR0 normalized to zero;
-- high64 preserved for current writes;
-- ADDIU aliasing preserved;
-- dispatcher result `BlockBudgetExhausted`, one block, four guest instructions.
-
-- [ ] **Step 2: Add mapped/non-executable and unmapped failure tests**
-
-Extend the ELF fixture helper to accept segment flags.
-
-- executable region is flags `5` (`PF_R | PF_X`);
-- non-executable mapped region uses flags `6` (`PF_R | PF_W`).
-
-Validate:
+Build independent reference IR:
 
 ```cpp
-expect(non_exec.reason == R5900DispatchStopReason::AnalysisFailure,
-       "non-executable fetch must map to analysis failure");
-expect(unmapped.reason == R5900DispatchStopReason::AnalysisFailure,
-       "unmapped fetch must map to analysis failure");
-expect(non_exec.blocks_executed == 0u && unmapped.blocks_executed == 0u,
-       "analysis failures must not consume block budget");
+std::vector<R5900IrInstruction> reference_ir;
+for (std::size_t index = 0; index < words.size(); ++index) {
+    const auto pc = base + static_cast<std::uint32_t>(index * 4u);
+    const auto lowered = lower_r5900_instruction(decode_r5900(words[index]), pc);
+    expect(lowered.ok(), "differential fixture must lower in reference path");
+    reference_ir.insert(reference_ir.end(),
+                        lowered.instructions.begin(), lowered.instructions.end());
+}
+
+auto expected = initial;
+auto actual = initial;
+expect(execute_r5900_ir(reference_ir, expected).ok(),
+       "reference executor must accept dispatcher differential IR");
 ```
 
-Assert diagnostic messages contain both the stage word `analysis` and the zero-padded guest PC string.
+Set analyzer `max_instructions = words.size()`, run dispatcher with budget 1, and compare every low/high half exactly. Expect `BlockBudgetExhausted`, one block, four instructions. This covers GPR0 normalization, high64 preservation, ADDIU aliasing, and native/reference equivalence.
 
-Also set `options.block_options.max_instructions = 0` in a dedicated dispatcher and verify the analyzer's invalid-instruction-limit error maps to `AnalysisFailure` without state mutation.
+- [ ] **Step 2: Add unmapped, non-executable, and analyzer-option failures**
 
-- [ ] **Step 3: Run the dispatcher suite and fix only contract violations**
+Create non-executable mapped memory with `make_memory({0u}, base, 6u)` and expect `AnalysisFailure`, zero execution, `next_pc == base`.
 
-Run:
+For unmapped failure, use a valid executable map at `base` and call `run(base + 0x1000u, state, 1u)`. Expect `AnalysisFailure`, zero execution, exact failing `next_pc`.
 
-```powershell
-cmake --build build --config Release --parallel
-ctest --test-dir build -C Release -R r5900_block_dispatcher_windows_tests --output-on-failure
+For invalid analyzer instruction limit:
+
+```cpp
+R5900BlockDispatcherOptions invalid_options{};
+invalid_options.block_options.max_instructions = 0u;
+R5900BlockDispatcher invalid_dispatcher(memory, invalid_options);
+const auto invalid = invalid_dispatcher.run(base, state, 1u);
+expect(invalid.reason == R5900DispatchStopReason::AnalysisFailure,
+       "zero analyzer instruction limit must map to analysis failure");
 ```
 
-Expected: PASS. If it fails, fix only dispatcher/spec mismatches; do not broaden the instruction set or add control-flow execution.
+For each analysis failure, assert `message.find("analysis") != std::string::npos` and the expected eight-digit hexadecimal PC substring is present.
 
-- [ ] **Step 4: Run full Windows regression exactly like CI**
+- [ ] **Step 3: Verify error atomicity after prior progress**
 
-Run:
+Use `max_instructions = 1` with one supported ADDIU at `base` and an unmapped sequential PC by making the executable segment contain exactly one word. Call `run(base, state, 2u)`. Expect:
+
+```cpp
+expect(result.reason == R5900DispatchStopReason::AnalysisFailure,
+       "later analysis failure must preserve earlier progress");
+expect(result.blocks_executed == 1u && result.instructions_executed == 1u,
+       "earlier native block must remain committed");
+expect(state.gpr[1].low64 == 1u,
+       "earlier state mutation must remain committed");
+expect(result.next_pc == base + 4u,
+       "later failure must report first unprocessed PC");
+```
+
+Do not add production-only failure injection for unreachable `LoweringFailure` or `CompileFailure`; the production code must still map those internal results correctly if they occur. This preserves YAGNI and the spec's “where practical” test language.
+
+- [ ] **Step 4: Run complete Windows regression**
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DB3R_BUILD_TESTS=ON
@@ -812,22 +1004,22 @@ ctest --test-dir build -C Release --output-on-failure
 Expected:
 
 - configure/build success;
-- all previous 27 CTest cases plus `r5900_block_dispatcher_windows_tests` pass (28 total unless another independent test was added meanwhile);
-- frame pacing telemetry remains green;
-- pacing probe still targets 120 Hz / 8.333 ms cadence.
+- all previous 27 tests plus dispatcher test pass, for 28 total unless the repository independently gained another test;
+- `frame_pacer_windows_tests` remains green;
+- pacing probe remains at 120 Hz / approximately 8.333 ms cadence.
 
-Commit the final test/code state:
+Commit final test/code state:
 
 ```bash
 git add src/recompiler/windows/r5900_block_dispatcher.cpp tests/r5900_block_dispatcher_windows_tests.cpp
 git commit -m "test: validate R5900 dispatcher semantics"
 ```
 
-- [ ] **Step 5: Verify the pushed commit with GitHub Actions**
+- [ ] **Step 5: Verify the exact feature commit in GitHub Actions**
 
-Use `.github/workflows/windows-ci.yml`, which runs Windows Server 2022, Visual Studio 17 2022 x64, Release build, full CTest, frame pacing telemetry, and the one-second pacing probe.
+The workflow `.github/workflows/windows-ci.yml` runs Windows Server 2022, Visual Studio 17 2022 x64, Release build, full CTest, frame pacing telemetry, and one-second pacing probe.
 
-Expected: workflow conclusion `success` on the exact feature-branch commit. Record the run ID and exact commit SHA for Task 6 documentation.
+Expected: conclusion `success` for the exact Task 5 head SHA. Record the workflow run ID and commit SHA for Task 6.
 
 ---
 
@@ -838,37 +1030,39 @@ Expected: workflow conclusion `success` on the exact feature-branch commit. Reco
 - Modify: `PROGRESS.md`
 
 **Interfaces:**
-- Consumes: green implementation and CI evidence from Task 5.
-- Produces: accurate project status without overstating guest execution capability.
+- Consumes: exact green CI run ID and SHA from Task 5.
+- Produces: accurate milestone status without overstating game execution.
 
-- [ ] **Step 1: Update README with the dispatcher milestone**
+- [ ] **Step 1: Update README capability statement**
 
-Add a concise section/status bullet stating that Windows now has a minimal R5900 native block dispatcher with:
+Add a concise status paragraph stating that Windows now has a minimal R5900 native block dispatcher providing:
 
-- CFG-driven supported-prefix selection;
-- NOP/ADDU/ADDIU/ORI current subset;
-- compile-on-demand;
-- native cache reuse;
-- guest-word fingerprint + exact-word invalidation;
-- explicit `next_pc`, stop reason, and block budget.
+```text
+CFG-driven supported-prefix selection
+NOP/ADDU/ADDIU/ORI current subset
+compile-on-demand
+native cache reuse
+guest-word FNV fingerprint + exact-word invalidation
+explicit next_pc, stop reason, and block budget
+```
 
-In the same paragraph state explicitly that branches/jumps/calls, delay slots, guest loads/stores, and real Burnout 3 ELF/game execution are not implemented by this milestone.
+The same paragraph must state that branches/jumps/calls, delay slots, guest loads/stores, and real Burnout 3 ELF/game execution are not implemented by this milestone.
 
-- [ ] **Step 2: Update PROGRESS with status and evidence**
+- [ ] **Step 2: Update PROGRESS with exact evidence**
 
-Add or update a row such as:
+Add/update the row:
 
 ```text
 R5900 native block dispatcher v0 | CI_VALIDATED
 ```
 
-Document the exact Task 5 green Windows CI run ID and commit SHA. State that the bridge proves:
+Record the exact Task 5 Windows CI run ID and head SHA. Describe the proven pipeline as:
 
 ```text
 guest memory -> CFG/basic block -> current IR -> x64 compile-on-demand -> native execute -> cache/reuse/invalidate
 ```
 
-Do not change graphics/audio/input/gameplay percentages based on this infrastructure-only milestone.
+Do not increase graphics, audio, input, menu, race, or gameplay completion based on this infrastructure milestone.
 
 - [ ] **Step 3: Commit documentation**
 
@@ -877,32 +1071,29 @@ git add README.md PROGRESS.md
 git commit -m "docs: record R5900 block dispatcher validation"
 ```
 
-- [ ] **Step 4: Run final CI on the documentation head**
+- [ ] **Step 4: Verify final documentation head CI**
 
-Wait only for the current GitHub Actions result synchronously in this execution flow; do not claim success until the run completes. Verify the exact docs-head SHA has Windows CI conclusion `success` and the full CTest suite passes.
-
-No new code changes are expected after this point unless final CI exposes a regression.
+Verify the exact documentation-head SHA has Windows CI conclusion `success`, with the full CTest suite green and pacing gates unchanged. Do not claim completion before this concrete result exists.
 
 - [ ] **Step 5: Final review checklist**
 
-Verify against the spec:
-
 ```text
-[ ] start_pc + exact-code cache validity
-[ ] FNV-1a + exact guest word comparison
+[ ] cache keyed by start_pc and validated by instruction count + FNV + exact words
+[ ] guest words re-read before cache validation
 [ ] automatic stale-code recompilation
 [ ] no stale native execution
-[ ] max_blocks budget counts native executions only
+[ ] max_blocks counts native executions only
 [ ] semantic boundary beats budget exhaustion
 [ ] next_pc is first unexecuted guest PC
 [ ] no branch/jump/call/trap/delay-slot execution
 [ ] no guest load/store execution
-[ ] GPR semantics match reference executor
+[ ] GPR semantics match reference executor bit-for-bit
 [ ] dispatcher allocates no executable pages itself
-[ ] clear_cache destroys native entries via existing RAII
-[ ] analysis/lowering/compile failures never execute the failing candidate
+[ ] clear_cache destroys entries through existing backend RAII
+[ ] candidate failures do not execute the failing candidate
+[ ] earlier successful blocks remain committed if a later candidate fails
 [ ] all Windows tests green
-[ ] README/PROGRESS limitations are explicit
+[ ] README/PROGRESS state limitations explicitly
 ```
 
-The branch is then ready for code review/integration, but it must not be described as real Burnout 3 guest execution or a completed recompiler.
+After this checklist passes, the branch is ready for code review/integration. It must still be described as a straight-line native-dispatch infrastructure milestone, not real Burnout 3 guest execution and not a completed recompiler.
