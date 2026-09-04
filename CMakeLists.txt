@@ -55,6 +55,7 @@ endif()
 add_library(b3r_tools
   src/tools/burnout3_analyze_options.cpp
   src/tools/burnout3_analyze_app.cpp
+  src/tools/burnout3_pacing_probe_options.cpp
 )
 target_include_directories(b3r_tools PUBLIC src)
 target_link_libraries(b3r_tools PUBLIC b3r_analysis)
