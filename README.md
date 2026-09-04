@@ -22,7 +22,7 @@ The current source tree contains:
 - portable/unit tests plus Windows-specific integration tests;
 - Windows CI pinned to Visual Studio 2022.
 
-The initial IR is deliberately non-executable: unsupported guest instructions fail lowering explicitly, and there is no x86-64 backend or guest-code execution path yet.
+The initial IR is deliberately non-executable. Current integer lowering records low-64-bit writes that preserve the upper 64 bits of the EE's 128-bit GPRs; side-effect-free writes to GPR zero are discarded while retaining guest PC/raw provenance. Unsupported guest instructions fail lowering explicitly, and there is no x86-64 backend or guest-code execution path yet.
 
 The project **does not yet** contain a working static/binary code generator, translated Burnout 3 game code, graphics, audio, input, game initialization, menus, or gameplay.
 
