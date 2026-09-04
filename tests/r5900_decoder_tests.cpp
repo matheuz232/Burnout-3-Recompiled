@@ -37,6 +37,32 @@ constexpr std::uint32_t i_type(std::uint8_t op, std::uint8_t rs, std::uint8_t rt
            imm;
 }
 
+constexpr std::uint32_t mmi_type(std::uint8_t rs,
+                                 std::uint8_t rt,
+                                 std::uint8_t rd,
+                                 std::uint8_t sa,
+                                 std::uint8_t funct) {
+    return (0x1cu << 26u) |
+           (static_cast<std::uint32_t>(rs) << 21u) |
+           (static_cast<std::uint32_t>(rt) << 16u) |
+           (static_cast<std::uint32_t>(rd) << 11u) |
+           (static_cast<std::uint32_t>(sa) << 6u) |
+           funct;
+}
+
+constexpr std::uint32_t cop1_type(std::uint8_t rs,
+                                  std::uint8_t rt,
+                                  std::uint8_t rd,
+                                  std::uint8_t sa,
+                                  std::uint8_t funct) {
+    return (0x11u << 26u) |
+           (static_cast<std::uint32_t>(rs) << 21u) |
+           (static_cast<std::uint32_t>(rt) << 16u) |
+           (static_cast<std::uint32_t>(rd) << 11u) |
+           (static_cast<std::uint32_t>(sa) << 6u) |
+           funct;
+}
+
 } // namespace
 
 int main() {
@@ -127,7 +153,49 @@ int main() {
     }
 
     {
-        const auto decoded = decode_r5900(0x70000000u); // MMI primary opcode, intentionally not decoded yet
+        const auto sync = decode_r5900(r_type(0, 0, 0, 16, 0x0f));
+        expect(sync.instruction == R5900Instruction::Sync, "SPECIAL/SYNC must decode");
+        expect(sync.instruction_class == R5900InstructionClass::Alu,
+               "SYNC must remain a non-terminating analysis instruction");
+        expect(std::string_view(r5900_instruction_name(sync.instruction)) == "SYNC",
+               "SYNC name must be stable");
+    }
+
+    {
+        const auto mtsah = decode_r5900(i_type(0x01, 0, 0x19, 0));
+        expect(mtsah.instruction == R5900Instruction::Mtsah, "REGIMM/MTSAH must decode");
+        expect(mtsah.instruction_class == R5900InstructionClass::Alu,
+               "MTSAH must not terminate static control flow");
+    }
+
+    {
+        const auto mthi1 = decode_r5900(mmi_type(0, 0, 0, 0, 0x11));
+        const auto mtlo1 = decode_r5900(mmi_type(0, 0, 0, 0, 0x13));
+        const auto padduw = decode_r5900(mmi_type(0, 0, 7, 0x10, 0x28));
+        expect(mthi1.instruction == R5900Instruction::Mthi1, "MMI/MTHI1 must decode");
+        expect(mtlo1.instruction == R5900Instruction::Mtlo1, "MMI/MTLO1 must decode");
+        expect(padduw.instruction == R5900Instruction::Padduw, "MMI1/PADDUW must decode");
+        expect(padduw.rd == 7u && padduw.sa == 0x10u,
+               "MMI1 register/sub-op fields must remain available");
+        expect(std::string_view(r5900_instruction_name(padduw.instruction)) == "PADDUW",
+               "PADDUW name must be stable");
+    }
+
+    {
+        const auto mtc1 = decode_r5900(cop1_type(0x04, 3, 5, 0, 0));
+        const auto ctc1 = decode_r5900(cop1_type(0x06, 4, 31, 0, 0));
+        const auto adda_s = decode_r5900(cop1_type(0x10, 1, 2, 0, 0x18));
+        expect(mtc1.instruction == R5900Instruction::Mtc1, "COP1/MTC1 must decode");
+        expect(ctc1.instruction == R5900Instruction::Ctc1, "COP1/CTC1 must decode");
+        expect(adda_s.instruction == R5900Instruction::AddaS, "COP1.S/ADDA.S must decode");
+        expect(mtc1.rt == 3u && mtc1.rd == 5u,
+               "COP1 transfer register fields must remain available");
+        expect(std::string_view(r5900_instruction_name(adda_s.instruction)) == "ADDA.S",
+               "ADDA.S name must be stable");
+    }
+
+    {
+        const auto decoded = decode_r5900(0x70000000u); // unsupported MMI sub-op stays explicit
         expect(decoded.instruction == R5900Instruction::Unknown, "unsupported MMI sub-op must remain Unknown");
         expect(decoded.raw == 0x70000000u, "unknown instruction must retain raw word");
     }
