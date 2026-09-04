@@ -102,6 +102,15 @@ if(WIN32)
     target_compile_options(b3r_windows_runtime PRIVATE /W4 /permissive- /Zc:__cplusplus)
   endif()
 
+  add_executable(Burnout3PacingProbe
+    src/platform/windows/burnout3_pacing_probe_app.cpp
+    src/platform/windows/burnout3_pacing_probe_main.cpp
+  )
+  target_link_libraries(Burnout3PacingProbe PRIVATE b3r_windows_runtime b3r_tools)
+  if(MSVC)
+    target_compile_options(Burnout3PacingProbe PRIVATE /W4 /permissive- /Zc:__cplusplus)
+  endif()
+
   add_executable(Burnout3Recompiled_Test WIN32
     src/platform/windows/win_main.cpp
   )
