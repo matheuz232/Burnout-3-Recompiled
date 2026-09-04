@@ -103,6 +103,7 @@ if(WIN32)
 
   add_library(b3r_pacing_probe STATIC
     src/tools/burnout3_pacing_probe_options.cpp
+    src/tools/burnout3_pacing_probe_app.cpp
   )
   target_include_directories(b3r_pacing_probe PUBLIC src)
   target_link_libraries(b3r_pacing_probe PUBLIC b3r_windows_runtime)
