@@ -211,6 +211,8 @@ if(B3R_BUILD_TESTS)
     add_test(NAME burnout3_pacing_probe_windows_tests COMMAND burnout3_pacing_probe_windows_tests)
     set_tests_properties(burnout3_pacing_probe_windows_tests PROPERTIES TIMEOUT 10)
 
+    add_test(NAME burnout3_pacing_probe_help COMMAND Burnout3PacingProbe --help)
+
     add_executable(win32_window_smoke_tests tests/win32_window_smoke_tests.cpp)
     target_link_libraries(win32_window_smoke_tests PRIVATE b3r_windows_runtime)
     if(MSVC)
