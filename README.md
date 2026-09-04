@@ -16,13 +16,14 @@ The current source tree contains:
 - PT_LOAD-backed guest memory mapping;
 - initial R5900 decoder;
 - initial provenance-carrying R5900 IR v0 with explicit lowering for NOP, ADDU, ADDIU, and ORI;
+- deterministic R5900 IR reference execution for the current `Nop`, `AddWordSignExtend`, and `Or64` subset;
 - conservative basic-block and reachable-CFG analysis;
 - deterministic analysis reports;
 - `Burnout3Analyze`, a console tool for analyzing an externally supplied PS2 ELF without executing guest code;
 - portable/unit tests plus Windows-specific integration tests;
 - Windows CI pinned to Visual Studio 2022.
 
-The initial IR is deliberately non-executable. Current integer lowering records low-64-bit writes that preserve the upper 64 bits of the EE's 128-bit GPRs; side-effect-free writes to GPR zero are discarded while retaining guest PC/raw provenance. Unsupported guest instructions fail lowering explicitly, and there is no x86-64 backend or guest-code execution path yet.
+The initial IR now has a deterministic reference executor for the current `Nop`, `AddWordSignExtend`, and `Or64` subset. It models all 32 EE GPRs as 128-bit values split into low/high 64-bit halves, preserves upper halves for current integer writes, enforces GPR zero, and rejects malformed IR explicitly. This executor is a semantic oracle only: there is still no x86-64 backend, native guest-code execution path, Burnout 3 boot, graphics, audio, or input implementation.
 
 The project **does not yet** contain a working static/binary code generator, translated Burnout 3 game code, graphics, audio, input, game initialization, menus, or gameplay.
 
