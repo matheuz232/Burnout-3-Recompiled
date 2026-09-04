@@ -207,6 +207,10 @@ if(B3R_BUILD_TESTS)
   add_test(NAME burnout3_analyze_help COMMAND Burnout3Analyze --help)
 
   if(WIN32)
+    add_executable(r5900_x64_backend_windows_tests tests/r5900_x64_backend_windows_tests.cpp)
+    target_link_libraries(r5900_x64_backend_windows_tests PRIVATE b3r_recompiler)
+    add_test(NAME r5900_x64_backend_windows_tests COMMAND r5900_x64_backend_windows_tests)
+
     add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
     target_link_libraries(qpc_clock_windows_tests PRIVATE b3r_windows_runtime)
     add_test(NAME qpc_clock_windows_tests COMMAND qpc_clock_windows_tests)
