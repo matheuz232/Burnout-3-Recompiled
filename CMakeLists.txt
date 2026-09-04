@@ -85,6 +85,19 @@ else()
 endif()
 
 if(WIN32)
+  if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "R5900 x86-64 backend requires 64-bit Windows")
+  endif()
+
+  add_library(b3r_recompiler_x64 STATIC
+    src/recompiler/windows/r5900_x64_backend.cpp
+  )
+  target_include_directories(b3r_recompiler_x64 PUBLIC src)
+  target_link_libraries(b3r_recompiler_x64 PUBLIC b3r_recompiler)
+  if(MSVC)
+    target_compile_options(b3r_recompiler_x64 PRIVATE /W4 /permissive- /Zc:__cplusplus)
+  endif()
+
   add_library(b3r_windows_runtime STATIC
     src/platform/windows/crash_handler.cpp
     src/platform/windows/qpc_clock.cpp
@@ -208,7 +221,7 @@ if(B3R_BUILD_TESTS)
 
   if(WIN32)
     add_executable(r5900_x64_backend_windows_tests tests/r5900_x64_backend_windows_tests.cpp)
-    target_link_libraries(r5900_x64_backend_windows_tests PRIVATE b3r_recompiler)
+    target_link_libraries(r5900_x64_backend_windows_tests PRIVATE b3r_recompiler_x64)
     add_test(NAME r5900_x64_backend_windows_tests COMMAND r5900_x64_backend_windows_tests)
 
     add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
