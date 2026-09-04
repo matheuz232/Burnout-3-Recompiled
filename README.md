@@ -18,7 +18,8 @@ The current source tree contains:
 - initial provenance-carrying R5900 IR v0 with explicit lowering for NOP, ADDU, ADDIU, and ORI;
 - deterministic R5900 IR reference execution for the current `Nop`, `AddWordSignExtend`, and `Or64` subset;
 - an initial Windows x86-64 machine-code backend for the same IR subset, with executable-page ownership and W^X allocation/protection;
-- differential Windows tests comparing native x86-64 execution against the reference executor, including a synthetic decoder -> IR -> native execution path;
+- an initial Windows R5900 native block dispatcher that analyzes straight-line guest prefixes, compiles them on demand, executes them through the x86-64 backend, applies a block budget, caches native blocks by guest PC, and rejects stale cache entries after guest-code changes;
+- differential Windows tests comparing native x86-64 execution against the reference executor, including synthetic decoder -> IR -> native and analyzer -> dispatcher -> native execution paths;
 - conservative basic-block and reachable-CFG analysis;
 - deterministic analysis reports;
 - `Burnout3Analyze`, a console tool for analyzing an externally supplied PS2 ELF without executing guest code;
@@ -29,7 +30,9 @@ The initial IR has a deterministic reference executor for `Nop`, `AddWordSignExt
 
 A first Windows x86-64 backend now compiles that same IR subset into callable native machine code. The generated blocks operate on the explicit EE GPR state, preserve `high64` for the current integer writes, normalize GPR zero, support full 64-bit `Or64` immediates, and are differentially checked against the reference executor. Executable memory is allocated writable, populated, changed to execute/read, and instruction-cache-flushed before execution.
 
-This is still a narrow synthetic backend milestone. The project **does not yet** execute real Burnout 3 guest basic blocks from an external game ELF, implement guest memory loads/stores or control flow in the native backend, boot the game, or provide graphics, audio, input, menus, or gameplay.
+On Windows, `R5900BlockDispatcher` now bridges the existing basic-block analyzer to the current lowering and x86-64 backend for straight-line NOP/ADDU/ADDIU/ORI prefixes. It supports bounded multi-block sequential dispatch, per-run progress/cache accounting, exact guest-word cache validation using a deterministic FNV-1a fingerprint plus byte-exact word comparison, automatic recompilation of changed supported code, and fail-fast stops before control flow, traps, or unsupported instructions. Architectural delay slots are deliberately not executed by dispatcher v0.
+
+This remains a narrow native-execution milestone. The project **has not yet validated real Burnout 3 guest basic blocks from an externally supplied game ELF**, does not execute native branch/jump/call control flow or delay slots, does not implement guest memory loads/stores in the native backend, and does not boot the game or provide graphics, audio, input, menus, or gameplay.
 
 ## Legal data policy
 
