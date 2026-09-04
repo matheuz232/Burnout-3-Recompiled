@@ -1,0 +1,42 @@
+Burnout3PacingProbe - Windows x64
+================================
+
+This package contains a standalone frame-pacing capture tool for the Burnout 3 native-port project.
+It does not load, emulate, analyze, or execute PS2 game code.
+
+The probe uses the same WindowsFramePacer and QPC timing path as the project runtime and is fixed at 120 Hz.
+There is no option to change the target frame rate.
+
+Default capture (60 seconds = 7200 frame intervals):
+
+  .\Burnout3PacingProbe.exe --output "pacing-60s.txt"
+
+Explicit 60-second capture:
+
+  .\Burnout3PacingProbe.exe --seconds 60 --output "pacing-60s.txt"
+
+Longer 5-minute capture:
+
+  .\Burnout3PacingProbe.exe --seconds 300 --output "pacing-300s.txt"
+
+Write the report directly to the console:
+
+  .\Burnout3PacingProbe.exe --seconds 60
+
+Show command-line help:
+
+  .\Burnout3PacingProbe.exe --help
+
+The report includes:
+- fixed TARGET_HZ 120 metadata;
+- requested duration and frame count;
+- sample count;
+- mean/min/max frame interval;
+- population standard deviation;
+- P50/P95/P99 intervals;
+- counts above the exact 120 Hz period and above 9/10/12 ms;
+- whether the high-resolution Windows timer path was active.
+
+The probe intentionally does not declare timing quality PASS or FAIL. Hosted CI and ordinary desktops are not hard real-time systems, and a short CI smoke is not a physical-desktop benchmark.
+
+For Test Build 0.1 validation, run a 60-second or longer capture during a normal Windows 10/11 desktop session, keep the generated text report, and share that report for evidence-based review.
