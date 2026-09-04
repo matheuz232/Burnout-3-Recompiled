@@ -18,6 +18,8 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure
       - name: Frame pacing telemetry
         run: .\build\Release\frame_pacer_windows_tests.exe
+      - name: Pacing probe smoke
+        run: .\build\Release\Burnout3PacingProbe.exe --seconds 1
       - name: Stage analyzer package
         shell: pwsh
         run: |
@@ -34,10 +36,33 @@ jobs:
           if (-not (Test-Path $exe -PathType Leaf)) { throw "Burnout3Analyze.exe missing from staged package" }
           if ((Get-Item $exe).Length -le 0) { throw "Burnout3Analyze.exe is empty" }
           if (-not (Test-Path $usage -PathType Leaf)) { throw "ANALYZE-USAGE.txt missing from staged package" }
+      - name: Stage pacing probe package
+        shell: pwsh
+        run: |
+          $package = "artifact\Burnout3PacingProbe-windows-x64"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item ".\build\Release\Burnout3PacingProbe.exe" "$package\Burnout3PacingProbe.exe"
+          Copy-Item ".\docs\PACING-PROBE-USAGE.txt" "$package\PACING-PROBE-USAGE.txt"
+      - name: Validate pacing probe package
+        shell: pwsh
+        run: |
+          $package = "artifact\Burnout3PacingProbe-windows-x64"
+          $exe = Join-Path $package "Burnout3PacingProbe.exe"
+          $usage = Join-Path $package "PACING-PROBE-USAGE.txt"
+          if (-not (Test-Path $exe -PathType Leaf)) { throw "Burnout3PacingProbe.exe missing from staged package" }
+          if ((Get-Item $exe).Length -le 0) { throw "Burnout3PacingProbe.exe is empty" }
+          if (-not (Test-Path $usage -PathType Leaf)) { throw "PACING-PROBE-USAGE.txt missing from staged package" }
       - name: Upload analyzer artifact
         if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         uses: actions/upload-artifact@v4
         with:
           name: Burnout3Analyze-windows-x64
           path: artifact/Burnout3Analyze-windows-x64
+          if-no-files-found: error
+      - name: Upload pacing probe artifact
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        uses: actions/upload-artifact@v4
+        with:
+          name: Burnout3PacingProbe-windows-x64
+          path: artifact/Burnout3PacingProbe-windows-x64
           if-no-files-found: error
