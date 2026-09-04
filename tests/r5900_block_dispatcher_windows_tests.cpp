@@ -1,4 +1,5 @@
 #include "recompiler/ps2_elf.h"
+#include "recompiler/r5900_ir.h"
 #include "recompiler/windows/r5900_block_dispatcher.h"
 #include "runtime/ps2_memory_map.h"
 
@@ -6,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -21,6 +23,17 @@ using Bytes = std::vector<std::uint8_t>;
 void expect(bool condition, const char* message) {
     if (!condition) {
         fail(message);
+    }
+}
+
+void expect_states_equal(const b3r::recompiler::R5900IrExecutionState& expected,
+                         const b3r::recompiler::R5900IrExecutionState& actual,
+                         const char* message) {
+    for (std::size_t index = 0; index < expected.gpr.size(); ++index) {
+        if (expected.gpr[index].low64 != actual.gpr[index].low64 ||
+            expected.gpr[index].high64 != actual.gpr[index].high64) {
+            fail(message);
+        }
     }
 }
 
@@ -130,6 +143,9 @@ int main() {
         expect(zero_budget.cache_hits == 0u && zero_budget.cache_misses == 0u &&
                    zero_budget.recompilations == 0u,
                "zero block budget must not touch cache accounting");
+        expect(zero_budget.message.find("budget") != std::string::npos &&
+                   zero_budget.message.find("0x00100000") != std::string::npos,
+               "budget failure diagnostic must include stage and guest PC");
         expect(state.gpr[1].low64 == 0x1122334455667788ull &&
                    state.gpr[1].high64 == 0x8877665544332211ull,
                "zero block budget must not mutate state");
@@ -396,6 +412,110 @@ int main() {
                "unsupported mutated code must not touch cache accounting");
         expect(third_state.gpr[1].low64 == 0x55u,
                "old cached native block must not execute for unsupported code");
+    }
+
+    {
+        const std::vector<std::uint32_t> words = {
+            0u,
+            r_type(9, 10, 8, 0, 0x21),
+            i_type(0x09, 29, 29, 0xfff0),
+            i_type(0x0d, 4, 5, 0xff00),
+        };
+
+        R5900IrExecutionState initial{};
+        for (std::size_t index = 0; index < initial.gpr.size(); ++index) {
+            initial.gpr[index].low64 =
+                0x0101010101010101ull * static_cast<std::uint64_t>(index + 1u);
+            initial.gpr[index].high64 =
+                0xf000000000000000ull | static_cast<std::uint64_t>(index);
+        }
+        initial.gpr[0] = {0xffffffffffffffffull, 0xffffffffffffffffull};
+        initial.gpr[29].low64 = 0x1000u;
+
+        std::vector<R5900IrInstruction> reference_ir{};
+        for (std::size_t index = 0; index < words.size(); ++index) {
+            const auto pc = base + static_cast<std::uint32_t>(index * 4u);
+            const auto lowered = lower_r5900_instruction(decode_r5900(words[index]), pc);
+            expect(lowered.ok(), "differential fixture must lower in reference path");
+            reference_ir.insert(reference_ir.end(),
+                                lowered.instructions.begin(),
+                                lowered.instructions.end());
+        }
+
+        auto expected = initial;
+        auto actual = initial;
+        expect(execute_r5900_ir(reference_ir, expected).ok(),
+               "reference executor must accept dispatcher differential IR");
+
+        auto memory = make_memory(words, base);
+        R5900BlockDispatcherOptions options{};
+        options.block_options.max_instructions = words.size();
+        R5900BlockDispatcher dispatcher(memory, options);
+        const auto result = dispatcher.run(base, actual, 1u);
+        expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted &&
+                   result.blocks_executed == 1u && result.instructions_executed == words.size(),
+               "differential block must execute exactly once");
+        expect_states_equal(expected, actual,
+                            "dispatcher native state must match reference executor for all GPR halves");
+    }
+
+    {
+        auto memory = make_memory({0u}, base, 6u);
+        R5900BlockDispatcher dispatcher(memory);
+        R5900IrExecutionState state{};
+        const auto result = dispatcher.run(base, state, 1u);
+        expect(result.reason == R5900DispatchStopReason::AnalysisFailure &&
+                   result.next_pc == base && result.blocks_executed == 0u,
+               "non-executable instruction fetch must fail analysis without progress");
+        expect(result.message.find("analysis") != std::string::npos &&
+                   result.message.find("0x00100000") != std::string::npos,
+               "non-executable diagnostic must include stage and guest PC");
+    }
+
+    {
+        auto memory = make_memory({0u}, base);
+        R5900BlockDispatcher dispatcher(memory);
+        R5900IrExecutionState state{};
+        const auto result = dispatcher.run(base + 0x1000u, state, 1u);
+        expect(result.reason == R5900DispatchStopReason::AnalysisFailure &&
+                   result.next_pc == base + 0x1000u && result.blocks_executed == 0u,
+               "unmapped instruction fetch must fail without progress");
+        expect(result.message.find("analysis") != std::string::npos &&
+                   result.message.find("0x00101000") != std::string::npos,
+               "unmapped diagnostic must include exact guest PC");
+    }
+
+    {
+        auto memory = make_memory({0u}, base);
+        R5900BlockDispatcherOptions options{};
+        options.block_options.max_instructions = 0u;
+        R5900BlockDispatcher dispatcher(memory, options);
+        R5900IrExecutionState state{};
+        const auto result = dispatcher.run(base, state, 1u);
+        expect(result.reason == R5900DispatchStopReason::AnalysisFailure &&
+                   result.blocks_executed == 0u && result.next_pc == base,
+               "invalid analyzer instruction limit must map to analysis failure");
+        expect(result.message.find("analysis") != std::string::npos &&
+                   result.message.find("0x00100000") != std::string::npos,
+               "analyzer option failure must include stage and PC");
+    }
+
+    {
+        const auto addiu_one = i_type(0x09, 0, 1, 1u);
+        auto memory = make_memory({addiu_one}, base);
+        R5900BlockDispatcherOptions options{};
+        options.block_options.max_instructions = 1u;
+        R5900BlockDispatcher dispatcher(memory, options);
+        R5900IrExecutionState state{};
+        const auto result = dispatcher.run(base, state, 2u);
+        expect(result.reason == R5900DispatchStopReason::AnalysisFailure,
+               "later unmapped analysis must fail after earlier progress");
+        expect(result.blocks_executed == 1u && result.instructions_executed == 1u,
+               "earlier native progress must remain committed");
+        expect(state.gpr[1].low64 == 1u,
+               "earlier state mutation must remain committed");
+        expect(result.next_pc == base + 4u,
+               "later analysis failure must report first unprocessed PC");
     }
 
     std::cout << "r5900_block_dispatcher_windows_tests: PASS\n";
