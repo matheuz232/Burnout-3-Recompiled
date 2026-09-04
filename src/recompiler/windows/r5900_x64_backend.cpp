@@ -159,8 +159,9 @@ R5900X64CompileResult compile_r5900_ir_x64(
                        "FlushInstructionCache failed for R5900 x64 block");
     }
 
+    R5900X64CompiledBlock block(code, bytes.size());
     R5900X64CompileResult result{};
-    result.block.emplace(code, bytes.size());
+    result.block.emplace(std::move(block));
     return result;
 }
 
