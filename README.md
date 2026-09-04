@@ -17,15 +17,19 @@ The current source tree contains:
 - initial R5900 decoder;
 - initial provenance-carrying R5900 IR v0 with explicit lowering for NOP, ADDU, ADDIU, and ORI;
 - deterministic R5900 IR reference execution for the current `Nop`, `AddWordSignExtend`, and `Or64` subset;
+- an initial Windows x86-64 machine-code backend for the same IR subset, with executable-page ownership and W^X allocation/protection;
+- differential Windows tests comparing native x86-64 execution against the reference executor, including a synthetic decoder -> IR -> native execution path;
 - conservative basic-block and reachable-CFG analysis;
 - deterministic analysis reports;
 - `Burnout3Analyze`, a console tool for analyzing an externally supplied PS2 ELF without executing guest code;
 - portable/unit tests plus Windows-specific integration tests;
 - Windows CI pinned to Visual Studio 2022.
 
-The initial IR now has a deterministic reference executor for the current `Nop`, `AddWordSignExtend`, and `Or64` subset. It models all 32 EE GPRs as 128-bit values split into low/high 64-bit halves, preserves upper halves for current integer writes, enforces GPR zero, and rejects malformed IR explicitly. This executor is a semantic oracle only: there is still no x86-64 backend, native guest-code execution path, Burnout 3 boot, graphics, audio, or input implementation.
+The initial IR has a deterministic reference executor for `Nop`, `AddWordSignExtend`, and `Or64`. It models all 32 EE GPRs as 128-bit values split into low/high 64-bit halves, preserves upper halves for current integer writes, enforces GPR zero, and rejects malformed IR explicitly.
 
-The project **does not yet** contain a working static/binary code generator, translated Burnout 3 game code, graphics, audio, input, game initialization, menus, or gameplay.
+A first Windows x86-64 backend now compiles that same IR subset into callable native machine code. The generated blocks operate on the explicit EE GPR state, preserve `high64` for the current integer writes, normalize GPR zero, support full 64-bit `Or64` immediates, and are differentially checked against the reference executor. Executable memory is allocated writable, populated, changed to execute/read, and instruction-cache-flushed before execution.
+
+This is still a narrow synthetic backend milestone. The project **does not yet** execute real Burnout 3 guest basic blocks from an external game ELF, implement guest memory loads/stores or control flow in the native backend, boot the game, or provide graphics, audio, input, menus, or gameplay.
 
 ## Legal data policy
 
@@ -36,22 +40,22 @@ No proprietary Burnout 3 executable, assets, audio, textures, symbols, dumps, or
 After a Release build:
 
 ```powershell
-Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --output "burnout3-analysis.txt"
+Burnout3Analyze.exe --elf "D:\\Games\\Burnout3\\SLUS_210.50" --output "burnout3-analysis.txt"
 ```
 
 To write the report directly to the console:
 
 ```powershell
-Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50"
+Burnout3Analyze.exe --elf "D:\\Games\\Burnout3\\SLUS_210.50"
 ```
 
 The reachable-CFG worklist is bounded. The default is 4096 blocks and can be overridden explicitly:
 
 ```powershell
-Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --max-blocks 8192
+Burnout3Analyze.exe --elf "D:\\Games\\Burnout3\\SLUS_210.50" --max-blocks 8192
 ```
 
-This tool performs static analysis only. It does not execute PS2 instructions, emulate a PS2, infer register-indirect targets, or recompile guest code yet. See `docs/ANALYSIS_TOOL.md` for the output contract and current limitations.
+This tool performs static analysis only. It does not execute PS2 instructions, emulate a PS2, infer register-indirect targets, or invoke the native x86-64 recompilation backend. See `docs/ANALYSIS_TOOL.md` for the output contract and current limitations.
 
 ## Build on Windows 10/11 x64
 
