@@ -1,5 +1,6 @@
 #include "recompiler/windows/r5900_x64_backend.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <type_traits>
@@ -18,6 +19,34 @@ void expect(bool condition, const char* message) {
     if (!condition) {
         fail(message);
     }
+}
+
+R5900IrOperand gpr(std::uint8_t index) {
+    R5900IrOperand operand{};
+    operand.kind = R5900IrOperandKind::Gpr;
+    operand.gpr_index = index;
+    return operand;
+}
+
+R5900IrOperand immediate(std::int64_t value) {
+    R5900IrOperand operand{};
+    operand.kind = R5900IrOperandKind::Immediate;
+    operand.immediate = value;
+    return operand;
+}
+
+R5900IrInstruction write_ir(R5900IrOpcode opcode,
+                            std::uint8_t destination,
+                            R5900IrOperand lhs,
+                            R5900IrOperand rhs,
+                            std::uint32_t guest_pc) {
+    R5900IrInstruction ir{};
+    ir.guest_pc = guest_pc;
+    ir.opcode = opcode;
+    ir.destination = R5900IrRegister{destination};
+    ir.write_mode = R5900IrGprWriteMode::Low64PreserveUpper64;
+    ir.inputs = {lhs, rhs};
+    return ir;
 }
 
 } // namespace
@@ -62,6 +91,64 @@ int main() {
         expect(state.gpr[7].low64 == 0x0123456789abcdefull &&
                    state.gpr[7].high64 == 0xfedcba9876543210ull,
                "native Nop must preserve GPR state");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[9].low64 = 5u;
+        state.gpr[10].low64 = 7u;
+        state.gpr[8].high64 = 0x1111222233334444ull;
+
+        const auto ir = write_ir(
+            R5900IrOpcode::AddWordSignExtend, 8, gpr(9), gpr(10), 0x00103100u);
+        auto compiled = compile_r5900_ir_x64({ir});
+        expect(compiled.ok() && compiled.block.has_value(), "ADDU-style IR must compile");
+        compiled.block->execute(state);
+        expect(state.gpr[8].low64 == 12u, "native word add must produce positive result");
+        expect(state.gpr[8].high64 == 0x1111222233334444ull,
+               "native word add must preserve high64");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[1].low64 = 0x000000007fffffffull;
+        state.gpr[2].low64 = 1u;
+
+        const auto ir = write_ir(
+            R5900IrOpcode::AddWordSignExtend, 3, gpr(1), gpr(2), 0x00103104u);
+        auto compiled = compile_r5900_ir_x64({ir});
+        expect(compiled.ok() && compiled.block.has_value(), "negative word result IR must compile");
+        compiled.block->execute(state);
+        expect(state.gpr[3].low64 == 0xffffffff80000000ull,
+               "native word add must sign-extend negative 32-bit result");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[1].low64 = 0x00000000ffffffffull;
+
+        const auto ir = write_ir(
+            R5900IrOpcode::AddWordSignExtend, 2, gpr(1), immediate(1), 0x00103108u);
+        auto compiled = compile_r5900_ir_x64({ir});
+        expect(compiled.ok() && compiled.block.has_value(), "wrapping word add IR must compile");
+        compiled.block->execute(state);
+        expect(state.gpr[2].low64 == 0u, "native word add must wrap modulo 2^32");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[29].low64 = 0x1000u;
+        state.gpr[29].high64 = 0xaaaabbbbccccddddull;
+
+        const auto ir = write_ir(
+            R5900IrOpcode::AddWordSignExtend, 29, gpr(29), immediate(-16), 0x0010310cu);
+        auto compiled = compile_r5900_ir_x64({ir});
+        expect(compiled.ok() && compiled.block.has_value(), "ADDIU-style aliasing IR must compile");
+        compiled.block->execute(state);
+        expect(state.gpr[29].low64 == 0x0ff0u,
+               "native ADDIU-style add must support source/destination aliasing");
+        expect(state.gpr[29].high64 == 0xaaaabbbbccccddddull,
+               "native ADDIU-style add must preserve high64");
     }
 
     std::cout << "r5900_x64_backend_windows_tests: PASS\n";
