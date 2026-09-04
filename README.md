@@ -15,11 +15,14 @@ The current source tree contains:
 - validated PS2 ELF32/MIPS structural loading;
 - PT_LOAD-backed guest memory mapping;
 - initial R5900 decoder;
+- initial provenance-carrying R5900 IR v0 with explicit lowering for NOP, ADDU, ADDIU, and ORI;
 - conservative basic-block and reachable-CFG analysis;
 - deterministic analysis reports;
 - `Burnout3Analyze`, a console tool for analyzing an externally supplied PS2 ELF without executing guest code;
 - portable/unit tests plus Windows-specific integration tests;
 - Windows CI pinned to Visual Studio 2022.
+
+The initial IR is deliberately non-executable: unsupported guest instructions fail lowering explicitly, and there is no x86-64 backend or guest-code execution path yet.
 
 The project **does not yet** contain a working static/binary code generator, translated Burnout 3 game code, graphics, audio, input, game initialization, menus, or gameplay.
 
