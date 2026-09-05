@@ -1,0 +1,246 @@
+name: One-shot R5900 dispatcher GREEN patch
+
+on:
+  push:
+    branches:
+      - feature/r5900-direct-jump-call-v0
+    paths:
+      - .github/workflows/one-shot-r5900-dispatcher-green.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/r5900-direct-jump-call-v0
+          fetch-depth: 0
+
+      - name: Patch dispatcher production
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/recompiler/windows/r5900_block_dispatcher.cpp")
+          text = path.read_text(encoding="utf-8")
+
+          old_detection = (
+              "        const auto& block = *analyzed.block;\n"
+              "        const bool has_supported_beq =\n"
+              "            block.end_kind == analysis::R5900BlockEndKind::ConditionalBranch &&\n"
+              "            !block.instructions.empty() &&\n"
+              "            block.instructions.back().decoded.instruction == R5900Instruction::Beq;\n\n"
+              "        const analysis::R5900InstructionSite* beq_site =\n"
+              "            has_supported_beq ? &block.instructions.back() : nullptr;\n"
+          )
+          new_detection = (
+              "        const auto& block = *analyzed.block;\n"
+              "        const bool has_supported_beq =\n"
+              "            block.end_kind == analysis::R5900BlockEndKind::ConditionalBranch &&\n"
+              "            !block.instructions.empty() &&\n"
+              "            block.instructions.back().decoded.instruction == R5900Instruction::Beq;\n"
+              "        const bool has_supported_j =\n"
+              "            block.end_kind == analysis::R5900BlockEndKind::DirectJump &&\n"
+              "            !block.instructions.empty() &&\n"
+              "            block.instructions.back().decoded.instruction == R5900Instruction::J;\n"
+              "        const bool has_supported_jal =\n"
+              "            block.end_kind == analysis::R5900BlockEndKind::DirectCall &&\n"
+              "            !block.instructions.empty() &&\n"
+              "            block.instructions.back().decoded.instruction == R5900Instruction::Jal;\n"
+              "        const bool has_supported_transfer =\n"
+              "            has_supported_beq || has_supported_j || has_supported_jal;\n\n"
+              "        const analysis::R5900InstructionSite* transfer_site =\n"
+              "            has_supported_transfer ? &block.instructions.back() : nullptr;\n"
+          )
+          if text.count(old_detection) != 1:
+              raise SystemExit("dispatcher transfer-detection anchor mismatch")
+          text = text.replace(old_detection, new_detection, 1)
+
+          replacements = [
+              (
+                  "            if (has_supported_beq && index + 1u == block.instructions.size()) {\n",
+                  "            if (has_supported_transfer && index + 1u == block.instructions.size()) {\n",
+              ),
+              (
+                  "        if (body_sites.empty() && !has_supported_beq) {\n",
+                  "        if (body_sites.empty() && !has_supported_transfer) {\n",
+              ),
+              (
+                  "        guest_words.reserve(body_sites.size() + (has_supported_beq ? 2u : 0u));\n",
+                  "        guest_words.reserve(body_sites.size() + (has_supported_transfer ? 2u : 0u));\n",
+              ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f"dispatcher simple anchor mismatch: {old!r}")
+              text = text.replace(old, new, 1)
+
+          words_start = text.index(
+              "        if (has_supported_beq) {\n"
+              "            if (beq_site == nullptr || !block.delay_slot.has_value()) {")
+          words_end = text.index("\n\n        const auto fingerprint =", words_start)
+          words_block = r'''        if (has_supported_transfer) {
+              if (transfer_site == nullptr || !block.delay_slot.has_value()) {
+                  result.reason = R5900DispatchStopReason::AnalysisFailure;
+                  result.next_pc = current_pc;
+                  result.message = format_stage_error(
+                      "analysis",
+                      current_pc,
+                      "supported control transfer lacks terminator or delay slot");
+                  return result;
+              }
+
+              const auto transfer_word = memory_.read_u32(transfer_site->pc);
+              if (!transfer_word.has_value()) {
+                  result.reason = R5900DispatchStopReason::AnalysisFailure;
+                  result.next_pc = transfer_site->pc;
+                  result.message = format_stage_error(
+                      "analysis",
+                      transfer_site->pc,
+                      "selected control transfer became unreadable");
+                  return result;
+              }
+              guest_words.push_back(*transfer_word);
+
+              const auto delay_word = memory_.read_u32(block.delay_slot->pc);
+              if (!delay_word.has_value()) {
+                  result.reason = R5900DispatchStopReason::AnalysisFailure;
+                  result.next_pc = block.delay_slot->pc;
+                  result.message = format_stage_error(
+                      "analysis", block.delay_slot->pc, "selected delay slot became unreadable");
+                  return result;
+              }
+              guest_words.push_back(*delay_word);
+          }'''
+          words_block = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in words_block.splitlines()
+          )
+          text = text[:words_start] + words_block + text[words_end:]
+
+          ir_start = text.index(
+              "            if (has_supported_beq) {\n"
+              "                const auto target =")
+          ir_end = text.index("\n\n            auto compiled = compile_r5900_ir_x64(ir_block);", ir_start)
+          ir_block = r'''            if (has_supported_transfer) {
+              if (transfer_site == nullptr || !block.delay_slot.has_value()) {
+                  result.reason = R5900DispatchStopReason::AnalysisFailure;
+                  result.next_pc = current_pc;
+                  result.message = format_stage_error(
+                      "analysis",
+                      current_pc,
+                      "supported control transfer lacks terminator or delay slot");
+                  return result;
+              }
+
+              const auto target =
+                  transfer_site->decoded.direct_target(transfer_site->pc);
+              if (!target.has_value()) {
+                  result.reason = R5900DispatchStopReason::AnalysisFailure;
+                  result.next_pc = transfer_site->pc;
+                  result.message = format_stage_error(
+                      "analysis",
+                      transfer_site->pc,
+                      "decoded supported control transfer unexpectedly lacks direct target");
+                  return result;
+              }
+
+              ir_block.terminator.guest_pc = transfer_site->pc;
+              ir_block.terminator.guest_raw = transfer_site->decoded.raw;
+              if (has_supported_beq) {
+                  ir_block.terminator.kind = R5900IrTerminatorKind::BranchEqual64;
+                  ir_block.terminator.inputs = {
+                      dispatcher_gpr(transfer_site->decoded.rs),
+                      dispatcher_gpr(transfer_site->decoded.rt),
+                  };
+                  ir_block.terminator.taken_pc = *target;
+                  ir_block.terminator.fallthrough_pc = transfer_site->pc + 8u;
+              } else {
+                  ir_block.terminator.kind = has_supported_j
+                      ? R5900IrTerminatorKind::DirectJump
+                      : R5900IrTerminatorKind::DirectCall;
+                  ir_block.terminator.target_pc = *target;
+                  if (has_supported_jal) {
+                      ir_block.terminator.link_pc = transfer_site->pc + 8u;
+                  }
+              }
+
+              const auto& delay = *block.delay_slot;
+              if (delay.decoded.instruction == R5900Instruction::Sq) {
+                  result.reason = R5900DispatchStopReason::LoweringFailure;
+                  result.next_pc = delay.pc;
+                  result.message = format_stage_error(
+                      "lowering",
+                      delay.pc,
+                      has_supported_beq
+                          ? "SQ in a BEQ delay slot is outside dispatcher v0 scope"
+                          : "SQ in a J/JAL delay slot is outside dispatcher v0 scope");
+                  return result;
+              }
+
+              const auto lowered_delay = lower_r5900_instruction(delay.decoded, delay.pc);
+              if (!lowered_delay.ok() || lowered_delay.instructions.size() != 1u) {
+                  result.reason = R5900DispatchStopReason::LoweringFailure;
+                  result.next_pc = delay.pc;
+                  result.message = format_stage_error(
+                      "lowering",
+                      delay.pc,
+                      lowered_delay.ok()
+                          ? "control-transfer delay slot must lower to exactly one IR instruction"
+                          : lowered_delay.message);
+                  return result;
+              }
+              ir_block.terminator.delay_slot = lowered_delay.instructions;
+          } else {
+              const auto fallthrough_pc =
+                  current_pc + static_cast<std::uint32_t>(body_sites.size() * 4u);
+              ir_block.terminator.guest_pc = fallthrough_pc;
+              ir_block.terminator.kind = R5900IrTerminatorKind::Fallthrough;
+              ir_block.terminator.fallthrough_pc = fallthrough_pc;
+          }'''
+          ir_block = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in ir_block.splitlines()
+          )
+          text = text[:ir_start] + ir_block + text[ir_end:]
+
+          old_end = (
+              "            replacement.end_pc_exclusive = has_supported_beq\n"
+              "                ? beq_site->pc + 8u\n"
+              "                : current_pc + static_cast<std::uint32_t>(body_sites.size() * 4u);\n"
+          )
+          new_end = (
+              "            replacement.end_pc_exclusive = has_supported_transfer\n"
+              "                ? transfer_site->pc + 8u\n"
+              "                : current_pc + static_cast<std::uint32_t>(body_sites.size() * 4u);\n"
+          )
+          if text.count(old_end) != 1:
+              raise SystemExit("dispatcher cache-span anchor mismatch")
+          text = text.replace(old_end, new_end, 1)
+
+          if "beq_site" in text:
+              raise SystemExit("stale beq_site reference remains")
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Verify patch
+        shell: bash
+        run: |
+          git diff --check
+          grep -q "has_supported_jal" src/recompiler/windows/r5900_block_dispatcher.cpp
+          grep -q "R5900IrTerminatorKind::DirectJump" src/recompiler/windows/r5900_block_dispatcher.cpp
+          grep -q "SQ in a J/JAL delay slot" src/recompiler/windows/r5900_block_dispatcher.cpp
+          git diff -- src/recompiler/windows/r5900_block_dispatcher.cpp
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/recompiler/windows/r5900_block_dispatcher.cpp
+          git commit -m "feat: dispatch R5900 direct jumps and calls"
+          git push origin HEAD:feature/r5900-direct-jump-call-v0
