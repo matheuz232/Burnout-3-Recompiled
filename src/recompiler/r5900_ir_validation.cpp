@@ -397,4 +397,68 @@ R5900IrValidationResult validate_r5900_ir_instruction(
     }
 }
 
+R5900IrValidationResult validate_r5900_ir_block(const R5900IrBlock& block) {
+    for (std::size_t index = 0; index < block.body.size(); ++index) {
+        const auto body_validation = validate_r5900_ir_instruction(block.body[index], index);
+        if (!body_validation.ok()) {
+            return body_validation;
+        }
+    }
+
+    const auto& terminator = block.terminator;
+    if ((terminator.guest_pc & 0x3u) != 0u ||
+        (terminator.fallthrough_pc & 0x3u) != 0u ||
+        (terminator.taken_pc & 0x3u) != 0u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       block.body.size(),
+                       terminator.guest_pc,
+                       "block terminator PCs must be 4-byte aligned");
+    }
+
+    if (terminator.kind == R5900IrTerminatorKind::Fallthrough) {
+        if (!terminator.inputs.empty() ||
+            !terminator.delay_slot.empty() ||
+            terminator.taken_pc != 0u) {
+            return failure(R5900IrValidationError::MalformedInstruction,
+                           block.body.size(),
+                           terminator.guest_pc,
+                           "fallthrough terminator must not carry branch state");
+        }
+        return {};
+    }
+
+    if (terminator.kind != R5900IrTerminatorKind::BranchEqual64) {
+        return failure(R5900IrValidationError::UnsupportedOpcode,
+                       block.body.size(),
+                       terminator.guest_pc,
+                       "unsupported block terminator");
+    }
+
+    if (terminator.inputs.size() != 2u ||
+        terminator.inputs[0].kind != R5900IrOperandKind::Gpr ||
+        terminator.inputs[1].kind != R5900IrOperandKind::Gpr) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       block.body.size(),
+                       terminator.guest_pc,
+                       "BranchEqual64 requires exactly two GPR inputs");
+    }
+
+    for (const auto& operand : terminator.inputs) {
+        const auto operand_validation =
+            validate_operand(operand, block.body.size(), terminator.guest_pc);
+        if (!operand_validation.ok()) {
+            return operand_validation;
+        }
+    }
+
+    if (terminator.delay_slot.size() != 1u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       block.body.size(),
+                       terminator.guest_pc,
+                       "BranchEqual64 requires exactly one delay-slot instruction");
+    }
+
+    return validate_r5900_ir_instruction(terminator.delay_slot.front(), block.body.size());
+}
+
 } // namespace b3r::recompiler
