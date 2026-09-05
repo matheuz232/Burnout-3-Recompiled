@@ -79,6 +79,24 @@ int main() {
                "invalid delay opcode must propagate UnsupportedOpcode");
     }
 
+    // Task 1 RED: these symbols intentionally do not exist yet.
+    {
+        R5900IrBlock indirect{};
+        indirect.terminator.guest_pc = 0x00106400u;
+        indirect.terminator.kind = R5900IrTerminatorKind::IndirectJump;
+        indirect.terminator.inputs = {gpr(5u)};
+        indirect.terminator.link_gpr = 0u;
+        indirect.terminator.delay_slot = {nop(0x00106404u)};
+        expect(validate_r5900_ir_block(indirect).ok(),
+               "valid IndirectJump must validate");
+
+        indirect.terminator.kind = R5900IrTerminatorKind::IndirectCall;
+        indirect.terminator.link_pc = 0x00106408u;
+        indirect.terminator.link_gpr = 9u;
+        expect(validate_r5900_ir_block(indirect).ok(),
+               "valid IndirectCall must validate");
+    }
+
     std::cout << "r5900_ir_direct_transfer_validation_tests: PASS\n";
     return EXIT_SUCCESS;
 }
