@@ -2,10 +2,12 @@
 #include "recompiler/windows/r5900_block_dispatcher.h"
 #include "runtime/ps2_memory_map.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <utility>
 #include <vector>
@@ -13,6 +15,10 @@
 namespace {
 
 using Bytes = std::vector<std::uint8_t>;
+
+constexpr std::uint32_t kSqPc = 0x00100160u;
+constexpr std::uint32_t kSyntheticSentinelPc = 0x00100164u;
+constexpr std::uint32_t kSqTarget = 0x004e2680u;
 
 [[noreturn]] void fail(const char* message) {
     std::cerr << "r5900_block_dispatcher_startup_windows_tests: FAIL: " << message << '\n';
@@ -37,12 +43,38 @@ void put_u32(Bytes& bytes, std::size_t offset, std::uint32_t value) {
     bytes[offset + 3u] = static_cast<std::uint8_t>((value >> 24u) & 0xffu);
 }
 
+void put_program_header(Bytes& bytes,
+                        std::size_t offset,
+                        std::uint32_t file_offset,
+                        std::uint32_t guest_address,
+                        std::uint32_t file_size,
+                        std::uint32_t memory_size,
+                        std::uint32_t flags) {
+    put_u32(bytes, offset + 0u, 1u); // PT_LOAD
+    put_u32(bytes, offset + 4u, file_offset);
+    put_u32(bytes, offset + 8u, guest_address);
+    put_u32(bytes, offset + 12u, guest_address);
+    put_u32(bytes, offset + 16u, file_size);
+    put_u32(bytes, offset + 20u, memory_size);
+    put_u32(bytes, offset + 24u, flags);
+    put_u32(bytes, offset + 28u, 0x1000u);
+}
+
 b3r::runtime::Ps2MemoryMap make_memory(const std::vector<std::uint32_t>& words,
                                        std::uint32_t base) {
     constexpr std::uint32_t kProgramHeaderOffset = 52u;
-    constexpr std::uint32_t kPayloadOffset = 0x100u;
-    const auto payload_size = static_cast<std::uint32_t>(words.size() * 4u);
-    Bytes bytes(static_cast<std::size_t>(kPayloadOffset + payload_size + 0x40u), 0u);
+    constexpr std::uint32_t kProgramHeaderSize = 32u;
+    constexpr std::uint32_t kCodePayloadOffset = 0x100u;
+    constexpr std::uint32_t kDataPayloadOffset = 0x400u;
+    constexpr std::uint32_t kDataGuestBase = 0x004e2600u;
+    constexpr std::uint32_t kDataFileSize = 0x100u;
+    constexpr std::uint32_t kDataMemorySize = 0x200u;
+
+    const auto code_size = static_cast<std::uint32_t>(words.size() * 4u);
+    expect(kCodePayloadOffset + code_size <= kDataPayloadOffset,
+           "synthetic code payload must not overlap data payload");
+
+    Bytes bytes(static_cast<std::size_t>(kDataPayloadOffset + kDataFileSize), 0u);
 
     bytes[0] = 0x7fu;
     bytes[1] = 'E';
@@ -57,23 +89,33 @@ b3r::runtime::Ps2MemoryMap make_memory(const std::vector<std::uint32_t>& words,
     put_u32(bytes, 24u, base);
     put_u32(bytes, 28u, kProgramHeaderOffset);
     put_u16(bytes, 40u, 52u);
-    put_u16(bytes, 42u, 32u);
-    put_u16(bytes, 44u, 1u);
+    put_u16(bytes, 42u, kProgramHeaderSize);
+    put_u16(bytes, 44u, 2u);
 
-    put_u32(bytes, kProgramHeaderOffset + 0u, 1u);
-    put_u32(bytes, kProgramHeaderOffset + 4u, kPayloadOffset);
-    put_u32(bytes, kProgramHeaderOffset + 8u, base);
-    put_u32(bytes, kProgramHeaderOffset + 12u, base);
-    put_u32(bytes, kProgramHeaderOffset + 16u, payload_size);
-    put_u32(bytes, kProgramHeaderOffset + 20u, payload_size);
-    put_u32(bytes, kProgramHeaderOffset + 24u, 5u);
-    put_u32(bytes, kProgramHeaderOffset + 28u, 0x1000u);
+    put_program_header(bytes,
+                       kProgramHeaderOffset,
+                       kCodePayloadOffset,
+                       base,
+                       code_size,
+                       code_size,
+                       5u);
+    put_program_header(bytes,
+                       kProgramHeaderOffset + kProgramHeaderSize,
+                       kDataPayloadOffset,
+                       kDataGuestBase,
+                       kDataFileSize,
+                       kDataMemorySize,
+                       6u);
 
     for (std::size_t index = 0; index < words.size(); ++index) {
         put_u32(bytes,
-                static_cast<std::size_t>(kPayloadOffset) + index * 4u,
+                static_cast<std::size_t>(kCodePayloadOffset) + index * 4u,
                 words[index]);
     }
+
+    std::fill(bytes.begin() + kDataPayloadOffset,
+              bytes.begin() + kDataPayloadOffset + kDataFileSize,
+              0xa5u);
 
     auto parsed = b3r::recompiler::parse_ps2_elf(bytes);
     expect(parsed.ok(), "synthetic startup ELF must parse");
@@ -181,16 +223,17 @@ std::vector<std::uint32_t> make_synthetic_startup_words(std::uint32_t base) {
     words.push_back(i_type(0x1fu, 2u, 0u, 0u));
 
     expect(words.size() == 87u, "synthetic startup architectural fixture count mismatch");
-    expect(base + static_cast<std::uint32_t>((words.size() - 1u) * 4u) == 0x00100160u,
+    expect(base + static_cast<std::uint32_t>((words.size() - 1u) * 4u) == kSqPc,
            "synthetic startup SQ boundary layout mismatch");
 
-    // Analyzer-only sentinel after SQ: J + mapped delay slot let control-flow analysis
-    // return a block containing SQ, while the dispatcher must still stop before SQ.
+    // Control-flow sentinel after SQ: the dispatcher must execute SQ, then stop
+    // before this J at the next boundary. The mapped NOP is its analyzer delay slot.
     words.push_back(0x08000000u);
     words.push_back(0u);
     expect(words.size() == 89u, "synthetic startup mapped sentinel count mismatch");
-    expect(base + static_cast<std::uint32_t>((words.size() - 3u) * 4u) == 0x00100160u,
-           "synthetic startup SQ must remain at the milestone boundary");
+    expect(base + static_cast<std::uint32_t>((words.size() - 2u) * 4u) ==
+               kSyntheticSentinelPc,
+           "synthetic startup sentinel PC mismatch");
     return words;
 }
 
@@ -222,6 +265,10 @@ void validate_external_startup(const char* path) {
     auto built = b3r::runtime::Ps2MemoryMap::from_elf(*parsed.image);
     expect(built.ok(), "external ELF must map into PS2 memory");
 
+    const auto target_before = built.memory->read_u128(kSqTarget);
+    expect(target_before.has_value(),
+           "external ELF must map the 16-byte SQ startup target");
+
     R5900BlockDispatcherOptions options{};
     options.block_options.max_instructions = 256u;
     R5900BlockDispatcher dispatcher(*built.memory, options);
@@ -229,13 +276,18 @@ void validate_external_startup(const char* path) {
     R5900IrExecutionState state{};
     state.gpr[31] = {0x1122334455667788ull, 0x8877665544332211ull};
 
-    const auto result = dispatcher.run(parsed.image->entry_point(), state, 3u);
-    expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
-           "real startup must stop at first unsupported SQ");
-    expect(result.next_pc == 0x00100160u,
-           "real startup SQ boundary mismatch");
-    expect(result.blocks_executed == 2u && result.instructions_executed == 81u,
-           "real startup must execute exactly 81 instructions across two BEQ blocks");
+    const auto result = dispatcher.run(parsed.image->entry_point(), state, 8u);
+    expect(result.instructions_executed >= 82u,
+           "real startup must execute SQ after the two BEQ blocks");
+    expect(result.next_pc != kSqPc,
+           "real startup must advance beyond SQ");
+
+    const auto target_after = built.memory->read_u128(kSqTarget);
+    expect(target_after.has_value(),
+           "external SQ target must remain mapped after execution");
+    expect((*target_after)[0] == 0u && (*target_after)[1] == 0u,
+           "real startup SQ must zero the full 16-byte target");
+
     expect(state.gpr[2].low64 == 0x00000000004e2680ull,
            "real startup r2 result mismatch");
     expect(state.gpr[3].low64 == 0x0000000001ecea00ull,
@@ -252,7 +304,12 @@ void validate_external_startup(const char* path) {
         expect(raw == 0u, "real startup FPR must remain raw zero");
     }
 
-    std::cout << "REAL_ELF_STARTUP_VALIDATED start=0x00100008 stop=0x00100160 instructions=81\n";
+    std::cout << "REAL_ELF_SQ_VALIDATED sq=0x" << std::hex << std::setw(8)
+              << std::setfill('0') << kSqPc
+              << " target=0x" << std::setw(8) << kSqTarget
+              << " stop=0x" << std::setw(8) << result.next_pc
+              << std::dec << " blocks=" << result.blocks_executed
+              << " instructions=" << result.instructions_executed << '\n';
 }
 
 void validate_synthetic_startup() {
@@ -262,6 +319,16 @@ void validate_synthetic_startup() {
     const auto words = make_synthetic_startup_words(base);
     auto memory = make_memory(words, base);
 
+    expect(memory.read_u8(kSqTarget - 1u) == 0xa5u,
+           "synthetic byte before SQ target must start as sentinel");
+    const auto target_before = memory.read_u128(kSqTarget);
+    expect(target_before.has_value() &&
+               (*target_before)[0] == 0xa5a5a5a5a5a5a5a5ull &&
+               (*target_before)[1] == 0xa5a5a5a5a5a5a5a5ull,
+           "synthetic SQ target must start with non-zero sentinel bytes");
+    expect(memory.read_u8(kSqTarget + 16u) == 0xa5u,
+           "synthetic byte after SQ target must start as sentinel");
+
     R5900BlockDispatcherOptions options{};
     options.block_options.max_instructions = 128u;
     R5900BlockDispatcher dispatcher(memory, options);
@@ -270,14 +337,24 @@ void validate_synthetic_startup() {
     state.gpr[31] = {0x1122334455667788ull, 0x8877665544332211ull};
 
     const auto result = dispatcher.run(base, state, 3u);
-    expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
-           "synthetic startup must stop at SQ");
-    expect(result.next_pc == 0x00100160u,
-           "synthetic startup SQ boundary mismatch");
-    expect(result.blocks_executed == 2u,
-           "synthetic startup must complete exactly two BEQ blocks");
-    expect(result.instructions_executed == 81u,
-           "synthetic startup must execute exactly 81 instructions");
+    expect(result.reason == R5900DispatchStopReason::ControlFlow,
+           "synthetic startup must advance through SQ to sentinel J");
+    expect(result.next_pc == kSyntheticSentinelPc,
+           "synthetic startup next boundary mismatch");
+    expect(result.blocks_executed == 3u,
+           "synthetic startup must complete the SQ block");
+    expect(result.instructions_executed == 82u,
+           "synthetic startup must execute 81 prior instructions plus SQ");
+
+    const auto target_after = memory.read_u128(kSqTarget);
+    expect(target_after.has_value() &&
+               (*target_after)[0] == 0u && (*target_after)[1] == 0u,
+           "synthetic startup SQ must zero all 16 target bytes");
+    expect(memory.read_u8(kSqTarget - 1u) == 0xa5u,
+           "SQ must preserve byte immediately before target");
+    expect(memory.read_u8(kSqTarget + 16u) == 0xa5u,
+           "SQ must preserve byte immediately after target");
+
     expect(state.gpr[2].low64 == 0x00000000004e2680ull,
            "synthetic startup r2 result mismatch");
     expect(state.gpr[3].low64 == 0x0000000001ecea00ull,
@@ -303,7 +380,8 @@ void validate_synthetic_startup() {
                state.gpr[31].high64 == 0x8877665544332211ull,
            "synthetic startup sentinel GPR31 must remain unchanged");
 
-    std::cout << "SYNTHETIC_STARTUP_BEQ_VALIDATED start=0x00100008 stop=0x00100160 instructions=81\n";
+    std::cout << "SYNTHETIC_STARTUP_SQ_VALIDATED sq=0x00100160 target=0x004e2680 "
+                 "stop=0x00100164 blocks=3 instructions=82\n";
 }
 
 } // namespace
