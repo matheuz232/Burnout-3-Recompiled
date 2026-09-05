@@ -46,13 +46,23 @@ R5900IrValidationResult validate_operand(const R5900IrOperand& operand,
     }
 }
 
-R5900IrValidationResult validate_write(const R5900IrInstruction& ir,
-                                       std::size_t index) {
+R5900IrValidationResult require_destination(const R5900IrInstruction& ir,
+                                            std::size_t index) {
     if (!ir.destination.has_value()) {
         return failure(R5900IrValidationError::MalformedInstruction,
                        index,
                        ir.guest_pc,
                        "missing destination");
+    }
+    return {};
+}
+
+R5900IrValidationResult validate_gpr_destination(const R5900IrInstruction& ir,
+                                                 std::size_t index,
+                                                 R5900IrGprWriteMode expected_mode) {
+    const auto present = require_destination(ir, index);
+    if (!present.ok()) {
+        return present;
     }
     if (ir.destination->kind != R5900IrDestinationKind::Gpr) {
         return failure(R5900IrValidationError::MalformedInstruction,
@@ -66,11 +76,21 @@ R5900IrValidationResult validate_write(const R5900IrInstruction& ir,
                        ir.guest_pc,
                        "invalid destination GPR");
     }
-    if (ir.write_mode != R5900IrGprWriteMode::Low64PreserveUpper64) {
+    if (ir.write_mode != expected_mode) {
         return failure(R5900IrValidationError::MalformedInstruction,
                        index,
                        ir.guest_pc,
                        "invalid GPR write mode");
+    }
+    return {};
+}
+
+R5900IrValidationResult validate_existing_integer_write(const R5900IrInstruction& ir,
+                                                        std::size_t index) {
+    const auto destination = validate_gpr_destination(
+        ir, index, R5900IrGprWriteMode::Low64PreserveUpper64);
+    if (!destination.ok()) {
+        return destination;
     }
     if (ir.inputs.size() != 2u) {
         return failure(R5900IrValidationError::MalformedInstruction,
@@ -79,16 +99,168 @@ R5900IrValidationResult validate_write(const R5900IrInstruction& ir,
                        "expected exactly two inputs");
     }
     for (const auto& operand : ir.inputs) {
+        const auto validation = validate_operand(operand, index, ir.guest_pc);
+        if (!validation.ok()) {
+            return validation;
+        }
         if (operand.kind == R5900IrOperandKind::Fpr) {
             return failure(R5900IrValidationError::MalformedInstruction,
                            index,
                            ir.guest_pc,
                            "FPR operand is not valid for this integer opcode");
         }
+    }
+    return {};
+}
+
+R5900IrValidationResult validate_and64(const R5900IrInstruction& ir,
+                                       std::size_t index) {
+    const auto destination = validate_gpr_destination(
+        ir, index, R5900IrGprWriteMode::Low64PreserveUpper64);
+    if (!destination.ok()) {
+        return destination;
+    }
+    if (ir.inputs.size() != 2u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "And64 expects GPR and immediate inputs");
+    }
+    const auto lhs = validate_operand(ir.inputs[0], index, ir.guest_pc);
+    if (!lhs.ok()) {
+        return lhs;
+    }
+    const auto rhs = validate_operand(ir.inputs[1], index, ir.guest_pc);
+    if (!rhs.ok()) {
+        return rhs;
+    }
+    if (ir.inputs[0].kind != R5900IrOperandKind::Gpr ||
+        ir.inputs[1].kind != R5900IrOperandKind::Immediate) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "And64 expects GPR and immediate inputs");
+    }
+    return {};
+}
+
+R5900IrValidationResult validate_lui(const R5900IrInstruction& ir,
+                                     std::size_t index) {
+    const auto destination = validate_gpr_destination(
+        ir, index, R5900IrGprWriteMode::Low64PreserveUpper64);
+    if (!destination.ok()) {
+        return destination;
+    }
+    if (ir.inputs.size() != 1u ||
+        ir.inputs[0].kind != R5900IrOperandKind::Immediate) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "LoadUpperImmediateSignExtend expects one immediate input");
+    }
+    return {};
+}
+
+R5900IrValidationResult validate_packed_u32_add(const R5900IrInstruction& ir,
+                                                std::size_t index) {
+    const auto destination = validate_gpr_destination(
+        ir, index, R5900IrGprWriteMode::Full128);
+    if (!destination.ok()) {
+        return destination;
+    }
+    if (ir.inputs.size() != 2u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "packed add expects exactly two GPR inputs");
+    }
+    for (const auto& operand : ir.inputs) {
         const auto validation = validate_operand(operand, index, ir.guest_pc);
         if (!validation.ok()) {
             return validation;
         }
+        if (operand.kind != R5900IrOperandKind::Gpr) {
+            return failure(R5900IrValidationError::MalformedInstruction,
+                           index,
+                           ir.guest_pc,
+                           "packed add expects exactly two GPR inputs");
+        }
+    }
+    return {};
+}
+
+bool is_hilo_destination(R5900IrDestinationKind kind) noexcept {
+    switch (kind) {
+    case R5900IrDestinationKind::Hi:
+    case R5900IrDestinationKind::Lo:
+    case R5900IrDestinationKind::Hi1:
+    case R5900IrDestinationKind::Lo1:
+        return true;
+    default:
+        return false;
+    }
+}
+
+R5900IrValidationResult validate_move_gpr_low64(const R5900IrInstruction& ir,
+                                                std::size_t index) {
+    const auto present = require_destination(ir, index);
+    if (!present.ok()) {
+        return present;
+    }
+    if (!is_hilo_destination(ir.destination->kind) || ir.destination->index != 0u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "MoveGprLow64 expects unindexed HI/LO/HI1/LO1 destination");
+    }
+    if (ir.write_mode != R5900IrGprWriteMode::None || ir.inputs.size() != 1u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "MoveGprLow64 expects one GPR input and no GPR write mode");
+    }
+    const auto input = validate_operand(ir.inputs[0], index, ir.guest_pc);
+    if (!input.ok()) {
+        return input;
+    }
+    if (ir.inputs[0].kind != R5900IrOperandKind::Gpr) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "MoveGprLow64 expects one GPR input");
+    }
+    return {};
+}
+
+R5900IrValidationResult validate_mtsah(const R5900IrInstruction& ir,
+                                       std::size_t index) {
+    const auto present = require_destination(ir, index);
+    if (!present.ok()) {
+        return present;
+    }
+    if (ir.destination->kind != R5900IrDestinationKind::Sa ||
+        ir.destination->index != 0u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "ComputeMtsah expects unindexed SA destination");
+    }
+    if (ir.write_mode != R5900IrGprWriteMode::None || ir.inputs.size() != 2u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "ComputeMtsah expects GPR and immediate inputs");
+    }
+    const auto source = validate_operand(ir.inputs[0], index, ir.guest_pc);
+    if (!source.ok()) {
+        return source;
+    }
+    if (ir.inputs[0].kind != R5900IrOperandKind::Gpr ||
+        ir.inputs[1].kind != R5900IrOperandKind::Immediate) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "ComputeMtsah expects GPR and immediate inputs");
     }
     return {};
 }
@@ -112,7 +284,22 @@ R5900IrValidationResult validate_r5900_ir_instruction(
 
     case R5900IrOpcode::AddWordSignExtend:
     case R5900IrOpcode::Or64:
-        return validate_write(instruction, instruction_index);
+        return validate_existing_integer_write(instruction, instruction_index);
+
+    case R5900IrOpcode::And64:
+        return validate_and64(instruction, instruction_index);
+
+    case R5900IrOpcode::LoadUpperImmediateSignExtend:
+        return validate_lui(instruction, instruction_index);
+
+    case R5900IrOpcode::AddPackedU32Saturate128:
+        return validate_packed_u32_add(instruction, instruction_index);
+
+    case R5900IrOpcode::MoveGprLow64:
+        return validate_move_gpr_low64(instruction, instruction_index);
+
+    case R5900IrOpcode::ComputeMtsah:
+        return validate_mtsah(instruction, instruction_index);
 
     default:
         return failure(R5900IrValidationError::UnsupportedOpcode,
