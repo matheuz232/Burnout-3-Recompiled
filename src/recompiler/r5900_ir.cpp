@@ -36,9 +36,19 @@ R5900IrLoweringResult discarded_gpr_zero_write(const R5900DecodedInstruction& de
     return result;
 }
 
+void set_destination(R5900IrInstruction& ir,
+                     R5900IrDestinationKind kind,
+                     std::uint8_t index = 0u,
+                     R5900IrGprWriteMode write_mode = R5900IrGprWriteMode::None) {
+    ir.destination = R5900IrDestination{kind, index};
+    ir.write_mode = write_mode;
+}
+
 void set_low64_destination(R5900IrInstruction& ir, std::uint8_t index) {
-    ir.destination = R5900IrRegister{index};
-    ir.write_mode = R5900IrGprWriteMode::Low64PreserveUpper64;
+    set_destination(ir,
+                    R5900IrDestinationKind::Gpr,
+                    index,
+                    R5900IrGprWriteMode::Low64PreserveUpper64);
 }
 
 } // namespace
@@ -48,7 +58,8 @@ lower_r5900_instruction(const R5900DecodedInstruction& decoded, std::uint32_t gu
     R5900IrLoweringResult result{};
 
     switch (decoded.instruction) {
-    case R5900Instruction::Nop: {
+    case R5900Instruction::Nop:
+    case R5900Instruction::Sync: {
         result.instructions.push_back(base_instruction(decoded, guest_pc, R5900IrOpcode::Nop));
         return result;
     }
@@ -88,6 +99,85 @@ lower_r5900_instruction(const R5900DecodedInstruction& decoded, std::uint32_t gu
         set_low64_destination(ir, decoded.rt);
         ir.inputs.push_back(gpr(decoded.rs));
         ir.inputs.push_back(immediate(static_cast<std::int64_t>(decoded.immediate)));
+        result.instructions.push_back(ir);
+        return result;
+    }
+
+    case R5900Instruction::Andi: {
+        if (decoded.rt == 0u) {
+            return discarded_gpr_zero_write(decoded, guest_pc);
+        }
+
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::And64);
+        set_low64_destination(ir, decoded.rt);
+        ir.inputs.push_back(gpr(decoded.rs));
+        ir.inputs.push_back(immediate(static_cast<std::int64_t>(decoded.immediate)));
+        result.instructions.push_back(ir);
+        return result;
+    }
+
+    case R5900Instruction::Lui: {
+        if (decoded.rt == 0u) {
+            return discarded_gpr_zero_write(decoded, guest_pc);
+        }
+
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::LoadUpperImmediateSignExtend);
+        set_low64_destination(ir, decoded.rt);
+        ir.inputs.push_back(immediate(static_cast<std::int64_t>(decoded.immediate)));
+        result.instructions.push_back(ir);
+        return result;
+    }
+
+    case R5900Instruction::Mthi:
+    case R5900Instruction::Mtlo:
+    case R5900Instruction::Mthi1:
+    case R5900Instruction::Mtlo1: {
+        R5900IrDestinationKind destination_kind = R5900IrDestinationKind::Hi;
+        switch (decoded.instruction) {
+        case R5900Instruction::Mthi:
+            destination_kind = R5900IrDestinationKind::Hi;
+            break;
+        case R5900Instruction::Mtlo:
+            destination_kind = R5900IrDestinationKind::Lo;
+            break;
+        case R5900Instruction::Mthi1:
+            destination_kind = R5900IrDestinationKind::Hi1;
+            break;
+        case R5900Instruction::Mtlo1:
+            destination_kind = R5900IrDestinationKind::Lo1;
+            break;
+        default:
+            break;
+        }
+
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::MoveGprLow64);
+        set_destination(ir, destination_kind);
+        ir.inputs.push_back(gpr(decoded.rs));
+        result.instructions.push_back(ir);
+        return result;
+    }
+
+    case R5900Instruction::Mtsah: {
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::ComputeMtsah);
+        set_destination(ir, R5900IrDestinationKind::Sa);
+        ir.inputs.push_back(gpr(decoded.rs));
+        ir.inputs.push_back(immediate(static_cast<std::int64_t>(decoded.immediate)));
+        result.instructions.push_back(ir);
+        return result;
+    }
+
+    case R5900Instruction::Padduw: {
+        if (decoded.rd == 0u) {
+            return discarded_gpr_zero_write(decoded, guest_pc);
+        }
+
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::AddPackedU32Saturate128);
+        set_destination(ir,
+                        R5900IrDestinationKind::Gpr,
+                        decoded.rd,
+                        R5900IrGprWriteMode::Full128);
+        ir.inputs.push_back(gpr(decoded.rs));
+        ir.inputs.push_back(gpr(decoded.rt));
         result.instructions.push_back(ir);
         return result;
     }
