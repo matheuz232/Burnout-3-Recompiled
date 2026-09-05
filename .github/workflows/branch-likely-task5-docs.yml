@@ -1,0 +1,27 @@
+name: Branch Likely Task5 Docs
+
+on:
+  push:
+    paths:
+      - 'tools/apply_branch_likely_task5_docs.py'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/r5900-branch-likely-v0
+          fetch-depth: 0
+      - name: Update milestone documentation
+        run: python tools/apply_branch_likely_task5_docs.py
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md docs/PROGRESS.md
+          git commit -m "docs: record R5900 branch-likely validation"
+          git push origin HEAD:feature/r5900-branch-likely-v0
