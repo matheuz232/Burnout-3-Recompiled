@@ -243,6 +243,15 @@ lower_r5900_instruction(const R5900DecodedInstruction& decoded, std::uint32_t gu
         return result;
     }
 
+    case R5900Instruction::Sq: {
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::Store128);
+        ir.inputs.push_back(gpr(decoded.rs));
+        ir.inputs.push_back(gpr(decoded.rt));
+        ir.inputs.push_back(immediate(decoded.signed_immediate()));
+        result.instructions.push_back(ir);
+        return result;
+    }
+
     default:
         return unsupported_lowering(decoded);
     }
