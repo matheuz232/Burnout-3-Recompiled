@@ -22,6 +22,7 @@ enum class R5900DispatchStopReason {
     AnalysisFailure,
     LoweringFailure,
     CompileFailure,
+    MemoryAccessFailure,
 };
 
 struct R5900DispatchResult {
@@ -41,7 +42,7 @@ struct R5900BlockDispatcherOptions {
 
 class R5900BlockDispatcher {
 public:
-    explicit R5900BlockDispatcher(const runtime::Ps2MemoryMap& memory,
+    explicit R5900BlockDispatcher(runtime::Ps2MemoryMap& memory,
                                   R5900BlockDispatcherOptions options = {});
 
     [[nodiscard]] R5900DispatchResult run(std::uint32_t start_pc,
@@ -61,7 +62,7 @@ private:
         R5900X64CompiledBlock native_block{};
     };
 
-    const runtime::Ps2MemoryMap& memory_;
+    runtime::Ps2MemoryMap& memory_;
     R5900BlockDispatcherOptions options_{};
     std::unordered_map<std::uint32_t, CachedBlock> cache_{};
 };

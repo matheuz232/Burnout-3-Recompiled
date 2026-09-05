@@ -26,6 +26,25 @@ std::string format_stage_error(std::string_view stage,
     return out.str();
 }
 
+bool ps2_memory_write128_adapter(void* user,
+                                 std::uint32_t address,
+                                 std::uint64_t low64,
+                                 std::uint64_t high64) noexcept {
+    auto* memory = static_cast<runtime::Ps2MemoryMap*>(user);
+    return memory != nullptr &&
+           memory->write_u128(
+               address,
+               runtime::Ps2MemoryValue128{low64, high64});
+}
+
+std::string format_memory_fault_detail(const R5900IrMemoryFault& fault) {
+    std::ostringstream out;
+    out << "store width " << std::dec << fault.width_bytes
+        << " bytes at guest address 0x"
+        << std::hex << std::setw(8) << std::setfill('0') << fault.address;
+    return out.str();
+}
+
 bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
     switch (instruction) {
     case R5900Instruction::Nop:
@@ -45,6 +64,7 @@ bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
     case R5900Instruction::Ctc1:
     case R5900Instruction::AddaS:
     case R5900Instruction::Sync:
+    case R5900Instruction::Sq:
         return true;
     default:
         return false;
@@ -89,7 +109,7 @@ std::uint64_t fingerprint_guest_words(
 
 } // namespace
 
-R5900BlockDispatcher::R5900BlockDispatcher(const runtime::Ps2MemoryMap& memory,
+R5900BlockDispatcher::R5900BlockDispatcher(runtime::Ps2MemoryMap& memory,
                                            R5900BlockDispatcherOptions options)
     : memory_(memory), options_(options) {}
 
@@ -235,12 +255,17 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             cached->second.fingerprint == fingerprint &&
             cached->second.guest_words == guest_words;
 
-        std::uint32_t native_next_pc{};
+        R5900IrExecutionContext execution_context{};
+        execution_context.state = &state;
+        execution_context.memory.user = &memory_;
+        execution_context.memory.write128 = &ps2_memory_write128_adapter;
+
+        R5900X64ExecutionResult native_execution{};
         std::size_t executed_instruction_count = guest_words.size();
 
         if (exact_cache_hit) {
             ++result.cache_hits;
-            native_next_pc = cached->second.native_block.execute(state);
+            native_execution = cached->second.native_block.execute(execution_context);
             executed_instruction_count = cached->second.guest_instruction_count;
         } else {
             const bool cache_miss = cached == cache_.end();
@@ -282,6 +307,16 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                 ir_block.terminator.fallthrough_pc = beq_site->pc + 8u;
 
                 const auto& delay = *block.delay_slot;
+                if (delay.decoded.instruction == R5900Instruction::Sq) {
+                    result.reason = R5900DispatchStopReason::LoweringFailure;
+                    result.next_pc = delay.pc;
+                    result.message = format_stage_error(
+                        "lowering",
+                        delay.pc,
+                        "SQ in a BEQ delay slot is outside dispatcher v0 scope");
+                    return result;
+                }
+
                 const auto lowered_delay = lower_r5900_instruction(delay.decoded, delay.pc);
                 if (!lowered_delay.ok() || lowered_delay.instructions.size() != 1u) {
                     result.reason = R5900DispatchStopReason::LoweringFailure;
@@ -325,16 +360,44 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                 ++result.cache_misses;
                 auto [inserted, did_insert] = cache_.emplace(current_pc, std::move(replacement));
                 (void)did_insert;
-                native_next_pc = inserted->second.native_block.execute(state);
+                native_execution = inserted->second.native_block.execute(execution_context);
                 executed_instruction_count = inserted->second.guest_instruction_count;
             } else {
                 ++result.recompilations;
                 cached->second = std::move(replacement);
-                native_next_pc = cached->second.native_block.execute(state);
+                native_execution = cached->second.native_block.execute(execution_context);
                 executed_instruction_count = cached->second.guest_instruction_count;
             }
         }
 
+        if (!native_execution.ok()) {
+            if (native_execution.error == R5900IrExecutionError::MemoryAccessFailure &&
+                execution_context.memory_fault.active) {
+                const auto& fault = execution_context.memory_fault;
+                std::size_t completed_prefix{};
+                if (fault.guest_pc >= current_pc &&
+                    ((fault.guest_pc - current_pc) % 4u) == 0u) {
+                    completed_prefix = static_cast<std::size_t>(
+                        (fault.guest_pc - current_pc) / 4u);
+                }
+                result.instructions_executed += completed_prefix;
+                result.reason = R5900DispatchStopReason::MemoryAccessFailure;
+                result.next_pc = fault.guest_pc;
+                result.message = format_stage_error(
+                    "runtime-memory",
+                    fault.guest_pc,
+                    format_memory_fault_detail(fault));
+                return result;
+            }
+
+            result.reason = R5900DispatchStopReason::CompileFailure;
+            result.next_pc = current_pc;
+            result.message = format_stage_error(
+                "x64 execute", current_pc, native_execution.message);
+            return result;
+        }
+
+        const auto native_next_pc = native_execution.next_pc;
         ++result.blocks_executed;
         result.instructions_executed += executed_instruction_count;
         current_pc = native_next_pc;
