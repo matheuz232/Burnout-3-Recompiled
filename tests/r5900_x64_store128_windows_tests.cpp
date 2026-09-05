@@ -60,6 +60,19 @@ R5900IrInstruction or64(std::uint8_t destination,
     return ir;
 }
 
+R5900IrInstruction addiu(std::uint8_t destination,
+                         std::uint8_t source,
+                         std::int16_t value,
+                         std::uint32_t pc) {
+    R5900IrInstruction ir{};
+    ir.guest_pc = pc;
+    ir.opcode = R5900IrOpcode::AddWordSignExtend;
+    ir.destination = R5900IrDestination{destination};
+    ir.write_mode = R5900IrGprWriteMode::Low64PreserveUpper64;
+    ir.inputs = {gpr(source), immediate(value)};
+    return ir;
+}
+
 R5900IrBlock fallthrough_block(std::vector<R5900IrInstruction> body,
                                std::uint32_t next_pc) {
     R5900IrBlock block{};
@@ -67,6 +80,26 @@ R5900IrBlock fallthrough_block(std::vector<R5900IrInstruction> body,
     block.terminator.guest_pc = next_pc;
     block.terminator.kind = R5900IrTerminatorKind::Fallthrough;
     block.terminator.fallthrough_pc = next_pc;
+    return block;
+}
+
+R5900IrBlock direct_jump(std::uint32_t pc,
+                         std::uint32_t target_pc,
+                         R5900IrInstruction delay) {
+    R5900IrBlock block{};
+    block.terminator.guest_pc = pc;
+    block.terminator.kind = R5900IrTerminatorKind::DirectJump;
+    block.terminator.target_pc = target_pc;
+    block.terminator.delay_slot = {delay};
+    return block;
+}
+
+R5900IrBlock direct_call(std::uint32_t pc,
+                         std::uint32_t target_pc,
+                         R5900IrInstruction delay) {
+    auto block = direct_jump(pc, target_pc, delay);
+    block.terminator.kind = R5900IrTerminatorKind::DirectCall;
+    block.terminator.link_pc = pc + 8u;
     return block;
 }
 
@@ -97,6 +130,17 @@ R5900IrExecutionContext context_for(R5900IrExecutionState& state,
     context.memory.user = &recorder;
     context.memory.write128 = &record_write128;
     return context;
+}
+
+void expect_gprs_equal(const R5900IrExecutionState& expected,
+                       const R5900IrExecutionState& actual,
+                       const char* message) {
+    for (std::size_t index = 0; index < expected.gpr.size(); ++index) {
+        if (expected.gpr[index].low64 != actual.gpr[index].low64 ||
+            expected.gpr[index].high64 != actual.gpr[index].high64) {
+            fail(message);
+        }
+    }
 }
 
 } // namespace
@@ -249,6 +293,122 @@ int main() {
         expect(native_state.gpr[8].low64 == reference_state.gpr[8].low64 &&
                    native_state.gpr[8].low64 == 0x120u,
                "memoryless native state must remain differential-equal");
+    }
+
+    {
+        const auto block = direct_jump(0x00108000u,
+                                       0x00108100u,
+                                       addiu(7u, 7u, 1, 0x00108004u));
+        auto compiled = compile_r5900_ir_x64(block);
+        expect(compiled.ok(), "native direct J block must compile");
+
+        R5900IrExecutionState initial{};
+        initial.gpr[7] = {5u, 0x7777777777777777ull};
+        initial.gpr[31] = {0x1122334455667788ull, 0x8877665544332211ull};
+        auto native_state = initial;
+        auto reference_state = initial;
+        R5900IrExecutionContext native_context{};
+        native_context.state = &native_state;
+        R5900IrExecutionContext reference_context{};
+        reference_context.state = &reference_state;
+
+        const auto native_result = compiled.block->execute(native_context);
+        const auto reference_result = execute_r5900_ir_block(block, reference_context);
+        expect(native_result.ok() && reference_result.ok(),
+               "native/reference direct J must execute");
+        expect(native_result.next_pc == reference_result.next_pc &&
+                   native_result.next_pc == 0x00108100u,
+               "native direct J next PC must match reference");
+        expect_gprs_equal(reference_state, native_state,
+                          "native direct J state must match reference");
+    }
+
+    {
+        const auto block = direct_call(0x00108200u,
+                                       0x00108300u,
+                                       addiu(23u, 31u, 0, 0x00108204u));
+        auto compiled = compile_r5900_ir_x64(block);
+        expect(compiled.ok(), "native direct JAL block must compile");
+
+        R5900IrExecutionState initial{};
+        initial.gpr[31] = {0xdeadbeefdeadbeefull, 0x0123456789abcdefull};
+        auto native_state = initial;
+        auto reference_state = initial;
+        R5900IrExecutionContext native_context{};
+        native_context.state = &native_state;
+        R5900IrExecutionContext reference_context{};
+        reference_context.state = &reference_state;
+
+        const auto native_result = compiled.block->execute(native_context);
+        const auto reference_result = execute_r5900_ir_block(block, reference_context);
+        expect(native_result.ok() && reference_result.ok(),
+               "native/reference direct JAL must execute");
+        expect(native_result.next_pc == reference_result.next_pc &&
+                   native_result.next_pc == 0x00108300u,
+               "native JAL target must match reference");
+        expect(native_state.gpr[31].low64 == 0x00108208u &&
+                   native_state.gpr[31].high64 == 0x0123456789abcdefull,
+               "native JAL must write low64 link and preserve high64");
+        expect(native_state.gpr[23].low64 == 0x00108208u,
+               "native JAL delay must observe new link");
+        expect_gprs_equal(reference_state, native_state,
+                          "native direct JAL state must match reference");
+    }
+
+    {
+        const auto block = direct_call(0x00108400u,
+                                       0x00108500u,
+                                       addiu(31u, 0u, 9, 0x00108404u));
+        auto compiled = compile_r5900_ir_x64(block);
+        expect(compiled.ok(), "native JAL r31-delay block must compile");
+
+        R5900IrExecutionState initial{};
+        initial.gpr[31] = {0x1111u, 0xfedcba9876543210ull};
+        auto native_state = initial;
+        auto reference_state = initial;
+        R5900IrExecutionContext native_context{};
+        native_context.state = &native_state;
+        R5900IrExecutionContext reference_context{};
+        reference_context.state = &reference_state;
+
+        const auto native_result = compiled.block->execute(native_context);
+        const auto reference_result = execute_r5900_ir_block(block, reference_context);
+        expect(native_result.ok() && reference_result.ok(),
+               "native/reference JAL r31-delay must execute");
+        expect(native_state.gpr[31].low64 == 9u &&
+                   native_state.gpr[31].high64 == 0xfedcba9876543210ull,
+               "native delay write must win after JAL link");
+        expect_gprs_equal(reference_state, native_state,
+                          "native JAL r31-delay state must match reference");
+    }
+
+    {
+        auto block = direct_jump(0x00108600u,
+                                 0x00108700u,
+                                 store128(2u, 3u, 0, 0x00108604u));
+        auto compiled = compile_r5900_ir_x64(block);
+        expect(compiled.ok(), "helper-frame direct J block must compile");
+
+        R5900IrExecutionState native_state{};
+        native_state.gpr[2].low64 = 0x600fu;
+        native_state.gpr[3] = {0x1111222233334444ull, 0x5555666677778888ull};
+        auto reference_state = native_state;
+        WriteRecorder native_recorder{};
+        WriteRecorder reference_recorder{};
+        auto native_context = context_for(native_state, native_recorder);
+        auto reference_context = context_for(reference_state, reference_recorder);
+
+        const auto native_result = compiled.block->execute(native_context);
+        const auto reference_result = execute_r5900_ir_block(block, reference_context);
+        expect(native_result.ok() && reference_result.ok(),
+               "helper-frame direct J native/reference must execute");
+        expect(native_result.next_pc == 0x00108700u &&
+                   native_result.next_pc == reference_result.next_pc,
+               "helper-frame direct J target must match reference");
+        expect(native_recorder.calls == 1u && reference_recorder.calls == 1u &&
+                   native_recorder.address == reference_recorder.address &&
+                   native_recorder.address == 0x6000u,
+               "helper-frame direct J delay Store128 must match reference");
     }
 
     std::cout << "r5900_x64_store128_windows_tests: PASS\n";
