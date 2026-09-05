@@ -244,6 +244,31 @@ int main() {
                "delay-slot rejection diagnostic must identify SQ scope boundary");
     }
 
+    {
+        const auto bne = i_type(0x05u, 1u, 2u, 2u);
+        auto memory = make_memory({bne, sq_r7_r2, 0u, 0u}, code_base, data_base);
+        const auto before = memory.read_u128(target);
+        expect(before.has_value(), "BNE SQ-delay target must be mapped");
+        R5900BlockDispatcher dispatcher(memory);
+        R5900IrExecutionState state{};
+        state.gpr[1].low64 = 1u;
+        state.gpr[2].low64 = target;
+        state.gpr[7] = {9u, 10u};
+
+        const auto result = dispatcher.run(code_base, state, 1u);
+        expect(result.reason == R5900DispatchStopReason::LoweringFailure &&
+                   result.next_pc == code_base + 4u &&
+                   result.blocks_executed == 0u && result.instructions_executed == 0u,
+               "SQ in BNE delay slot must fail before guest progress");
+        expect(dispatcher.cache_size() == 0u,
+               "rejected BNE SQ delay must not populate cache");
+        const auto after = memory.read_u128(target);
+        expect(after.has_value() && *after == *before,
+               "rejected BNE SQ delay must not mutate guest memory");
+        expect(result.message.find("BEQ/BNE") != std::string::npos,
+               "BNE SQ-delay diagnostic must identify BEQ/BNE scope boundary");
+    }
+
     std::cout << "r5900_block_dispatcher_store128_windows_tests: PASS\n";
     return EXIT_SUCCESS;
 }

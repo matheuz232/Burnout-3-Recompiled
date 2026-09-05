@@ -312,6 +312,47 @@ int main() {
     }
 
     {
+        const auto bne = i_type(0x05, 1, 2, 2u);
+        const auto delay = i_type(0x09, 3, 3, 1u);
+        auto memory = make_memory({bne, delay, 0u, 0u}, base);
+        R5900BlockDispatcher dispatcher(memory);
+
+        R5900IrExecutionState equal_state{};
+        equal_state.gpr[1].low64 = 5u;
+        equal_state.gpr[2].low64 = 5u;
+        const auto equal_result = dispatcher.run(base, equal_state, 1u);
+        expect(equal_result.reason == R5900DispatchStopReason::BlockBudgetExhausted &&
+                   equal_result.next_pc == base + 8u,
+               "equal BNE operands must select fallthrough PC");
+        expect(equal_result.cache_misses == 1u && equal_result.cache_hits == 0u &&
+                   equal_state.gpr[3].low64 == 1u,
+               "first BNE execution must miss cache and execute delay once");
+
+        R5900IrExecutionState unequal_state{};
+        unequal_state.gpr[1].low64 = 5u;
+        unequal_state.gpr[2].low64 = 6u;
+        const auto unequal_result = dispatcher.run(base, unequal_state, 1u);
+        expect(unequal_result.reason == R5900DispatchStopReason::BlockBudgetExhausted &&
+                   unequal_result.next_pc == base + 12u,
+               "unequal BNE operands must select branch target");
+        expect(unequal_result.cache_hits == 1u && unequal_result.recompilations == 0u &&
+                   unequal_state.gpr[3].low64 == 1u,
+               "BNE runtime outcome change must reuse cached native block");
+
+        expect(memory.write_u32(base + 4u, i_type(0x09, 3, 3, 2u)),
+               "BNE delay mutation must succeed");
+        R5900IrExecutionState mutated_state{};
+        mutated_state.gpr[1].low64 = 7u;
+        mutated_state.gpr[2].low64 = 8u;
+        const auto mutated_result = dispatcher.run(base, mutated_state, 1u);
+        expect(mutated_result.next_pc == base + 12u &&
+                   mutated_result.recompilations == 1u &&
+                   mutated_result.cache_hits == 0u &&
+                   mutated_state.gpr[3].low64 == 2u,
+               "BNE delay mutation must invalidate cache and execute new delay");
+    }
+
+    {
         const std::vector<std::uint32_t> words = {
             i_type(0x09, 0, 1, 1u),
             i_type(0x09, 1, 1, 1u),
