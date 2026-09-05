@@ -172,6 +172,33 @@ std::optional<std::uint32_t> Ps2MemoryMap::read_u32(std::uint32_t address) const
            (static_cast<std::uint32_t>((*bytes)[3]) << 24u);
 }
 
+std::optional<std::uint64_t> Ps2MemoryMap::read_u64(std::uint32_t address) const noexcept {
+    const auto bytes = translate(address, 8u);
+    if (!bytes) {
+        return std::nullopt;
+    }
+
+    std::uint64_t value{};
+    for (unsigned i = 0u; i < 8u; ++i) {
+        value |= static_cast<std::uint64_t>((*bytes)[i]) << (i * 8u);
+    }
+    return value;
+}
+
+std::optional<Ps2MemoryValue128> Ps2MemoryMap::read_u128(std::uint32_t address) const noexcept {
+    const auto bytes = translate(address, 16u);
+    if (!bytes) {
+        return std::nullopt;
+    }
+
+    Ps2MemoryValue128 value{};
+    for (unsigned i = 0u; i < 8u; ++i) {
+        value[0] |= static_cast<std::uint64_t>((*bytes)[i]) << (i * 8u);
+        value[1] |= static_cast<std::uint64_t>((*bytes)[8u + i]) << (i * 8u);
+    }
+    return value;
+}
+
 bool Ps2MemoryMap::write_u8(std::uint32_t address, std::uint8_t value) noexcept {
     const auto bytes = translate(address, 1);
     if (!bytes) {
@@ -200,6 +227,32 @@ bool Ps2MemoryMap::write_u32(std::uint32_t address, std::uint32_t value) noexcep
     (*bytes)[1] = static_cast<std::uint8_t>((value >> 8u) & 0xFFu);
     (*bytes)[2] = static_cast<std::uint8_t>((value >> 16u) & 0xFFu);
     (*bytes)[3] = static_cast<std::uint8_t>((value >> 24u) & 0xFFu);
+    return true;
+}
+
+bool Ps2MemoryMap::write_u64(std::uint32_t address, std::uint64_t value) noexcept {
+    const auto bytes = translate(address, 8u);
+    if (!bytes) {
+        return false;
+    }
+
+    for (unsigned i = 0u; i < 8u; ++i) {
+        (*bytes)[i] = static_cast<std::uint8_t>((value >> (i * 8u)) & 0xffu);
+    }
+    return true;
+}
+
+bool Ps2MemoryMap::write_u128(std::uint32_t address,
+                              const Ps2MemoryValue128& value) noexcept {
+    const auto bytes = translate(address, 16u);
+    if (!bytes) {
+        return false;
+    }
+
+    for (unsigned i = 0u; i < 8u; ++i) {
+        (*bytes)[i] = static_cast<std::uint8_t>((value[0] >> (i * 8u)) & 0xffu);
+        (*bytes)[8u + i] = static_cast<std::uint8_t>((value[1] >> (i * 8u)) & 0xffu);
+    }
     return true;
 }
 
