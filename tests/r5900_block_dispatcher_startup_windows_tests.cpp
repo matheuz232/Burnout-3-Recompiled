@@ -21,7 +21,7 @@ constexpr std::uint32_t kDirectJumpPc = 0x00100164u;
 constexpr std::uint32_t kDirectJumpTarget = 0x00100180u;
 constexpr std::uint32_t kDirectCallPc = 0x00100180u;
 constexpr std::uint32_t kDirectCallTarget = 0x001001a0u;
-constexpr std::uint32_t kIndirectReturnPc = 0x001001a4u;
+constexpr std::uint32_t kReturnTrapPc = 0x0010018cu;
 constexpr std::uint32_t kExpectedLinkPc = 0x00100188u;
 constexpr std::uint32_t kSqTarget = 0x004e2680u;
 
@@ -245,15 +245,15 @@ std::vector<std::uint32_t> make_synthetic_startup_words(std::uint32_t base) {
     words.push_back(i_type(0x09u, 0u, 30u, 1u));            // 0x17c poison
     words.push_back(j_type(0x03u, kDirectCallTarget));       // 0x180 JAL
     words.push_back(i_type(0x09u, 31u, 23u, 0u));           // 0x184 delay sees r31
-    words.push_back(i_type(0x09u, 0u, 25u, 2u));            // 0x188 poison
-    words.push_back(i_type(0x09u, 0u, 26u, 2u));            // 0x18c poison
+    words.push_back(i_type(0x09u, 0u, 25u, 2u));            // 0x188 returned continuation
+    words.push_back(0x0000000cu);                            // 0x18c synthetic SYSCALL
     words.push_back(i_type(0x09u, 0u, 27u, 2u));            // 0x190 poison
     words.push_back(i_type(0x09u, 0u, 28u, 2u));            // 0x194 poison
     words.push_back(i_type(0x09u, 0u, 30u, 2u));            // 0x198 poison
     words.push_back(0u);                                    // 0x19c guard
     words.push_back(i_type(0x09u, 0u, 24u, 0x0055u));       // 0x1a0 callee
     words.push_back(r_type(31u, 0u, 0u, 0u, 0x08u));        // 0x1a4 JR r31
-    words.push_back(0u);                                    // 0x1a8 mapped JR delay
+    words.push_back(i_type(0x09u, 0u, 29u, 0x66u));         // 0x1a8 JR delay
     expect(words.size() == 105u, "synthetic J/JAL fixture count mismatch");
     expect(base + static_cast<std::uint32_t>(87u * 4u) == kDirectJumpPc,
            "synthetic direct J PC mismatch");
@@ -360,14 +360,14 @@ void validate_synthetic_startup() {
 
     R5900IrExecutionState state{};
 
-    const auto result = dispatcher.run(base, state, 5u);
-    expect(result.reason == R5900DispatchStopReason::ControlFlow,
-           "startup must stop at unsupported JR");
-    expect(result.next_pc == kIndirectReturnPc,
-           "startup JR boundary mismatch");
-    expect(result.blocks_executed == 5u,
+    const auto result = dispatcher.run(base, state, 8u);
+    expect(result.reason == R5900DispatchStopReason::Trap,
+           "startup must return through JR and stop before synthetic SYSCALL");
+    expect(result.next_pc == kReturnTrapPc,
+           "startup return trap boundary mismatch");
+    expect(result.blocks_executed == 6u,
            "startup block count mismatch");
-    expect(result.instructions_executed == 87u,
+    expect(result.instructions_executed == 90u,
            "startup instruction count mismatch");
 
     const auto target_after = memory.read_u128(kSqTarget);
@@ -410,13 +410,15 @@ void validate_synthetic_startup() {
            "JAL link mismatch");
     expect(state.gpr[31].high64 == 0u,
            "startup r31 high64 mismatch");
-    expect(state.gpr[25].low64 == 0u && state.gpr[26].low64 == 0u &&
+    expect(state.gpr[25].low64 == 2u && state.gpr[26].low64 == 0u &&
                state.gpr[27].low64 == 0u && state.gpr[28].low64 == 0u &&
                state.gpr[30].low64 == 0u,
-           "direct-transfer poison fallthrough must remain untouched");
+           "returned continuation must execute and poison after the trap must remain untouched");
 
-    std::cout << "SYNTHETIC_STARTUP_J_JAL_VALIDATED sq=0x00100160 target=0x004e2680 "
-                 "stop=0x001001a4 blocks=5 instructions=87\n";
+    expect(state.gpr[29].low64 == 0x66u, "JR delay must execute once");
+
+    std::cout << "SYNTHETIC_STARTUP_JR_VALIDATED sq=0x00100160 target=0x004e2680 "
+                 "stop=0x0010018c blocks=6 instructions=90\n";
 }
 
 } // namespace

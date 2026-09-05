@@ -43,8 +43,14 @@ void decode_special(R5900DecodedInstruction& decoded) noexcept {
     case 0x04: set_instruction(decoded, R5900Instruction::Sllv, R5900InstructionClass::Alu); break;
     case 0x06: set_instruction(decoded, R5900Instruction::Srlv, R5900InstructionClass::Alu); break;
     case 0x07: set_instruction(decoded, R5900Instruction::Srav, R5900InstructionClass::Alu); break;
-    case 0x08: mark_jump(decoded, R5900Instruction::Jr); break;
-    case 0x09: mark_jump(decoded, R5900Instruction::Jalr, true); break;
+    case 0x08:
+        if (decoded.rt == 0u && decoded.rd == 0u && decoded.sa == 0u)
+            mark_jump(decoded, R5900Instruction::Jr);
+        break;
+    case 0x09:
+        if (decoded.rt == 0u && decoded.sa == 0u)
+            mark_jump(decoded, R5900Instruction::Jalr, true);
+        break;
     case 0x0C: set_instruction(decoded, R5900Instruction::Syscall, R5900InstructionClass::System); break;
     case 0x0D: set_instruction(decoded, R5900Instruction::Break, R5900InstructionClass::System); break;
     case 0x0F: set_instruction(decoded, R5900Instruction::Sync, R5900InstructionClass::Alu); break;
