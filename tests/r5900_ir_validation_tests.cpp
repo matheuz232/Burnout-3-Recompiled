@@ -309,9 +309,9 @@ int main() {
 
     {
         auto ir = valid_andi;
-        ir.inputs[1] = gpr(2);
+        ir.inputs[1] = fpr(2);
         expect(validate_r5900_ir_instruction(ir, 31).error == R5900IrValidationError::MalformedInstruction,
-               "And64 second operand must be immediate");
+               "And64 second operand must reject FPR");
     }
 
     {
