@@ -706,6 +706,86 @@ int main() {
                "later analysis failure must report first unprocessed PC");
     }
 
+
+    {
+        const auto target = base + 0x20u;
+        auto memory = make_memory({
+  j_type(0x02u, target),
+  i_type(0x09u, 0u, 7u, 5u),
+  0u, 0u, 0u, 0u, 0u, 0u, 0u,
+        }, base);
+        R5900BlockDispatcher dispatcher(memory);
+
+        R5900IrExecutionState first_state{};
+        first_state.gpr[31] = {0x1111222233334444ull, 0xaaaabbbbccccddddull};
+        const auto first = dispatcher.run(base, first_state, 1u);
+        expect(first.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+     "direct J at entry must execute as a supported block terminator");
+        expect(first.next_pc == target && first.blocks_executed == 1u &&
+         first.instructions_executed == 2u,
+     "direct J must execute terminator plus one delay slot");
+        expect(first_state.gpr[7].low64 == 5u,
+     "direct J delay slot must execute exactly once");
+        expect(first_state.gpr[31].low64 == 0x1111222233334444ull &&
+         first_state.gpr[31].high64 == 0xaaaabbbbccccddddull,
+     "direct J must not modify r31");
+        expect(first.cache_misses == 1u && first.cache_hits == 0u,
+     "first direct J execution must compile one cache entry");
+
+        R5900IrExecutionState second_state{};
+        const auto second = dispatcher.run(base, second_state, 1u);
+        expect(second.cache_hits == 1u && second.cache_misses == 0u &&
+         second.recompilations == 0u,
+     "unchanged direct J guest words must hit cache");
+        expect(second.next_pc == target && second_state.gpr[7].low64 == 5u,
+     "cached direct J must preserve target and delay semantics");
+    }
+
+    {
+        const auto target = base + 0x20u;
+        auto memory = make_memory({
+  j_type(0x03u, target),
+  i_type(0x09u, 31u, 23u, 0u),
+  0u, 0u, 0u, 0u, 0u, 0u, 0u,
+        }, base);
+        R5900BlockDispatcher dispatcher(memory);
+
+        R5900IrExecutionState state{};
+        state.gpr[31] = {0xdeadbeefdeadbeefull, 0x0123456789abcdefull};
+        const auto result = dispatcher.run(base, state, 1u);
+        expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+     "direct JAL at entry must execute as a supported block terminator");
+        expect(result.next_pc == target && result.blocks_executed == 1u &&
+         result.instructions_executed == 2u,
+     "direct JAL must execute terminator plus one delay slot");
+        expect(state.gpr[31].low64 == base + 8u &&
+         state.gpr[31].high64 == 0x0123456789abcdefull,
+     "dispatcher JAL must write PC+8 and preserve r31 high64");
+        expect(state.gpr[23].low64 == base + 8u,
+     "dispatcher JAL delay must observe the new link value");
+    }
+
+    {
+        const auto target = base + 0x10u;
+        auto memory = make_memory({
+  j_type(0x02u, target),
+  i_type(0x1fu, 2u, 0u, 0u),
+  0u, 0u, 0u,
+        }, base);
+        R5900BlockDispatcher dispatcher(memory);
+        R5900IrExecutionState state{};
+        state.gpr[2].low64 = 0x00400000u;
+
+        const auto result = dispatcher.run(base, state, 1u);
+        expect(result.reason == R5900DispatchStopReason::LoweringFailure,
+     "SQ in direct-transfer delay slot must be rejected explicitly");
+        expect(result.next_pc == base + 4u && result.blocks_executed == 0u &&
+         result.instructions_executed == 0u,
+     "rejected direct-transfer delay must commit zero progress");
+        expect(dispatcher.cache_size() == 0u,
+     "rejected direct-transfer delay must not populate cache");
+    }
+
     std::cout << "r5900_block_dispatcher_windows_tests: PASS\n";
     return EXIT_SUCCESS;
 }
