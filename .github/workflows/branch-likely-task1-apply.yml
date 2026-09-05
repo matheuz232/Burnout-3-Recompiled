@@ -1,0 +1,27 @@
+name: Branch Likely Task1 Apply
+
+on:
+  push:
+    paths:
+      - 'tools/apply_branch_likely_task1.py'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/r5900-branch-likely-v0
+          fetch-depth: 0
+      - name: Apply Task 1
+        run: python tools/apply_branch_likely_task1.py
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CMakeLists.txt src/recompiler/r5900_ir_validation.cpp tests/r5900_ir_direct_transfer_validation_tests.cpp tests/r5900_branch_likely_test_support.h tests/r5900_ir_branch_likely_validation_tests.cpp
+          git commit -m "feat: validate R5900 likely branch IR"
+          git push origin HEAD:feature/r5900-branch-likely-v0
