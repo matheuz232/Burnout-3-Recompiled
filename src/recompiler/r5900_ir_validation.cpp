@@ -265,6 +265,88 @@ R5900IrValidationResult validate_mtsah(const R5900IrInstruction& ir,
     return {};
 }
 
+R5900IrValidationResult validate_move_bits32(const R5900IrInstruction& ir,
+                                             std::size_t index) {
+    const auto present = require_destination(ir, index);
+    if (!present.ok()) {
+        return present;
+    }
+    if (ir.write_mode != R5900IrGprWriteMode::None || ir.inputs.size() != 1u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "MoveBits32 expects one GPR input and no GPR write mode");
+    }
+    const auto input = validate_operand(ir.inputs[0], index, ir.guest_pc);
+    if (!input.ok()) {
+        return input;
+    }
+    if (ir.inputs[0].kind != R5900IrOperandKind::Gpr) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "MoveBits32 expects one GPR input");
+    }
+
+    switch (ir.destination->kind) {
+    case R5900IrDestinationKind::Fpr:
+        if (ir.destination->index >= 32u) {
+            return failure(R5900IrValidationError::InvalidRegister,
+                           index,
+                           ir.guest_pc,
+                           "invalid destination FPR");
+        }
+        return {};
+    case R5900IrDestinationKind::Fcr31:
+        if (ir.destination->index != 0u) {
+            return failure(R5900IrValidationError::MalformedInstruction,
+                           index,
+                           ir.guest_pc,
+                           "FCR31 destination must be unindexed");
+        }
+        return {};
+    default:
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "MoveBits32 expects FPR or FCR31 destination");
+    }
+}
+
+R5900IrValidationResult validate_add_f32_accumulator(const R5900IrInstruction& ir,
+                                                     std::size_t index) {
+    const auto present = require_destination(ir, index);
+    if (!present.ok()) {
+        return present;
+    }
+    if (ir.destination->kind != R5900IrDestinationKind::FpAccumulator ||
+        ir.destination->index != 0u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "AddF32ToAccumulator expects unindexed FP accumulator destination");
+    }
+    if (ir.write_mode != R5900IrGprWriteMode::None || ir.inputs.size() != 2u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "AddF32ToAccumulator expects two FPR inputs and no GPR write mode");
+    }
+    for (const auto& operand : ir.inputs) {
+        const auto validation = validate_operand(operand, index, ir.guest_pc);
+        if (!validation.ok()) {
+            return validation;
+        }
+        if (operand.kind != R5900IrOperandKind::Fpr) {
+            return failure(R5900IrValidationError::MalformedInstruction,
+                           index,
+                           ir.guest_pc,
+                           "AddF32ToAccumulator expects exactly two FPR inputs");
+        }
+    }
+    return {};
+}
+
 } // namespace
 
 R5900IrValidationResult validate_r5900_ir_instruction(
@@ -300,6 +382,12 @@ R5900IrValidationResult validate_r5900_ir_instruction(
 
     case R5900IrOpcode::ComputeMtsah:
         return validate_mtsah(instruction, instruction_index);
+
+    case R5900IrOpcode::MoveBits32:
+        return validate_move_bits32(instruction, instruction_index);
+
+    case R5900IrOpcode::AddF32ToAccumulator:
+        return validate_add_f32_accumulator(instruction, instruction_index);
 
     default:
         return failure(R5900IrValidationError::UnsupportedOpcode,
