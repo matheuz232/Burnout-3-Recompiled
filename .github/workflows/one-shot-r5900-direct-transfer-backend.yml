@@ -20,8 +20,9 @@ jobs:
           fetch-depth: 0
 
       - name: Patch backend
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           path = Path("src/recompiler/windows/r5900_x64_backend.cpp")
@@ -29,59 +30,63 @@ jobs:
 
           namespace_needle = """    return publish_code(bytes);\n}\n\n} // namespace\n\nR5900X64CompiledBlock::R5900X64CompiledBlock"""
           direct_function = r'''    return publish_code(bytes);
-}
+          }
 
-PendingX64Code compile_direct_transfer_code(const R5900IrBlock& block) {
-    const bool helper_frame =
-        sequence_needs_helper(block.body) ||
-        sequence_needs_helper(block.terminator.delay_slot);
+          PendingX64Code compile_direct_transfer_code(const R5900IrBlock& block) {
+              const bool helper_frame =
+                  sequence_needs_helper(block.body) ||
+                  sequence_needs_helper(block.terminator.delay_slot);
 
-    std::vector<std::uint8_t> bytes;
-    bytes.reserve(128u +
-                  block.body.size() * 128u +
-                  block.terminator.delay_slot.size() * 256u);
+              std::vector<std::uint8_t> bytes;
+              bytes.reserve(128u +
+                            block.body.size() * 128u +
+                            block.terminator.delay_slot.size() * 256u);
 
-    if (helper_frame) {
-        emit_helper_frame_prologue(bytes);
-    }
-    emit_zero_gpr0(bytes);
+              if (helper_frame) {
+                  emit_helper_frame_prologue(bytes);
+              }
+              emit_zero_gpr0(bytes);
 
-    const auto body_emitted = emit_ir_sequence(
-        bytes,
-        block.body,
-        0u,
-        helper_frame);
-    if (!body_emitted.ok()) {
-        return pending_failure(body_emitted.error, body_emitted.message);
-    }
+              const auto body_emitted = emit_ir_sequence(
+                  bytes,
+                  block.body,
+                  0u,
+                  helper_frame);
+              if (!body_emitted.ok()) {
+                  return pending_failure(body_emitted.error, body_emitted.message);
+              }
 
-    if (block.terminator.kind == R5900IrTerminatorKind::DirectCall) {
-        emit_mov_eax_imm32(bytes, block.terminator.link_pc);
-        emit_store_rax_to_state(bytes, gpr_low64_offset(31u));
-    }
+              if (block.terminator.kind == R5900IrTerminatorKind::DirectCall) {
+                  emit_mov_eax_imm32(bytes, block.terminator.link_pc);
+                  emit_store_rax_to_state(bytes, gpr_low64_offset(31u));
+              }
 
-    emit_zero_gpr0(bytes);
-    const auto delay_emitted = emit_ir_sequence(
-        bytes,
-        block.terminator.delay_slot,
-        block.body.size() + 1u,
-        helper_frame);
-    if (!delay_emitted.ok()) {
-        return pending_failure(delay_emitted.error, delay_emitted.message);
-    }
+              emit_zero_gpr0(bytes);
+              const auto delay_emitted = emit_ir_sequence(
+                  bytes,
+                  block.terminator.delay_slot,
+                  block.body.size() + 1u,
+                  helper_frame);
+              if (!delay_emitted.ok()) {
+                  return pending_failure(delay_emitted.error, delay_emitted.message);
+              }
 
-    emit_zero_gpr0(bytes);
-    emit_mov_eax_imm32(bytes, block.terminator.target_pc);
-    if (helper_frame) {
-        emit_helper_frame_epilogue(bytes);
-    }
-    bytes.push_back(0xc3u);
-    return publish_code(bytes);
-}
+              emit_zero_gpr0(bytes);
+              emit_mov_eax_imm32(bytes, block.terminator.target_pc);
+              if (helper_frame) {
+                  emit_helper_frame_epilogue(bytes);
+              }
+              bytes.push_back(0xc3u);
+              return publish_code(bytes);
+          }
 
-} // namespace
+          } // namespace
 
-R5900X64CompiledBlock::R5900X64CompiledBlock'''
+          R5900X64CompiledBlock::R5900X64CompiledBlock'''
+          direct_function = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in direct_function.splitlines()
+          )
 
           if text.count(namespace_needle) != 1:
               raise SystemExit("direct-transfer insertion anchor not found exactly once")
@@ -94,6 +99,7 @@ R5900X64CompiledBlock::R5900X64CompiledBlock'''
           text = text.replace(switch_needle, switch_replacement, 1)
 
           path.write_text(text, encoding="utf-8")
+          PY
 
       - name: Verify patch
         shell: bash
