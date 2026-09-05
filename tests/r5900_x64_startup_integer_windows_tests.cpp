@@ -170,7 +170,9 @@ int main() {
         fail("backend must compile startup integer differential program");
     }
     expect(compiled.block.has_value(), "successful compile must return a native block");
-    compiled.block->execute(actual);
+    const auto next_pc = compiled.block->execute(actual);
+    expect(next_pc == program.back().guest_pc + 4u,
+           "vector x64 compile must return sequential fallthrough PC");
     expect_states_equal(expected, actual);
 
     std::cout << "r5900_x64_startup_integer_windows_tests: PASS\n";
