@@ -2,6 +2,7 @@
 #include "recompiler/r5900_ir_validation.h"
 
 #include <cstdlib>
+#include <initializer_list>
 #include <iostream>
 #include <string>
 
@@ -27,6 +28,13 @@ R5900IrOperand gpr(std::uint8_t index) {
     return operand;
 }
 
+R5900IrOperand fpr(std::uint8_t index) {
+    R5900IrOperand operand{};
+    operand.kind = R5900IrOperandKind::Fpr;
+    operand.gpr_index = index;
+    return operand;
+}
+
 R5900IrOperand immediate(std::int64_t value) {
     R5900IrOperand operand{};
     operand.kind = R5900IrOperandKind::Immediate;
@@ -48,13 +56,25 @@ R5900IrInstruction write_ir(R5900IrOpcode opcode,
     return ir;
 }
 
+R5900IrInstruction make_ir(R5900IrOpcode opcode,
+                           R5900IrDestination destination,
+                           R5900IrGprWriteMode mode,
+                           std::initializer_list<R5900IrOperand> inputs,
+                           std::uint32_t pc) {
+    R5900IrInstruction ir{};
+    ir.guest_pc = pc;
+    ir.opcode = opcode;
+    ir.destination = destination;
+    ir.write_mode = mode;
+    ir.inputs.assign(inputs.begin(), inputs.end());
+    return ir;
+}
+
 } // namespace
 
 int main() {
     using namespace b3r::recompiler;
 
-    // RED for startup-execution v0 model: these types/fields must be introduced
-    // before any production semantics are added.
     R5900IrInstruction model_probe{};
     model_probe.destination = R5900IrDestination{R5900IrDestinationKind::Fpr, 3u};
     model_probe.write_mode = R5900IrGprWriteMode::Full128;
@@ -88,6 +108,163 @@ int main() {
     const auto valid_add = write_ir(
         R5900IrOpcode::AddWordSignExtend, 8, gpr(9), gpr(10), 0x00102008u);
     expect(validate_r5900_ir_instruction(valid_add, 2).ok(), "valid AddWordSignExtend must validate");
+
+    // RED: structural contracts for the new non-COP1 startup IR.
+    const auto valid_andi = make_ir(
+        R5900IrOpcode::And64,
+        {R5900IrDestinationKind::Gpr, 2u},
+        R5900IrGprWriteMode::Low64PreserveUpper64,
+        {gpr(1), immediate(0xff)},
+        0x00102100u);
+    expect(validate_r5900_ir_instruction(valid_andi, 20).ok(),
+           "valid And64 startup IR must validate");
+
+    const auto valid_lui = make_ir(
+        R5900IrOpcode::LoadUpperImmediateSignExtend,
+        {R5900IrDestinationKind::Gpr, 3u},
+        R5900IrGprWriteMode::Low64PreserveUpper64,
+        {immediate(0x8040)},
+        0x00102104u);
+    expect(validate_r5900_ir_instruction(valid_lui, 21).ok(),
+           "valid LUI semantic IR must validate");
+
+    const auto valid_packed = make_ir(
+        R5900IrOpcode::AddPackedU32Saturate128,
+        {R5900IrDestinationKind::Gpr, 4u},
+        R5900IrGprWriteMode::Full128,
+        {gpr(5), gpr(6)},
+        0x00102108u);
+    expect(validate_r5900_ir_instruction(valid_packed, 22).ok(),
+           "valid PADDUW semantic IR must validate");
+
+    const auto valid_hi = make_ir(
+        R5900IrOpcode::MoveGprLow64,
+        {R5900IrDestinationKind::Hi, 0u},
+        R5900IrGprWriteMode::None,
+        {gpr(7)},
+        0x0010210cu);
+    expect(validate_r5900_ir_instruction(valid_hi, 23).ok(),
+           "valid MTHI semantic IR must validate");
+
+    const auto valid_lo = make_ir(
+        R5900IrOpcode::MoveGprLow64,
+        {R5900IrDestinationKind::Lo, 0u},
+        R5900IrGprWriteMode::None,
+        {gpr(8)},
+        0x00102110u);
+    expect(validate_r5900_ir_instruction(valid_lo, 24).ok(),
+           "valid MTLO semantic IR must validate");
+
+    const auto valid_hi1 = make_ir(
+        R5900IrOpcode::MoveGprLow64,
+        {R5900IrDestinationKind::Hi1, 0u},
+        R5900IrGprWriteMode::None,
+        {gpr(9)},
+        0x00102114u);
+    expect(validate_r5900_ir_instruction(valid_hi1, 25).ok(),
+           "valid MTHI1 semantic IR must validate");
+
+    const auto valid_lo1 = make_ir(
+        R5900IrOpcode::MoveGprLow64,
+        {R5900IrDestinationKind::Lo1, 0u},
+        R5900IrGprWriteMode::None,
+        {gpr(10)},
+        0x00102118u);
+    expect(validate_r5900_ir_instruction(valid_lo1, 26).ok(),
+           "valid MTLO1 semantic IR must validate");
+
+    const auto valid_mtsah = make_ir(
+        R5900IrOpcode::ComputeMtsah,
+        {R5900IrDestinationKind::Sa, 0u},
+        R5900IrGprWriteMode::None,
+        {gpr(11), immediate(5)},
+        0x0010211cu);
+    expect(validate_r5900_ir_instruction(valid_mtsah, 27).ok(),
+           "valid MTSAH semantic IR must validate");
+
+    {
+        auto ir = valid_andi;
+        ir.destination = R5900IrDestination{R5900IrDestinationKind::Fpr, 2u};
+        expect(validate_r5900_ir_instruction(ir, 28).error == R5900IrValidationError::MalformedInstruction,
+               "And64 with non-GPR destination must be rejected");
+    }
+
+    {
+        auto ir = valid_andi;
+        ir.write_mode = R5900IrGprWriteMode::Full128;
+        expect(validate_r5900_ir_instruction(ir, 29).error == R5900IrValidationError::MalformedInstruction,
+               "And64 with Full128 write must be rejected");
+    }
+
+    {
+        auto ir = valid_andi;
+        ir.inputs[0] = immediate(1);
+        expect(validate_r5900_ir_instruction(ir, 30).error == R5900IrValidationError::MalformedInstruction,
+               "And64 first operand must be GPR");
+    }
+
+    {
+        auto ir = valid_andi;
+        ir.inputs[1] = gpr(2);
+        expect(validate_r5900_ir_instruction(ir, 31).error == R5900IrValidationError::MalformedInstruction,
+               "And64 second operand must be immediate");
+    }
+
+    {
+        auto ir = valid_lui;
+        ir.inputs.push_back(immediate(1));
+        expect(validate_r5900_ir_instruction(ir, 32).error == R5900IrValidationError::MalformedInstruction,
+               "LUI semantic IR must have exactly one operand");
+    }
+
+    {
+        auto ir = valid_packed;
+        ir.write_mode = R5900IrGprWriteMode::Low64PreserveUpper64;
+        expect(validate_r5900_ir_instruction(ir, 33).error == R5900IrValidationError::MalformedInstruction,
+               "packed add must require Full128 write mode");
+    }
+
+    {
+        auto ir = valid_packed;
+        ir.inputs[1] = immediate(1);
+        expect(validate_r5900_ir_instruction(ir, 34).error == R5900IrValidationError::MalformedInstruction,
+               "packed add must require two GPR sources");
+    }
+
+    {
+        auto ir = valid_hi;
+        ir.destination = R5900IrDestination{R5900IrDestinationKind::Hi, 1u};
+        expect(validate_r5900_ir_instruction(ir, 35).error == R5900IrValidationError::MalformedInstruction,
+               "unindexed HI destination must reject nonzero index");
+    }
+
+    {
+        auto ir = valid_hi;
+        ir.destination = R5900IrDestination{R5900IrDestinationKind::Sa, 0u};
+        expect(validate_r5900_ir_instruction(ir, 36).error == R5900IrValidationError::MalformedInstruction,
+               "MoveGprLow64 must reject SA destination");
+    }
+
+    {
+        auto ir = valid_mtsah;
+        ir.destination = R5900IrDestination{R5900IrDestinationKind::Sa, 1u};
+        expect(validate_r5900_ir_instruction(ir, 37).error == R5900IrValidationError::MalformedInstruction,
+               "unindexed SA destination must reject nonzero index");
+    }
+
+    {
+        auto ir = valid_mtsah;
+        ir.inputs[0] = fpr(0);
+        expect(validate_r5900_ir_instruction(ir, 38).error == R5900IrValidationError::MalformedInstruction,
+               "MTSAH semantic IR must reject FPR source");
+    }
+
+    {
+        auto ir = valid_packed;
+        ir.destination = R5900IrDestination{R5900IrDestinationKind::Gpr, 32u};
+        expect(validate_r5900_ir_instruction(ir, 39).error == R5900IrValidationError::InvalidRegister,
+               "packed destination GPR32 must be rejected");
+    }
 
     {
         auto ir = valid_or64;
