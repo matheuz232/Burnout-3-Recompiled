@@ -21,6 +21,16 @@ enum class R5900X64CompileError {
     CacheFlushFailed,
 };
 
+struct R5900X64ExecutionResult {
+    R5900IrExecutionError error{R5900IrExecutionError::None};
+    std::string message{};
+    std::uint32_t next_pc{};
+
+    [[nodiscard]] bool ok() const noexcept {
+        return error == R5900IrExecutionError::None;
+    }
+};
+
 class R5900X64CompiledBlock;
 struct R5900X64CompileResult;
 
@@ -41,6 +51,8 @@ public:
     R5900X64CompiledBlock& operator=(R5900X64CompiledBlock&& other) noexcept;
 
     [[nodiscard]] bool valid() const noexcept;
+    [[nodiscard]] R5900X64ExecutionResult execute(
+        R5900IrExecutionContext& context) const noexcept;
     [[nodiscard]] std::uint32_t execute(
         R5900IrExecutionState& state) const noexcept;
 
