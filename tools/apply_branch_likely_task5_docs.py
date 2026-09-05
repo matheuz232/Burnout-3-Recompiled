@@ -38,7 +38,7 @@ replace_prefixed_line(
 )
 replace_prefixed_line(
     readme_lines,
-    "- cache fingerprints that cover straight-line body words plus supported `BEQ`/`BNE`/`J`/`JAL`/`JR`/`JALR`",
+    "- cache fingerprints that cover straight-line body words plus supported `BEQ`/`BNE`/`BEQL`/`BNEL`/`J`/`JAL`/`JR`/`JALR`",
     "- cache fingerprints that cover straight-line body words plus supported `BEQ`/`BNE`/`BEQL`/`BNEL`/`J`/`JAL`/`JR`/`JALR` terminator and delay-slot words; runtime branch predicates and indirect target values are deliberately excluded from the key so cached conditional/indirect blocks can change runtime outcomes without recompilation;",
 )
 replace_prefixed_line(
@@ -57,7 +57,6 @@ replace_prefixed_line(
     "The game still does **not** boot. Broader guest-memory loads/stores, additional control flow including `BLEZL`/`BGTZL` and REGIMM likely/link-likely variants, BSS-clearing loops beyond the current synthetic startup boundary, syscall/HLE integration, graphics, audio, input, menus, and gameplay remain unimplemented. The `BEQL + BNEL branch-likely v0` milestone is **CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION** with 51/51 Windows tests; the legally supplied external ELF has not been run through this expanded Windows native path in this environment.",
 )
 
-# Add a compact explicit scope statement required by the milestone plan.
 scope_line = "Validated native control transfers: `BEQ`, `BNE`, `BEQL`, `BNEL`, `J`, `JAL`, `JR`, `JALR`. `BEQL`/`BNEL` implement architectural branch-likely annulment: their delay slot executes only on the taken path. `BLEZL`/`BGTZL` and REGIMM likely/link-likely variants remain unsupported. External legal-ELF validation of this expanded path is pending. The game does not boot yet."
 anchor = "The startup execution state models all 32 EE GPRs"
 anchor_matches = [i for i, line in enumerate(readme_lines) if line.startswith(anchor)]
@@ -93,6 +92,11 @@ replace_prefixed_line(
     progress_lines,
     "| R5900 BEQ + delay slot v0 |",
     "| R5900 BEQ + delay slot v0 | CI_VALIDATED | Ordinary BEQ is a native block terminator. Predicate uses GPR low64 values before the slot; taken/not-taken targets are returned by generated code and the delay always executes once. BEQL/BNEL are separately supported by explicit likely terminators; ordinary BEQ semantics remain unchanged |",
+)
+replace_prefixed_line(
+    progress_lines,
+    "| R5900 SQ + guest-memory writes v0 |",
+    "| R5900 SQ + guest-memory writes v0 | CI_VALIDATED | Straight-line `SQ` bodies execute through `Store128`: effective address is low32(base) + signed imm16 with 32-bit wrap, silently aligned down to 16 bytes, then all 128 source bits are written. Runtime memory failure is deterministic/non-partial; `SQ` in dispatcher-managed BEQ/BNE/BEQL/BNEL/J/JAL/JR/JALR delay slots is explicitly outside v0 |",
 )
 replace_prefixed_line(
     progress_lines,
