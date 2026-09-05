@@ -57,6 +57,19 @@ constexpr std::uint32_t sa_offset() {
     return state_offset(offsetof(R5900IrExecutionState, sa));
 }
 
+constexpr std::uint32_t fpr_offset(std::uint8_t index) {
+    return state_offset(offsetof(R5900IrExecutionState, fpr) +
+                        static_cast<std::size_t>(index) * sizeof(std::uint32_t));
+}
+
+constexpr std::uint32_t fcr31_offset() {
+    return state_offset(offsetof(R5900IrExecutionState, fcr31));
+}
+
+constexpr std::uint32_t fp_acc_offset() {
+    return state_offset(offsetof(R5900IrExecutionState, fp_acc));
+}
+
 R5900X64CompileError map_validation_error(R5900IrValidationError error) {
     switch (error) {
     case R5900IrValidationError::MalformedInstruction:
@@ -194,9 +207,9 @@ void emit_add_word_sign_extend(std::vector<std::uint8_t>& bytes,
     emit_operand32_to_edx(bytes, instruction.inputs[1]);
 
     bytes.push_back(0x01u);
-    bytes.push_back(0xd0u); // add eax, edx
+    bytes.push_back(0xd0u);
     bytes.push_back(0x48u);
-    bytes.push_back(0x98u); // cdqe
+    bytes.push_back(0x98u);
 
     if (instruction.destination->index != 0u) {
         emit_store_rax_to_state(bytes, gpr_low64_offset(instruction.destination->index));
@@ -210,7 +223,7 @@ void emit_or64(std::vector<std::uint8_t>& bytes,
 
     bytes.push_back(0x48u);
     bytes.push_back(0x09u);
-    bytes.push_back(0xd0u); // or rax, rdx
+    bytes.push_back(0xd0u);
 
     if (instruction.destination->index != 0u) {
         emit_store_rax_to_state(bytes, gpr_low64_offset(instruction.destination->index));
@@ -224,7 +237,7 @@ void emit_and64(std::vector<std::uint8_t>& bytes,
 
     bytes.push_back(0x48u);
     bytes.push_back(0x21u);
-    bytes.push_back(0xd0u); // and rax, rdx
+    bytes.push_back(0xd0u);
 
     if (instruction.destination->index != 0u) {
         emit_store_rax_to_state(bytes, gpr_low64_offset(instruction.destination->index));
@@ -237,7 +250,7 @@ void emit_lui(std::vector<std::uint8_t>& bytes,
     const auto word = static_cast<std::uint32_t>(immediate16) << 16u;
     emit_mov_eax_imm32(bytes, word);
     bytes.push_back(0x48u);
-    bytes.push_back(0x98u); // cdqe
+    bytes.push_back(0x98u);
 
     if (instruction.destination->index != 0u) {
         emit_store_rax_to_state(bytes, gpr_low64_offset(instruction.destination->index));
@@ -271,14 +284,14 @@ void emit_mtsah(std::vector<std::uint8_t>& bytes,
 
     bytes.push_back(0x83u);
     bytes.push_back(0xe0u);
-    bytes.push_back(0x07u); // and eax, 7
+    bytes.push_back(0x07u);
 
     bytes.push_back(0x83u);
     bytes.push_back(0xf0u);
-    bytes.push_back(static_cast<std::uint8_t>(instruction.inputs[1].immediate) & 0x07u); // xor eax, imm8
+    bytes.push_back(static_cast<std::uint8_t>(instruction.inputs[1].immediate) & 0x07u);
 
     bytes.push_back(0xd1u);
-    bytes.push_back(0xe0u); // shl eax, 1
+    bytes.push_back(0xe0u);
 
     emit_store_eax_to_state(bytes, sa_offset());
 }
@@ -287,7 +300,7 @@ void emit_load_xmm0_gpr(std::vector<std::uint8_t>& bytes, std::uint8_t index) {
     bytes.push_back(0xf3u);
     bytes.push_back(0x0fu);
     bytes.push_back(0x6fu);
-    bytes.push_back(0x81u); // movdqu xmm0, [rcx+disp32]
+    bytes.push_back(0x81u);
     emit_u32(bytes, gpr_offset(index));
 }
 
@@ -295,7 +308,7 @@ void emit_load_xmm1_gpr(std::vector<std::uint8_t>& bytes, std::uint8_t index) {
     bytes.push_back(0xf3u);
     bytes.push_back(0x0fu);
     bytes.push_back(0x6fu);
-    bytes.push_back(0x89u); // movdqu xmm1, [rcx+disp32]
+    bytes.push_back(0x89u);
     emit_u32(bytes, gpr_offset(index));
 }
 
@@ -303,14 +316,14 @@ void emit_movd_eax_xmm0(std::vector<std::uint8_t>& bytes) {
     bytes.push_back(0x66u);
     bytes.push_back(0x0fu);
     bytes.push_back(0x7eu);
-    bytes.push_back(0xc0u); // movd eax, xmm0
+    bytes.push_back(0xc0u);
 }
 
 void emit_movd_edx_xmm1(std::vector<std::uint8_t>& bytes) {
     bytes.push_back(0x66u);
     bytes.push_back(0x0fu);
     bytes.push_back(0x7eu);
-    bytes.push_back(0xcau); // movd edx, xmm1
+    bytes.push_back(0xcau);
 }
 
 void emit_shift_xmm_sources_one_lane(std::vector<std::uint8_t>& bytes) {
@@ -318,13 +331,13 @@ void emit_shift_xmm_sources_one_lane(std::vector<std::uint8_t>& bytes) {
     bytes.push_back(0x0fu);
     bytes.push_back(0x73u);
     bytes.push_back(0xd8u);
-    bytes.push_back(0x04u); // psrldq xmm0, 4
+    bytes.push_back(0x04u);
 
     bytes.push_back(0x66u);
     bytes.push_back(0x0fu);
     bytes.push_back(0x73u);
     bytes.push_back(0xd9u);
-    bytes.push_back(0x04u); // psrldq xmm1, 4
+    bytes.push_back(0x04u);
 }
 
 void emit_padduw(std::vector<std::uint8_t>& bytes,
@@ -337,11 +350,11 @@ void emit_padduw(std::vector<std::uint8_t>& bytes,
         emit_movd_edx_xmm1(bytes);
 
         bytes.push_back(0x01u);
-        bytes.push_back(0xd0u); // add eax, edx; CF indicates unsigned overflow
+        bytes.push_back(0xd0u);
         bytes.push_back(0x19u);
-        bytes.push_back(0xd2u); // sbb edx, edx => 0 or 0xffffffff
+        bytes.push_back(0xd2u);
         bytes.push_back(0x09u);
-        bytes.push_back(0xd0u); // or eax, edx => saturate on carry
+        bytes.push_back(0xd0u);
 
         if (instruction.destination->index != 0u) {
             emit_store_eax_to_state(
@@ -353,6 +366,47 @@ void emit_padduw(std::vector<std::uint8_t>& bytes,
             emit_shift_xmm_sources_one_lane(bytes);
         }
     }
+}
+
+void emit_move_bits32(std::vector<std::uint8_t>& bytes,
+                      const R5900IrInstruction& instruction) {
+    emit_load_eax_from_state(bytes, gpr_low64_offset(instruction.inputs[0].gpr_index));
+    const auto destination_offset =
+        instruction.destination->kind == R5900IrDestinationKind::Fpr
+            ? fpr_offset(instruction.destination->index)
+            : fcr31_offset();
+    emit_store_eax_to_state(bytes, destination_offset);
+}
+
+void emit_load_xmm0_f32(std::vector<std::uint8_t>& bytes, std::uint32_t displacement) {
+    bytes.push_back(0xf3u);
+    bytes.push_back(0x0fu);
+    bytes.push_back(0x10u);
+    bytes.push_back(0x81u);
+    emit_u32(bytes, displacement);
+}
+
+void emit_add_xmm0_f32(std::vector<std::uint8_t>& bytes, std::uint32_t displacement) {
+    bytes.push_back(0xf3u);
+    bytes.push_back(0x0fu);
+    bytes.push_back(0x58u);
+    bytes.push_back(0x81u);
+    emit_u32(bytes, displacement);
+}
+
+void emit_store_xmm0_f32(std::vector<std::uint8_t>& bytes, std::uint32_t displacement) {
+    bytes.push_back(0xf3u);
+    bytes.push_back(0x0fu);
+    bytes.push_back(0x11u);
+    bytes.push_back(0x81u);
+    emit_u32(bytes, displacement);
+}
+
+void emit_add_f32_to_accumulator(std::vector<std::uint8_t>& bytes,
+                                 const R5900IrInstruction& instruction) {
+    emit_load_xmm0_f32(bytes, fpr_offset(instruction.inputs[0].gpr_index));
+    emit_add_xmm0_f32(bytes, fpr_offset(instruction.inputs[1].gpr_index));
+    emit_store_xmm0_f32(bytes, fp_acc_offset());
 }
 
 R5900X64CompileResult failure(R5900X64CompileError error, std::string message) {
@@ -448,6 +502,12 @@ R5900X64CompileResult compile_r5900_ir_x64(
             break;
         case R5900IrOpcode::AddPackedU32Saturate128:
             emit_padduw(bytes, instruction);
+            break;
+        case R5900IrOpcode::MoveBits32:
+            emit_move_bits32(bytes, instruction);
+            break;
+        case R5900IrOpcode::AddF32ToAccumulator:
+            emit_add_f32_to_accumulator(bytes, instruction);
             break;
         default:
             return unsupported_backend_opcode(index, instruction);
