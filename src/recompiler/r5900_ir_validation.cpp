@@ -30,6 +30,14 @@ R5900IrValidationResult validate_operand(const R5900IrOperand& operand,
                            "invalid source GPR");
         }
         return {};
+    case R5900IrOperandKind::Fpr:
+        if (operand.gpr_index >= 32u) {
+            return failure(R5900IrValidationError::InvalidRegister,
+                           index,
+                           guest_pc,
+                           "invalid source FPR");
+        }
+        return {};
     default:
         return failure(R5900IrValidationError::MalformedInstruction,
                        index,
@@ -45,6 +53,12 @@ R5900IrValidationResult validate_write(const R5900IrInstruction& ir,
                        index,
                        ir.guest_pc,
                        "missing destination");
+    }
+    if (ir.destination->kind != R5900IrDestinationKind::Gpr) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "expected GPR destination");
     }
     if (ir.destination->index >= 32u) {
         return failure(R5900IrValidationError::InvalidRegister,
@@ -65,6 +79,12 @@ R5900IrValidationResult validate_write(const R5900IrInstruction& ir,
                        "expected exactly two inputs");
     }
     for (const auto& operand : ir.inputs) {
+        if (operand.kind == R5900IrOperandKind::Fpr) {
+            return failure(R5900IrValidationError::MalformedInstruction,
+                           index,
+                           ir.guest_pc,
+                           "FPR operand is not valid for this integer opcode");
+        }
         const auto validation = validate_operand(operand, index, ir.guest_pc);
         if (!validation.ok()) {
             return validation;

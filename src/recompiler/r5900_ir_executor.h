@@ -16,6 +16,14 @@ struct R5900IrGprValue {
 
 struct R5900IrExecutionState {
     std::array<R5900IrGprValue, 32> gpr{};
+    std::uint64_t hi{};
+    std::uint64_t lo{};
+    std::uint64_t hi1{};
+    std::uint64_t lo1{};
+    std::uint32_t sa{};
+    std::array<std::uint32_t, 32> fpr{};
+    std::uint32_t fcr31{};
+    std::uint32_t fp_acc{};
 };
 
 enum class R5900IrExecutionError {
