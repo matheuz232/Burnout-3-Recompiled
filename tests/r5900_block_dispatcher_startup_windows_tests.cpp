@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <utility>
 #include <vector>
@@ -129,7 +130,7 @@ constexpr std::uint32_t cop1_type(std::uint8_t rs,
            funct;
 }
 
-std::vector<std::uint32_t> make_startup_prefix_words(std::uint32_t base) {
+std::vector<std::uint32_t> make_synthetic_startup_prefix_words(std::uint32_t base) {
     std::vector<std::uint32_t> words;
     words.reserve(76u);
 
@@ -155,22 +156,81 @@ std::vector<std::uint32_t> make_startup_prefix_words(std::uint32_t base) {
     words.push_back(i_type(0x0fu, 0u, 3u, 0x01ecu));
     words.push_back(i_type(0x0du, 3u, 3u, 0xea00u));
 
-    expect(words.size() == 74u, "startup fixture count mismatch");
+    expect(words.size() == 74u, "synthetic startup fixture count mismatch");
     expect(base + static_cast<std::uint32_t>(words.size() * 4u) == 0x00100130u,
-           "startup fixture boundary mismatch");
+           "synthetic startup fixture boundary mismatch");
 
     words.push_back(i_type(0x04u, 0u, 0u, 1u));
     words.push_back(i_type(0x09u, 0u, 4u, 1u));
     return words;
 }
 
-} // namespace
+Bytes read_binary_file(const char* path) {
+    std::ifstream input(path, std::ios::binary);
+    expect(static_cast<bool>(input), "external ELF must open");
+    input.seekg(0, std::ios::end);
+    const auto end = input.tellg();
+    expect(end > 0, "external ELF must be non-empty");
+    const auto size = static_cast<std::size_t>(end);
+    input.seekg(0, std::ios::beg);
 
-int main() {
+    Bytes bytes(size);
+    input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
+    expect(input.gcount() == static_cast<std::streamsize>(size),
+           "external ELF read must be complete");
+    return bytes;
+}
+
+void validate_external_startup(const char* path) {
+    using namespace b3r::recompiler;
+
+    const auto bytes = read_binary_file(path);
+    const auto parsed = parse_ps2_elf(bytes);
+    expect(parsed.ok(), "external ELF must parse as a PS2 ELF");
+    expect(parsed.image->entry_point() == 0x00100008u,
+           "external ELF entry point mismatch");
+
+    auto built = b3r::runtime::Ps2MemoryMap::from_elf(*parsed.image);
+    expect(built.ok(), "external ELF must map into PS2 memory");
+
+    R5900BlockDispatcherOptions options{};
+    options.block_options.max_instructions = 256u;
+    R5900BlockDispatcher dispatcher(*built.memory, options);
+
+    R5900IrExecutionState state{};
+    state.gpr[31] = {0x1122334455667788ull, 0x8877665544332211ull};
+
+    const auto result = dispatcher.run(parsed.image->entry_point(), state, 1u);
+    expect(result.reason == R5900DispatchStopReason::ControlFlow,
+           "real startup dispatch must stop before control flow");
+    expect(result.next_pc == 0x00100130u,
+           "real startup control-flow boundary mismatch");
+    expect(result.blocks_executed == 1u && result.instructions_executed == 74u,
+           "real startup dispatcher must execute exactly 74 instructions");
+    expect(state.gpr[2].low64 == 0x00000000004e2680ull,
+           "real startup r2 result mismatch");
+    expect(state.gpr[3].low64 == 0x0000000001ecea00ull,
+           "real startup r3 result mismatch");
+    expect(state.gpr[4].low64 == 0u,
+           "real startup must stop before BEQ delay slot");
+    expect(state.gpr[31].low64 == 0u && state.gpr[31].high64 == 0u,
+           "real startup PADDUW must clear GPR31");
+    expect(state.hi == 0u && state.lo == 0u && state.hi1 == 0u && state.lo1 == 0u,
+           "real startup HI/LO state mismatch");
+    expect(state.sa == 0u && state.fcr31 == 0u && state.fp_acc == 0u,
+           "real startup SA/COP1 state mismatch");
+    for (const auto raw : state.fpr) {
+        expect(raw == 0u, "real startup FPR must remain raw zero");
+    }
+
+    std::cout << "REAL_ELF_STARTUP_VALIDATED start=0x00100008 stop=0x00100130 instructions=74\n";
+}
+
+void validate_synthetic_startup() {
     using namespace b3r::recompiler;
 
     constexpr std::uint32_t base = 0x00100008u;
-    const auto words = make_startup_prefix_words(base);
+    const auto words = make_synthetic_startup_prefix_words(base);
     auto memory = make_memory(words, base);
 
     R5900BlockDispatcherOptions options{};
@@ -182,29 +242,42 @@ int main() {
 
     const auto result = dispatcher.run(base, state, 1u);
     expect(result.reason == R5900DispatchStopReason::ControlFlow,
-           "startup dispatch must stop before BEQ");
+           "synthetic startup dispatch must stop before BEQ");
     expect(result.next_pc == 0x00100130u,
-           "startup BEQ boundary PC mismatch");
+           "synthetic startup BEQ boundary PC mismatch");
     expect(result.blocks_executed == 1u && result.instructions_executed == 74u,
-           "startup dispatcher must execute exactly 74 instructions");
+           "synthetic startup dispatcher must execute exactly 74 instructions");
     expect(state.gpr[2].low64 == 0x00000000004e2680ull,
-           "startup r2 result mismatch");
+           "synthetic startup r2 result mismatch");
     expect(state.gpr[3].low64 == 0x0000000001ecea00ull,
-           "startup r3 result mismatch");
+           "synthetic startup r3 result mismatch");
     expect(state.gpr[4].low64 == 0u,
-           "startup delay slot executed unexpectedly");
+           "synthetic startup delay slot executed unexpectedly");
     expect(state.hi == 0u && state.lo == 0u && state.hi1 == 0u && state.lo1 == 0u,
-           "startup HI/LO state mismatch");
+           "synthetic startup HI/LO state mismatch");
     expect(state.sa == 0u && state.fcr31 == 0u && state.fp_acc == 0u,
-           "startup SA/COP1 state mismatch");
+           "synthetic startup SA/COP1 state mismatch");
     for (const auto raw : state.fpr) {
-        expect(raw == 0u, "startup FPR must remain raw zero");
+        expect(raw == 0u, "synthetic startup FPR must remain raw zero");
     }
     expect(state.gpr[31].low64 == 0x1122334455667788ull &&
                state.gpr[31].high64 == 0x8877665544332211ull,
-           "startup sentinel GPR31 must remain unchanged");
+           "synthetic startup sentinel GPR31 must remain unchanged");
 
-    std::cout << "STARTUP_PREFIX_VALIDATED start=0x00100008 stop=0x00100130 instructions=74\n";
+    std::cout << "SYNTHETIC_STARTUP_PREFIX_VALIDATED start=0x00100008 stop=0x00100130 instructions=74\n";
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    validate_synthetic_startup();
+
+    if (argc == 2) {
+        validate_external_startup(argv[1]);
+    } else if (argc != 1) {
+        fail("usage: r5900_block_dispatcher_startup_windows_tests.exe [external-elf-path]");
+    }
+
     std::cout << "r5900_block_dispatcher_startup_windows_tests: PASS\n";
     return EXIT_SUCCESS;
 }
