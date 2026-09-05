@@ -130,9 +130,9 @@ constexpr std::uint32_t cop1_type(std::uint8_t rs,
            funct;
 }
 
-std::vector<std::uint32_t> make_synthetic_startup_prefix_words(std::uint32_t base) {
+std::vector<std::uint32_t> make_synthetic_startup_words(std::uint32_t base) {
     std::vector<std::uint32_t> words;
-    words.reserve(76u);
+    words.reserve(87u);
 
     for (std::uint8_t rd = 1u; rd <= 30u; ++rd) {
         words.push_back(mmi_type(0u, 0u, rd, 0x10u, 0x28u));
@@ -156,12 +156,33 @@ std::vector<std::uint32_t> make_synthetic_startup_prefix_words(std::uint32_t bas
     words.push_back(i_type(0x0fu, 0u, 3u, 0x01ecu));
     words.push_back(i_type(0x0du, 3u, 3u, 0xea00u));
 
-    expect(words.size() == 74u, "synthetic startup fixture count mismatch");
+    expect(words.size() == 74u, "synthetic startup prefix count mismatch");
     expect(base + static_cast<std::uint32_t>(words.size() * 4u) == 0x00100130u,
-           "synthetic startup fixture boundary mismatch");
+           "synthetic startup first BEQ boundary mismatch");
 
-    words.push_back(i_type(0x04u, 0u, 0u, 1u));
-    words.push_back(i_type(0x09u, 0u, 4u, 1u));
+    words.push_back(i_type(0x04u, 0u, 0u, 6u));
+    words.push_back(i_type(0x09u, 0u, 20u, 0x11u));
+
+    for (std::uint8_t index = 0u; index < 5u; ++index) {
+        words.push_back(i_type(0x0eu,
+                               0u,
+                               static_cast<std::uint8_t>(10u + index),
+                               1u));
+    }
+
+    expect(base + static_cast<std::uint32_t>(words.size() * 4u) == 0x0010014cu,
+           "synthetic startup first BEQ target layout mismatch");
+
+    words.push_back(i_type(0x0fu, 0u, 4u, 0xffffu));
+    words.push_back(i_type(0x0du, 4u, 4u, 0xfff0u));
+    words.push_back(r_type(3u, 4u, 4u, 0u, 0x24u));
+    words.push_back(i_type(0x04u, 2u, 4u, 7u));
+    words.push_back(i_type(0x09u, 0u, 21u, 0x22u));
+    words.push_back(i_type(0x1fu, 2u, 0u, 0u));
+
+    expect(words.size() == 87u, "synthetic startup full fixture count mismatch");
+    expect(base + static_cast<std::uint32_t>((words.size() - 1u) * 4u) == 0x00100160u,
+           "synthetic startup SQ boundary layout mismatch");
     return words;
 }
 
@@ -200,19 +221,19 @@ void validate_external_startup(const char* path) {
     R5900IrExecutionState state{};
     state.gpr[31] = {0x1122334455667788ull, 0x8877665544332211ull};
 
-    const auto result = dispatcher.run(parsed.image->entry_point(), state, 1u);
-    expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
-           "real startup first native BEQ must consume one block budget");
-    expect(result.next_pc == 0x0010014cu,
-           "real startup first BEQ target mismatch");
-    expect(result.blocks_executed == 1u && result.instructions_executed == 76u,
-           "real startup dispatcher must execute 74 body instructions plus BEQ and delay");
+    const auto result = dispatcher.run(parsed.image->entry_point(), state, 3u);
+    expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
+           "real startup must stop at first unsupported SQ");
+    expect(result.next_pc == 0x00100160u,
+           "real startup SQ boundary mismatch");
+    expect(result.blocks_executed == 2u && result.instructions_executed == 81u,
+           "real startup must execute exactly 81 instructions across two BEQ blocks");
     expect(state.gpr[2].low64 == 0x00000000004e2680ull,
            "real startup r2 result mismatch");
     expect(state.gpr[3].low64 == 0x0000000001ecea00ull,
            "real startup r3 result mismatch");
-    expect(state.gpr[4].low64 == 0u,
-           "real startup first BEQ delay must preserve r4");
+    expect(state.gpr[4].low64 == 0x0000000001ecea00ull,
+           "real startup second-block AND result mismatch");
     expect(state.gpr[31].low64 == 0u && state.gpr[31].high64 == 0u,
            "real startup PADDUW must clear GPR31");
     expect(state.hi == 0u && state.lo == 0u && state.hi1 == 0u && state.lo1 == 0u,
@@ -223,14 +244,14 @@ void validate_external_startup(const char* path) {
         expect(raw == 0u, "real startup FPR must remain raw zero");
     }
 
-    std::cout << "REAL_ELF_STARTUP_VALIDATED start=0x00100008 stop=0x0010014c instructions=76\n";
+    std::cout << "REAL_ELF_STARTUP_VALIDATED start=0x00100008 stop=0x00100160 instructions=81\n";
 }
 
 void validate_synthetic_startup() {
     using namespace b3r::recompiler;
 
     constexpr std::uint32_t base = 0x00100008u;
-    const auto words = make_synthetic_startup_prefix_words(base);
+    const auto words = make_synthetic_startup_words(base);
     auto memory = make_memory(words, base);
 
     R5900BlockDispatcherOptions options{};
@@ -240,19 +261,29 @@ void validate_synthetic_startup() {
     R5900IrExecutionState state{};
     state.gpr[31] = {0x1122334455667788ull, 0x8877665544332211ull};
 
-    const auto result = dispatcher.run(base, state, 1u);
-    expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
-           "synthetic startup first BEQ must consume one block budget");
-    expect(result.next_pc == 0x00100138u,
-           "synthetic startup first BEQ target mismatch");
-    expect(result.blocks_executed == 1u && result.instructions_executed == 76u,
-           "synthetic startup dispatcher must execute 74 body instructions plus BEQ and delay");
+    const auto result = dispatcher.run(base, state, 3u);
+    expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
+           "synthetic startup must stop at SQ");
+    expect(result.next_pc == 0x00100160u,
+           "synthetic startup SQ boundary mismatch");
+    expect(result.blocks_executed == 2u,
+           "synthetic startup must complete exactly two BEQ blocks");
+    expect(result.instructions_executed == 81u,
+           "synthetic startup must execute exactly 81 instructions");
     expect(state.gpr[2].low64 == 0x00000000004e2680ull,
            "synthetic startup r2 result mismatch");
     expect(state.gpr[3].low64 == 0x0000000001ecea00ull,
            "synthetic startup r3 result mismatch");
-    expect(state.gpr[4].low64 == 1u,
-           "synthetic startup BEQ delay slot must execute exactly once");
+    expect(state.gpr[4].low64 == 0x0000000001ecea00ull,
+           "synthetic startup second-block AND result mismatch");
+    expect(state.gpr[20].low64 == 0x11u,
+           "synthetic startup first delay slot must execute");
+    expect(state.gpr[21].low64 == 0x22u,
+           "synthetic startup second delay slot must execute");
+    for (std::uint8_t index = 10u; index < 15u; ++index) {
+        expect(state.gpr[index].low64 == 0u,
+               "synthetic startup skipped XORI path must not execute");
+    }
     expect(state.hi == 0u && state.lo == 0u && state.hi1 == 0u && state.lo1 == 0u,
            "synthetic startup HI/LO state mismatch");
     expect(state.sa == 0u && state.fcr31 == 0u && state.fp_acc == 0u,
@@ -264,7 +295,7 @@ void validate_synthetic_startup() {
                state.gpr[31].high64 == 0x8877665544332211ull,
            "synthetic startup sentinel GPR31 must remain unchanged");
 
-    std::cout << "SYNTHETIC_STARTUP_BEQ_VALIDATED start=0x00100008 stop=0x00100138 instructions=76\n";
+    std::cout << "SYNTHETIC_STARTUP_BEQ_VALIDATED start=0x00100008 stop=0x00100160 instructions=81\n";
 }
 
 } // namespace
