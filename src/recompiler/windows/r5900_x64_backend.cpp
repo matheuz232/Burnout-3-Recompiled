@@ -825,6 +825,54 @@ PendingX64Code compile_branch_equal_code(const R5900IrBlock& block) {
     return publish_code(bytes);
 }
 
+PendingX64Code compile_direct_transfer_code(const R5900IrBlock& block) {
+    const bool helper_frame =
+        sequence_needs_helper(block.body) ||
+        sequence_needs_helper(block.terminator.delay_slot);
+
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(128u +
+        block.body.size() * 128u +
+        block.terminator.delay_slot.size() * 256u);
+
+    if (helper_frame) {
+        emit_helper_frame_prologue(bytes);
+    }
+    emit_zero_gpr0(bytes);
+
+    const auto body_emitted = emit_ir_sequence(
+        bytes,
+        block.body,
+        0u,
+        helper_frame);
+    if (!body_emitted.ok()) {
+        return pending_failure(body_emitted.error, body_emitted.message);
+    }
+
+    if (block.terminator.kind == R5900IrTerminatorKind::DirectCall) {
+        emit_mov_eax_imm32(bytes, block.terminator.link_pc);
+        emit_store_rax_to_state(bytes, gpr_low64_offset(31u));
+    }
+
+    emit_zero_gpr0(bytes);
+    const auto delay_emitted = emit_ir_sequence(
+        bytes,
+        block.terminator.delay_slot,
+        block.body.size() + 1u,
+        helper_frame);
+    if (!delay_emitted.ok()) {
+        return pending_failure(delay_emitted.error, delay_emitted.message);
+    }
+
+    emit_zero_gpr0(bytes);
+    emit_mov_eax_imm32(bytes, block.terminator.target_pc);
+    if (helper_frame) {
+        emit_helper_frame_epilogue(bytes);
+    }
+    bytes.push_back(0xc3u);
+    return publish_code(bytes);
+}
+
 } // namespace
 
 R5900X64CompiledBlock::R5900X64CompiledBlock(void* code,
@@ -929,6 +977,10 @@ R5900X64CompileResult compile_r5900_ir_x64(const R5900IrBlock& block) {
         break;
     case R5900IrTerminatorKind::BranchEqual64:
         pending = compile_branch_equal_code(block);
+        break;
+    case R5900IrTerminatorKind::DirectJump:
+    case R5900IrTerminatorKind::DirectCall:
+        pending = compile_direct_transfer_code(block);
         break;
     default:
         return failure(R5900X64CompileError::UnsupportedOpcode,
