@@ -373,8 +373,8 @@ void validate_synthetic_startup() {
            "synthetic startup must stop when analysis reaches the end of the fixture");
     expect(result.next_pc == 0x001001ccu,
            "synthetic startup must advance beyond BNE and its delay slot");
-    expect(result.blocks_executed == 8u,
-           "synthetic startup must execute eight native blocks");
+    expect(result.blocks_executed == 7u,
+           "synthetic startup must execute seven native blocks with BNE in the final block");
     expect(result.instructions_executed == 96u,
            "synthetic startup must execute ninety-six guest instructions");
 
@@ -432,7 +432,7 @@ void validate_synthetic_startup() {
            "direct-transfer poison fallthrough must remain untouched");
 
     std::cout << "SYNTHETIC_STARTUP_BNE_VALIDATED sq=0x00100160 target=0x004e2680 "
-                 "stop=0x001001cc blocks=8 instructions=96\n";
+                 "stop=0x001001cc blocks=7 instructions=96\n";
 }
 
 } // namespace
