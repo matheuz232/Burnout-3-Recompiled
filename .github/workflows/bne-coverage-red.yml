@@ -1,0 +1,27 @@
+name: BNE Coverage RED
+
+on:
+  push:
+    branches:
+      - feature/r5900-bne-delay-slot-v0
+    paths:
+      - tools/bne_coverage_red.py
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: python tools/bne_coverage_red.py
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/r5900_block_dispatcher_windows_tests.cpp tests/r5900_block_dispatcher_store128_windows_tests.cpp
+          git diff --cached --quiet && exit 0
+          git commit -m "test: cover BNE runtime paths and SQ delay scope"
+          git push
