@@ -42,8 +42,22 @@ struct R5900IrExecutionResult {
     }
 };
 
+struct R5900IrBlockExecutionResult {
+    R5900IrExecutionError error{R5900IrExecutionError::None};
+    std::string message{};
+    std::uint32_t next_pc{};
+
+    [[nodiscard]] bool ok() const noexcept {
+        return error == R5900IrExecutionError::None;
+    }
+};
+
 [[nodiscard]] R5900IrExecutionResult
 execute_r5900_ir(const std::vector<R5900IrInstruction>& instructions,
                  R5900IrExecutionState& state);
+
+[[nodiscard]] R5900IrBlockExecutionResult
+execute_r5900_ir_block(const R5900IrBlock& block,
+                       R5900IrExecutionState& state);
 
 } // namespace b3r::recompiler
