@@ -424,48 +424,9 @@ R5900X64CompileResult unsupported_backend_opcode(std::size_t index,
     return failure(R5900X64CompileError::UnsupportedOpcode, message.str());
 }
 
-} // namespace
-
-R5900X64CompiledBlock::R5900X64CompiledBlock(void* code, std::size_t size) noexcept
-    : code_(code), size_(size) {}
-
-R5900X64CompiledBlock::~R5900X64CompiledBlock() {
-    release();
-}
-
-R5900X64CompiledBlock::R5900X64CompiledBlock(R5900X64CompiledBlock&& other) noexcept
-    : code_(std::exchange(other.code_, nullptr)),
-      size_(std::exchange(other.size_, 0u)) {}
-
-R5900X64CompiledBlock& R5900X64CompiledBlock::operator=(R5900X64CompiledBlock&& other) noexcept {
-    if (this != &other) {
-        release();
-        code_ = std::exchange(other.code_, nullptr);
-        size_ = std::exchange(other.size_, 0u);
-    }
-    return *this;
-}
-
-bool R5900X64CompiledBlock::valid() const noexcept {
-    return code_ != nullptr && size_ != 0u;
-}
-
-void R5900X64CompiledBlock::execute(R5900IrExecutionState& state) const noexcept {
-    using GeneratedFunction = void (*)(R5900IrExecutionState*);
-    const auto function = reinterpret_cast<GeneratedFunction>(code_);
-    function(&state);
-}
-
-void R5900X64CompiledBlock::release() noexcept {
-    if (code_ != nullptr) {
-        VirtualFree(code_, 0u, MEM_RELEASE);
-        code_ = nullptr;
-        size_ = 0u;
-    }
-}
-
-R5900X64CompileResult compile_r5900_ir_x64(
-    const std::vector<R5900IrInstruction>& instructions) {
+R5900X64CompileResult compile_linear_block(
+    const std::vector<R5900IrInstruction>& instructions,
+    std::uint32_t fallthrough_pc) {
     for (std::size_t index = 0; index < instructions.size(); ++index) {
         const auto validation = validate_r5900_ir_instruction(instructions[index], index);
         if (!validation.ok()) {
@@ -474,7 +435,7 @@ R5900X64CompileResult compile_r5900_ir_x64(
     }
 
     std::vector<std::uint8_t> bytes;
-    bytes.reserve(64u + instructions.size() * 64u);
+    bytes.reserve(80u + instructions.size() * 64u);
     emit_zero_gpr0(bytes);
 
     for (std::size_t index = 0; index < instructions.size(); ++index) {
@@ -515,6 +476,7 @@ R5900X64CompileResult compile_r5900_ir_x64(
     }
 
     emit_zero_gpr0(bytes);
+    emit_mov_eax_imm32(bytes, fallthrough_pc);
     bytes.push_back(0xc3u);
 
     void* code = VirtualAlloc(nullptr,
@@ -548,6 +510,67 @@ R5900X64CompileResult compile_r5900_ir_x64(
     R5900X64CompileResult result{};
     result.block.emplace(std::move(block));
     return result;
+}
+
+} // namespace
+
+R5900X64CompiledBlock::R5900X64CompiledBlock(void* code, std::size_t size) noexcept
+    : code_(code), size_(size) {}
+
+R5900X64CompiledBlock::~R5900X64CompiledBlock() {
+    release();
+}
+
+R5900X64CompiledBlock::R5900X64CompiledBlock(R5900X64CompiledBlock&& other) noexcept
+    : code_(std::exchange(other.code_, nullptr)),
+      size_(std::exchange(other.size_, 0u)) {}
+
+R5900X64CompiledBlock& R5900X64CompiledBlock::operator=(R5900X64CompiledBlock&& other) noexcept {
+    if (this != &other) {
+        release();
+        code_ = std::exchange(other.code_, nullptr);
+        size_ = std::exchange(other.size_, 0u);
+    }
+    return *this;
+}
+
+bool R5900X64CompiledBlock::valid() const noexcept {
+    return code_ != nullptr && size_ != 0u;
+}
+
+std::uint32_t R5900X64CompiledBlock::execute(
+    R5900IrExecutionState& state) const noexcept {
+    using GeneratedFunction = std::uint32_t (*)(R5900IrExecutionState*);
+    const auto function = reinterpret_cast<GeneratedFunction>(code_);
+    return function(&state);
+}
+
+void R5900X64CompiledBlock::release() noexcept {
+    if (code_ != nullptr) {
+        VirtualFree(code_, 0u, MEM_RELEASE);
+        code_ = nullptr;
+        size_ = 0u;
+    }
+}
+
+R5900X64CompileResult compile_r5900_ir_x64(
+    const std::vector<R5900IrInstruction>& instructions) {
+    const auto fallthrough_pc = instructions.empty()
+        ? 0u
+        : instructions.back().guest_pc + 4u;
+    return compile_linear_block(instructions, fallthrough_pc);
+}
+
+R5900X64CompileResult compile_r5900_ir_x64(const R5900IrBlock& block) {
+    const auto validation = validate_r5900_ir_block(block);
+    if (!validation.ok()) {
+        return failure(map_validation_error(validation.error), validation.message);
+    }
+    if (block.terminator.kind != R5900IrTerminatorKind::Fallthrough) {
+        return failure(R5900X64CompileError::UnsupportedOpcode,
+                       "R5900 x64 backend does not yet emit branch terminators");
+    }
+    return compile_linear_block(block.body, block.terminator.fallthrough_pc);
 }
 
 } // namespace b3r::recompiler
