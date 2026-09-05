@@ -151,6 +151,11 @@ int main() {
                 R5900IrGprWriteMode::Full128,
                 {gpr(9), gpr(10)},
                 0x0010401cu),
+        make_ir(R5900IrOpcode::And64,
+                {R5900IrDestinationKind::Gpr, 12u},
+                R5900IrGprWriteMode::Low64PreserveUpper64,
+                {gpr(4), gpr(5)},
+                0x00104020u),
     };
 
     auto expected = initial;
