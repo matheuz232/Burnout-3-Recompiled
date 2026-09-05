@@ -50,6 +50,13 @@ bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
     }
 }
 
+R5900IrOperand dispatcher_gpr(std::uint8_t index) {
+    R5900IrOperand operand{};
+    operand.kind = R5900IrOperandKind::Gpr;
+    operand.gpr_index = index;
+    return operand;
+}
+
 void fnv_byte(std::uint64_t& hash, std::uint8_t byte) noexcept {
     hash ^= byte;
     hash *= kFnvPrime;
@@ -119,13 +126,26 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
         }
 
         const auto& block = *analyzed.block;
-        std::vector<analysis::R5900InstructionSite> prefix{};
-        prefix.reserve(block.instructions.size());
+        const bool has_supported_beq =
+            block.end_kind == analysis::R5900BlockEndKind::ConditionalBranch &&
+            !block.instructions.empty() &&
+            block.instructions.back().decoded.instruction == R5900Instruction::Beq;
+
+        const analysis::R5900InstructionSite* beq_site =
+            has_supported_beq ? &block.instructions.back() : nullptr;
+
+        std::vector<analysis::R5900InstructionSite> body_sites{};
+        body_sites.reserve(block.instructions.size());
 
         std::optional<R5900DispatchStopReason> boundary_reason{};
         std::uint32_t boundary_pc = current_pc;
 
-        for (const auto& site : block.instructions) {
+        for (std::size_t index = 0; index < block.instructions.size(); ++index) {
+            const auto& site = block.instructions[index];
+            if (has_supported_beq && index + 1u == block.instructions.size()) {
+                break;
+            }
+
             if (site.decoded.is_branch() || site.decoded.is_jump()) {
                 boundary_reason = R5900DispatchStopReason::ControlFlow;
                 boundary_pc = site.pc;
@@ -144,10 +164,10 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                 break;
             }
 
-            prefix.push_back(site);
+            body_sites.push_back(site);
         }
 
-        if (prefix.empty()) {
+        if (body_sites.empty() && !has_supported_beq) {
             if (boundary_reason.has_value()) {
                 result.reason = *boundary_reason;
                 result.next_pc = boundary_pc;
@@ -157,13 +177,13 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             result.reason = R5900DispatchStopReason::UnsupportedInstruction;
             result.next_pc = current_pc;
             result.message = format_stage_error(
-                "dispatch", current_pc, "analyzed block has no v0-executable instruction prefix");
+                "dispatch", current_pc, "analyzed block has no v0-executable instruction candidate");
             return result;
         }
 
         std::vector<std::uint32_t> guest_words{};
-        guest_words.reserve(prefix.size());
-        for (const auto& site : prefix) {
+        guest_words.reserve(body_sites.size() + (has_supported_beq ? 2u : 0u));
+        for (const auto& site : body_sites) {
             const auto word = memory_.read_u32(site.pc);
             if (!word.has_value()) {
                 result.reason = R5900DispatchStopReason::AnalysisFailure;
@@ -175,6 +195,36 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             guest_words.push_back(*word);
         }
 
+        if (has_supported_beq) {
+            if (beq_site == nullptr || !block.delay_slot.has_value()) {
+                result.reason = R5900DispatchStopReason::AnalysisFailure;
+                result.next_pc = current_pc;
+                result.message = format_stage_error(
+                    "analysis", current_pc, "supported BEQ candidate lacks terminator or delay slot");
+                return result;
+            }
+
+            const auto beq_word = memory_.read_u32(beq_site->pc);
+            if (!beq_word.has_value()) {
+                result.reason = R5900DispatchStopReason::AnalysisFailure;
+                result.next_pc = beq_site->pc;
+                result.message = format_stage_error(
+                    "analysis", beq_site->pc, "selected BEQ became unreadable");
+                return result;
+            }
+            guest_words.push_back(*beq_word);
+
+            const auto delay_word = memory_.read_u32(block.delay_slot->pc);
+            if (!delay_word.has_value()) {
+                result.reason = R5900DispatchStopReason::AnalysisFailure;
+                result.next_pc = block.delay_slot->pc;
+                result.message = format_stage_error(
+                    "analysis", block.delay_slot->pc, "selected delay slot became unreadable");
+                return result;
+            }
+            guest_words.push_back(*delay_word);
+        }
+
         const auto fingerprint = fingerprint_guest_words(current_pc, guest_words);
         auto cached = cache_.find(current_pc);
         const bool exact_cache_hit =
@@ -184,9 +234,13 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             cached->second.fingerprint == fingerprint &&
             cached->second.guest_words == guest_words;
 
+        std::uint32_t native_next_pc{};
+        std::size_t executed_instruction_count = guest_words.size();
+
         if (exact_cache_hit) {
             ++result.cache_hits;
-            cached->second.native_block.execute(state);
+            native_next_pc = cached->second.native_block.execute(state);
+            executed_instruction_count = cached->second.guest_instruction_count;
         } else {
             if (cached == cache_.end()) {
                 ++result.cache_misses;
@@ -194,9 +248,9 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                 ++result.recompilations;
             }
 
-            std::vector<R5900IrInstruction> ir{};
-            ir.reserve(prefix.size());
-            for (const auto& site : prefix) {
+            R5900IrBlock ir_block{};
+            ir_block.body.reserve(body_sites.size());
+            for (const auto& site : body_sites) {
                 const auto lowered = lower_r5900_instruction(site.decoded, site.pc);
                 if (!lowered.ok()) {
                     result.reason = R5900DispatchStopReason::LoweringFailure;
@@ -205,10 +259,54 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                     return result;
                 }
 
-                ir.insert(ir.end(), lowered.instructions.begin(), lowered.instructions.end());
+                ir_block.body.insert(ir_block.body.end(),
+                                     lowered.instructions.begin(),
+                                     lowered.instructions.end());
             }
 
-            auto compiled = compile_r5900_ir_x64(ir);
+            if (has_supported_beq) {
+                const auto target = beq_site->decoded.direct_target(beq_site->pc);
+                if (!target.has_value()) {
+                    result.reason = R5900DispatchStopReason::AnalysisFailure;
+                    result.next_pc = beq_site->pc;
+                    result.message = format_stage_error(
+                        "analysis", beq_site->pc, "decoded BEQ unexpectedly lacks direct target");
+                    return result;
+                }
+
+                ir_block.terminator.guest_pc = beq_site->pc;
+                ir_block.terminator.guest_raw = beq_site->decoded.raw;
+                ir_block.terminator.kind = R5900IrTerminatorKind::BranchEqual64;
+                ir_block.terminator.inputs = {
+                    dispatcher_gpr(beq_site->decoded.rs),
+                    dispatcher_gpr(beq_site->decoded.rt),
+                };
+                ir_block.terminator.taken_pc = *target;
+                ir_block.terminator.fallthrough_pc = beq_site->pc + 8u;
+
+                const auto& delay = *block.delay_slot;
+                const auto lowered_delay = lower_r5900_instruction(delay.decoded, delay.pc);
+                if (!lowered_delay.ok() || lowered_delay.instructions.size() != 1u) {
+                    result.reason = R5900DispatchStopReason::LoweringFailure;
+                    result.next_pc = delay.pc;
+                    result.message = format_stage_error(
+                        "lowering",
+                        delay.pc,
+                        lowered_delay.ok()
+                            ? "BEQ delay slot must lower to exactly one IR instruction"
+                            : lowered_delay.message);
+                    return result;
+                }
+                ir_block.terminator.delay_slot = lowered_delay.instructions;
+            } else {
+                const auto fallthrough_pc =
+                    current_pc + static_cast<std::uint32_t>(body_sites.size() * 4u);
+                ir_block.terminator.guest_pc = fallthrough_pc;
+                ir_block.terminator.kind = R5900IrTerminatorKind::Fallthrough;
+                ir_block.terminator.fallthrough_pc = fallthrough_pc;
+            }
+
+            auto compiled = compile_r5900_ir_x64(ir_block);
             if (!compiled.ok()) {
                 result.reason = R5900DispatchStopReason::CompileFailure;
                 result.next_pc = current_pc;
@@ -218,8 +316,9 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
 
             CachedBlock replacement{};
             replacement.start_pc = current_pc;
-            replacement.end_pc_exclusive = current_pc +
-                                             static_cast<std::uint32_t>(prefix.size() * 4u);
+            replacement.end_pc_exclusive = has_supported_beq
+                ? beq_site->pc + 8u
+                : current_pc + static_cast<std::uint32_t>(body_sites.size() * 4u);
             replacement.fingerprint = fingerprint;
             replacement.guest_words = guest_words;
             replacement.guest_instruction_count = guest_words.size();
@@ -228,17 +327,19 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             if (cached == cache_.end()) {
                 auto [inserted, did_insert] = cache_.emplace(current_pc, std::move(replacement));
                 (void)did_insert;
-                inserted->second.native_block.execute(state);
+                native_next_pc = inserted->second.native_block.execute(state);
+                executed_instruction_count = inserted->second.guest_instruction_count;
             } else {
                 cached->second = std::move(replacement);
-                cached->second.native_block.execute(state);
+                native_next_pc = cached->second.native_block.execute(state);
+                executed_instruction_count = cached->second.guest_instruction_count;
             }
         }
 
         ++result.blocks_executed;
-        result.instructions_executed += prefix.size();
-        current_pc += static_cast<std::uint32_t>(prefix.size() * 4u);
-        result.next_pc = current_pc;
+        result.instructions_executed += executed_instruction_count;
+        current_pc = native_next_pc;
+        result.next_pc = native_next_pc;
 
         if (boundary_reason.has_value()) {
             result.reason = *boundary_reason;
