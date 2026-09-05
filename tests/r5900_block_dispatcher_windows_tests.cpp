@@ -165,7 +165,7 @@ int main() {
             r_type(9, 10, 8, 0, 0x21),
             i_type(0x09, 29, 29, 0xfff0),
             i_type(0x0d, 4, 5, 0xff00),
-            i_type(0x0c, 1, 2, 0x00ff),
+            i_type(0x0e, 1, 2, 0x00ff),
         };
         auto memory = make_memory(words, base);
         R5900BlockDispatcherOptions options{};
@@ -182,7 +182,7 @@ int main() {
 
         const auto result = dispatcher.run(base, state, 1u);
         expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
-               "supported prefix must stop before ANDI");
+               "supported prefix must stop before XORI");
         expect(result.next_pc == base + 16u,
                "unsupported boundary must report first unexecuted PC");
         expect(result.blocks_executed == 1u && result.instructions_executed == 4u,
@@ -197,7 +197,7 @@ int main() {
                    state.gpr[5].high64 == 0x5555666677778888ull,
                "ORI prefix instruction must execute on low64 only");
         expect(state.gpr[2].low64 == 0u,
-               "unsupported ANDI must not execute");
+               "unsupported XORI must not execute");
     }
 
     {
@@ -207,16 +207,17 @@ int main() {
         options.block_options.max_instructions = 1u;
         R5900BlockDispatcher dispatcher(memory, options);
         R5900IrExecutionState state{};
-        state.gpr[2] = {0x1234u, 0x5678u};
+        state.gpr[1].low64 = 0x1234u;
+        state.gpr[2] = {0xdeadbeefu, 0x5678u};
 
         const auto result = dispatcher.run(base, state, 1u);
-        expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
-               "ANDI at entry must be an unsupported boundary");
-        expect(result.next_pc == base && result.blocks_executed == 0u &&
-                   result.instructions_executed == 0u,
-               "unsupported entry must execute nothing");
-        expect(state.gpr[2].low64 == 0x1234u && state.gpr[2].high64 == 0x5678u,
-               "unsupported entry must preserve state");
+        expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+               "ANDI at entry must execute as a supported startup instruction");
+        expect(result.next_pc == base + 4u && result.blocks_executed == 1u &&
+                   result.instructions_executed == 1u,
+               "ANDI entry must execute exactly one guest instruction");
+        expect(state.gpr[2].low64 == 0x34u && state.gpr[2].high64 == 0x5678u,
+               "ANDI must update low64 while preserving destination high64");
     }
 
     {
@@ -288,7 +289,7 @@ int main() {
             i_type(0x09, 1, 1, 1u),
             i_type(0x09, 1, 1, 1u),
             i_type(0x09, 1, 1, 1u),
-            i_type(0x0c, 1, 2, 0x00ff),
+            i_type(0x0e, 1, 2, 0x00ff),
         };
         R5900BlockDispatcherOptions options{};
         options.block_options.max_instructions = 2u;
@@ -372,7 +373,7 @@ int main() {
         options.block_options.max_instructions = 1u;
         const auto addiu_one = i_type(0x09, 0, 1, 1u);
         const auto addiu_seven = i_type(0x09, 0, 1, 7u);
-        const auto andi = i_type(0x0c, 1, 2, 0xffu);
+        const auto xori = i_type(0x0e, 1, 2, 0xffu);
         auto memory = make_memory({addiu_one}, base);
         R5900BlockDispatcher dispatcher(memory, options);
 
@@ -398,7 +399,7 @@ int main() {
         expect(dispatcher.cache_size() == 1u,
                "successful stale replacement keeps one entry per start PC");
 
-        expect(memory.write_u32(base, andi),
+        expect(memory.write_u32(base, xori),
                "mutation to unsupported instruction must succeed");
         R5900IrExecutionState third_state{};
         third_state.gpr[1].low64 = 0x55u;
