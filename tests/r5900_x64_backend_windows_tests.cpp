@@ -52,6 +52,56 @@ R5900IrInstruction write_ir(R5900IrOpcode opcode,
     return ir;
 }
 
+R5900IrInstruction store128_ir(std::uint8_t base,
+                               std::uint8_t source,
+                               std::int16_t offset,
+                               std::uint32_t guest_pc) {
+    R5900IrInstruction ir{};
+    ir.guest_pc = guest_pc;
+    ir.opcode = R5900IrOpcode::Store128;
+    ir.inputs = {gpr(base), gpr(source), immediate(offset)};
+    return ir;
+}
+
+R5900IrBlock fallthrough_block(std::vector<R5900IrInstruction> body,
+                               std::uint32_t next_pc) {
+    R5900IrBlock block{};
+    block.body = std::move(body);
+    block.terminator.guest_pc = next_pc;
+    block.terminator.kind = R5900IrTerminatorKind::Fallthrough;
+    block.terminator.fallthrough_pc = next_pc;
+    return block;
+}
+
+struct WriteRecorder {
+    bool allow{true};
+    std::uint32_t address{};
+    std::uint64_t low64{};
+    std::uint64_t high64{};
+    std::size_t calls{};
+};
+
+bool record_write128(void* user,
+                     std::uint32_t address,
+                     std::uint64_t low64,
+                     std::uint64_t high64) noexcept {
+    auto& recorder = *static_cast<WriteRecorder*>(user);
+    ++recorder.calls;
+    recorder.address = address;
+    recorder.low64 = low64;
+    recorder.high64 = high64;
+    return recorder.allow;
+}
+
+R5900IrExecutionContext context_for(R5900IrExecutionState& state,
+                                    WriteRecorder& recorder) {
+    R5900IrExecutionContext context{};
+    context.state = &state;
+    context.memory.user = &recorder;
+    context.memory.write128 = &record_write128;
+    return context;
+}
+
 void expect_states_equal(const R5900IrExecutionState& expected,
                          const R5900IrExecutionState& actual,
                          const char* message) {
@@ -323,6 +373,124 @@ int main() {
         compiled.block->execute(actual);
         expect_states_equal(expected, actual,
                             "decoder -> IR -> x64 native state must match reference executor bit-for-bit");
+    }
+
+    {
+        const auto block = fallthrough_block(
+            {store128_ir(1u, 3u, -16, 0x00105000u)}, 0x00105004u);
+        auto compiled = compile_r5900_ir_x64(block);
+        expect(compiled.ok(), "Store128 IR must compile natively");
+
+        R5900IrExecutionState native_state{};
+        native_state.gpr[1].low64 = 0x9999000000000008ull;
+        native_state.gpr[3] = {0x0123456789abcdefull, 0xfedcba9876543210ull};
+        R5900IrExecutionState reference_state = native_state;
+        WriteRecorder native_recorder{};
+        WriteRecorder reference_recorder{};
+        auto native_context = context_for(native_state, native_recorder);
+        auto reference_context = context_for(reference_state, reference_recorder);
+
+        const auto native_result = compiled.block->execute(native_context);
+        const auto reference_result = execute_r5900_ir_block(block, reference_context);
+        expect(native_result.ok() && reference_result.ok(),
+               "Store128 native/reference execution must succeed");
+        expect(native_result.next_pc == reference_result.next_pc &&
+                   native_result.next_pc == 0x00105004u,
+               "Store128 native next PC must match reference");
+        expect(native_recorder.calls == 1u && reference_recorder.calls == 1u,
+               "Store128 native/reference must each call memory once");
+        expect(native_recorder.address == reference_recorder.address &&
+                   native_recorder.address == 0xfffffff0u,
+               "Store128 native wrap/alignment must match reference");
+        expect(native_recorder.low64 == 0x0123456789abcdefull &&
+                   native_recorder.high64 == 0xfedcba9876543210ull,
+               "Store128 native path must forward full 128-bit source");
+    }
+
+    {
+        const auto block = fallthrough_block(
+            {store128_ir(2u, 0u, 0, 0x00105010u)}, 0x00105014u);
+        auto compiled = compile_r5900_ir_x64(block);
+        expect(compiled.ok(), "Store128 GPR0 IR must compile natively");
+
+        R5900IrExecutionState state{};
+        state.gpr[2].low64 = 0x3003u;
+        state.gpr[0] = {0xffffffffffffffffull, 0xaaaaaaaaaaaaaaaaull};
+        WriteRecorder recorder{};
+        auto context = context_for(state, recorder);
+        const auto result = compiled.block->execute(context);
+        expect(result.ok(), "Store128 GPR0 native execution must succeed");
+        expect(recorder.address == 0x3000u,
+               "Store128 native path must align address down");
+        expect(recorder.low64 == 0u && recorder.high64 == 0u,
+               "Store128 native GPR0 source must be architectural zero");
+    }
+
+    {
+        const auto block = fallthrough_block(
+            {store128_ir(2u, 4u, 0, 0x00105020u)}, 0x00105024u);
+        auto compiled = compile_r5900_ir_x64(block);
+        expect(compiled.ok(), "failing Store128 IR must still compile");
+
+        R5900IrExecutionState state{};
+        state.gpr[2].low64 = 0x4017u;
+        state.gpr[4] = {1u, 2u};
+        WriteRecorder recorder{};
+        recorder.allow = false;
+        auto context = context_for(state, recorder);
+        const auto result = compiled.block->execute(context);
+        expect(result.error == R5900IrExecutionError::MemoryAccessFailure,
+               "Store128 native callback failure must propagate");
+        expect(result.next_pc == 0u,
+               "Store128 native failure must not return normal next PC");
+        expect(context.memory_fault.active &&
+                   context.memory_fault.guest_pc == 0x00105020u &&
+                   context.memory_fault.address == 0x4010u &&
+                   context.memory_fault.width_bytes == 16u,
+               "Store128 native failure must preserve deterministic fault provenance");
+    }
+
+    {
+        const auto block = fallthrough_block(
+            {store128_ir(2u, 0u, 0, 0x00105030u)}, 0x00105034u);
+        auto compiled = compile_r5900_ir_x64(block);
+        expect(compiled.ok(), "Store128 missing-callback block must compile");
+
+        R5900IrExecutionState state{};
+        state.gpr[2].low64 = 0x5009u;
+        R5900IrExecutionContext context{};
+        context.state = &state;
+        const auto result = compiled.block->execute(context);
+        expect(result.error == R5900IrExecutionError::MemoryAccessFailure,
+               "Store128 native missing callback must fail deterministically");
+        expect(context.memory_fault.active &&
+                   context.memory_fault.guest_pc == 0x00105030u &&
+                   context.memory_fault.address == 0x5000u,
+               "Store128 native missing callback must populate fault provenance");
+    }
+
+    {
+        const auto block = fallthrough_block(
+            {
+                store128_ir(2u, 3u, 0, 0x00105040u),
+                write_ir(R5900IrOpcode::Or64, 6u, gpr(6u), immediate(0x0f), 0x00105044u),
+            },
+            0x00105048u);
+        auto compiled = compile_r5900_ir_x64(block);
+        expect(compiled.ok(), "Store128 failure-prefix block must compile");
+
+        R5900IrExecutionState state{};
+        state.gpr[2].low64 = 0x6000u;
+        state.gpr[3] = {3u, 4u};
+        state.gpr[6].low64 = 0x50u;
+        WriteRecorder recorder{};
+        recorder.allow = false;
+        auto context = context_for(state, recorder);
+        const auto result = compiled.block->execute(context);
+        expect(result.error == R5900IrExecutionError::MemoryAccessFailure,
+               "Store128 failure must stop native block");
+        expect(state.gpr[6].low64 == 0x50u,
+               "native instructions after failed Store128 must not execute");
     }
 
     std::cout << "r5900_x64_backend_windows_tests: PASS\n";
