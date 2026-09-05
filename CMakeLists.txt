@@ -215,7 +215,7 @@ if(B3R_BUILD_TESTS)
 
   add_executable(r5900_ir_and_tests tests/r5900_ir_and_tests.cpp)
   target_link_libraries(r5900_ir_and_tests PRIVATE b3r_recompiler)
-  add_test(NAME r5900_ir_and_tests_tests COMMAND r5900_ir_and_tests)
+  add_test(NAME r5900_ir_and_tests COMMAND r5900_ir_and_tests)
 
   add_executable(r5900_ir_block_executor_tests
     tests/r5900_ir_block_executor_tests.cpp
