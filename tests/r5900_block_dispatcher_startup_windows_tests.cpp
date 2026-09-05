@@ -360,15 +360,15 @@ void validate_synthetic_startup() {
 
     R5900IrExecutionState state{};
 
-    const auto result = dispatcher.run(base, state, 5u);
+    const auto result = dispatcher.run(base, state, 8u);
     expect(result.reason == R5900DispatchStopReason::ControlFlow,
-           "startup must stop at unsupported JR");
-    expect(result.next_pc == kIndirectReturnPc,
-           "startup JR boundary mismatch");
-    expect(result.blocks_executed == 5u,
-           "startup block count mismatch");
-    expect(result.instructions_executed == 87u,
-           "startup instruction count mismatch");
+           "synthetic startup must stop at unsupported BNE boundary");
+    expect(result.next_pc == 0x001001c4u,
+           "synthetic startup must stop at BNE PC");
+    expect(result.blocks_executed == 7u,
+           "synthetic startup must execute seven native blocks");
+    expect(result.instructions_executed == 94u,
+           "synthetic startup must execute ninety-four guest instructions");
 
     const auto target_after = memory.read_u128(kSqTarget);
     expect(target_after.has_value() &&
