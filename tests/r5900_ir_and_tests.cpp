@@ -1,5 +1,6 @@
 #include "recompiler/r5900_decoder.h"
 #include "recompiler/r5900_ir.h"
+#include "recompiler/r5900_ir_executor.h"
 #include "recompiler/r5900_ir_validation.h"
 
 #include <cstdint>
@@ -62,6 +63,17 @@ int main() {
 
     expect(validate_r5900_ir_instruction(ir, 0u).ok(),
            "And64 GPR+GPR must validate");
+
+    R5900IrExecutionState state{};
+    state.gpr[3] = {0x00ff00ff00ff00ffull, 0x1111111111111111ull};
+    state.gpr[4] = {0x0f0f0f0f0f0f0f0full, 0x2222222222222222ull};
+    state.gpr[5] = {0u, 0xaaaaaaaaaaaaaaaaull};
+    expect(execute_r5900_ir(lowered.instructions, state).ok(),
+           "reference executor must accept register AND IR");
+    expect(state.gpr[5].low64 == 0x000f000f000f000full,
+           "register AND must combine both GPR low64 operands");
+    expect(state.gpr[5].high64 == 0xaaaaaaaaaaaaaaaaull,
+           "register AND must preserve destination high64");
 
     const auto zero_word = r_type(3u, 4u, 0u, 0u, 0x24u); // AND r0,r3,r4
     const auto zero_lowered = lower_r5900_instruction(decode_r5900(zero_word), 0x00100158u);
