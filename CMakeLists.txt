@@ -388,6 +388,15 @@ if(B3R_BUILD_TESTS)
     add_test(NAME r5900_block_dispatcher_store128_windows_tests
       COMMAND r5900_block_dispatcher_store128_windows_tests)
 
+    add_executable(r5900_block_dispatcher_branch_likely_windows_tests
+      tests/r5900_block_dispatcher_branch_likely_windows_tests.cpp
+    )
+    target_link_libraries(r5900_block_dispatcher_branch_likely_windows_tests PRIVATE
+      b3r_recompiler_dispatcher_x64
+    )
+    add_test(NAME r5900_block_dispatcher_branch_likely_windows_tests
+      COMMAND r5900_block_dispatcher_branch_likely_windows_tests)
+
     add_executable(r5900_block_dispatcher_startup_windows_tests
       tests/r5900_block_dispatcher_startup_windows_tests.cpp
     )
