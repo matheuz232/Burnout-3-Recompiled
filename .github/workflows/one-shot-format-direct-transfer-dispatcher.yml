@@ -1,0 +1,38 @@
+name: One-shot format direct-transfer dispatcher
+
+'on':
+  push:
+    branches:
+      - feature/r5900-direct-jump-call-v0
+    paths:
+      - .github/workflows/one-shot-format-direct-transfer-dispatcher.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/r5900-direct-jump-call-v0
+          fetch-depth: 0
+
+      - name: Format dispatcher direct-transfer path
+        run: python tools/one_shot_format_direct_transfer_dispatcher.py
+
+      - name: Verify patch
+        shell: bash
+        run: |
+          git diff --check
+          git diff -- src/recompiler/windows/r5900_block_dispatcher.cpp
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/recompiler/windows/r5900_block_dispatcher.cpp
+          git commit -m "style: format R5900 direct-transfer dispatcher path"
+          git push origin HEAD:feature/r5900-direct-jump-call-v0
