@@ -20,12 +20,17 @@ namespace {
 
 static_assert(std::is_standard_layout_v<R5900IrGprValue>);
 static_assert(std::is_standard_layout_v<R5900IrExecutionState>);
+static_assert(std::is_standard_layout_v<R5900IrExecutionContext>);
 static_assert(sizeof(R5900IrGprValue) == 16u);
 static_assert(offsetof(R5900IrGprValue, low64) == 0u);
 static_assert(offsetof(R5900IrGprValue, high64) == 8u);
 static_assert(offsetof(R5900IrExecutionState, gpr) == 0u);
 
 constexpr std::uint32_t state_offset(std::size_t value) {
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t context_offset(std::size_t value) {
     return static_cast<std::uint32_t>(value);
 }
 
@@ -36,6 +41,10 @@ constexpr std::uint32_t gpr_offset(std::uint8_t index) {
 
 constexpr std::uint32_t gpr_low64_offset(std::uint8_t index) {
     return gpr_offset(index) + state_offset(offsetof(R5900IrGprValue, low64));
+}
+
+constexpr std::uint32_t gpr_high64_offset(std::uint8_t index) {
+    return gpr_offset(index) + state_offset(offsetof(R5900IrGprValue, high64));
 }
 
 constexpr std::uint32_t hi_offset() {
@@ -71,6 +80,10 @@ constexpr std::uint32_t fp_acc_offset() {
     return state_offset(offsetof(R5900IrExecutionState, fp_acc));
 }
 
+constexpr std::uint32_t current_memory_guest_pc_offset() {
+    return context_offset(offsetof(R5900IrExecutionContext, current_memory_guest_pc));
+}
+
 R5900X64CompileError map_validation_error(R5900IrValidationError error) {
     switch (error) {
     case R5900IrValidationError::MalformedInstruction:
@@ -83,6 +96,41 @@ R5900X64CompileError map_validation_error(R5900IrValidationError error) {
     default:
         return R5900X64CompileError::None;
     }
+}
+
+bool r5900_native_store128(R5900IrExecutionContext* context,
+                           std::uint32_t address,
+                           std::uint64_t low64,
+                           std::uint64_t high64) noexcept {
+    if (context == nullptr ||
+        context->memory.user == nullptr ||
+        context->memory.write128 == nullptr) {
+        if (context != nullptr) {
+            context->memory_fault = {
+                true,
+                R5900IrMemoryAccessKind::Store,
+                context->current_memory_guest_pc,
+                address,
+                16u,
+            };
+        }
+        return false;
+    }
+
+    if (!context->memory.write128(context->memory.user,
+                                  address,
+                                  low64,
+                                  high64)) {
+        context->memory_fault = {
+            true,
+            R5900IrMemoryAccessKind::Store,
+            context->current_memory_guest_pc,
+            address,
+            16u,
+        };
+        return false;
+    }
+    return true;
 }
 
 void emit_u32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
@@ -225,6 +273,27 @@ void emit_zero_gpr0(std::vector<std::uint8_t>& bytes) {
     emit_store_rax_to_state(bytes, gpr_offset(0u) + 8u);
 }
 
+void emit_helper_frame_prologue(std::vector<std::uint8_t>& bytes) {
+    // On Win64 entry RSP % 16 == 8. Subtracting 0x38 aligns RSP for nested
+    // calls, reserves 32 bytes of shadow space, and leaves 24 bytes for locals.
+    bytes.insert(bytes.end(), {0x48u, 0x83u, 0xecu, 0x38u});
+    // mov [rsp+0x20], rcx  ; saved state
+    bytes.insert(bytes.end(), {0x48u, 0x89u, 0x4cu, 0x24u, 0x20u});
+    // mov [rsp+0x28], rdx  ; saved execution context
+    bytes.insert(bytes.end(), {0x48u, 0x89u, 0x54u, 0x24u, 0x28u});
+}
+
+void emit_helper_frame_epilogue(std::vector<std::uint8_t>& bytes) {
+    bytes.insert(bytes.end(), {0x48u, 0x83u, 0xc4u, 0x38u});
+}
+
+void emit_reload_state_and_context(std::vector<std::uint8_t>& bytes) {
+    // mov rcx, [rsp+0x20]
+    bytes.insert(bytes.end(), {0x48u, 0x8bu, 0x4cu, 0x24u, 0x20u});
+    // mov rdx, [rsp+0x28]
+    bytes.insert(bytes.end(), {0x48u, 0x8bu, 0x54u, 0x24u, 0x28u});
+}
+
 void emit_add_word_sign_extend(std::vector<std::uint8_t>& bytes,
                                const R5900IrInstruction& instruction) {
     emit_operand32_to_eax(bytes, instruction.inputs[0]);
@@ -340,30 +409,16 @@ void emit_load_xmm1_gpr(std::vector<std::uint8_t>& bytes,
 }
 
 void emit_movd_eax_xmm0(std::vector<std::uint8_t>& bytes) {
-    bytes.push_back(0x66u);
-    bytes.push_back(0x0fu);
-    bytes.push_back(0x7eu);
-    bytes.push_back(0xc0u);
+    bytes.insert(bytes.end(), {0x66u, 0x0fu, 0x7eu, 0xc0u});
 }
 
 void emit_movd_edx_xmm1(std::vector<std::uint8_t>& bytes) {
-    bytes.push_back(0x66u);
-    bytes.push_back(0x0fu);
-    bytes.push_back(0x7eu);
-    bytes.push_back(0xcau);
+    bytes.insert(bytes.end(), {0x66u, 0x0fu, 0x7eu, 0xcau});
 }
 
 void emit_shift_xmm_sources_one_lane(std::vector<std::uint8_t>& bytes) {
-    bytes.push_back(0x66u);
-    bytes.push_back(0x0fu);
-    bytes.push_back(0x73u);
-    bytes.push_back(0xd8u);
-    bytes.push_back(0x04u);
-    bytes.push_back(0x66u);
-    bytes.push_back(0x0fu);
-    bytes.push_back(0x73u);
-    bytes.push_back(0xd9u);
-    bytes.push_back(0x04u);
+    bytes.insert(bytes.end(), {0x66u, 0x0fu, 0x73u, 0xd8u, 0x04u});
+    bytes.insert(bytes.end(), {0x66u, 0x0fu, 0x73u, 0xd9u, 0x04u});
 }
 
 void emit_padduw(std::vector<std::uint8_t>& bytes,
@@ -405,28 +460,19 @@ void emit_move_bits32(std::vector<std::uint8_t>& bytes,
 
 void emit_load_xmm0_f32(std::vector<std::uint8_t>& bytes,
                         std::uint32_t displacement) {
-    bytes.push_back(0xf3u);
-    bytes.push_back(0x0fu);
-    bytes.push_back(0x10u);
-    bytes.push_back(0x81u);
+    bytes.insert(bytes.end(), {0xf3u, 0x0fu, 0x10u, 0x81u});
     emit_u32(bytes, displacement);
 }
 
 void emit_add_xmm0_f32(std::vector<std::uint8_t>& bytes,
                        std::uint32_t displacement) {
-    bytes.push_back(0xf3u);
-    bytes.push_back(0x0fu);
-    bytes.push_back(0x58u);
-    bytes.push_back(0x81u);
+    bytes.insert(bytes.end(), {0xf3u, 0x0fu, 0x58u, 0x81u});
     emit_u32(bytes, displacement);
 }
 
 void emit_store_xmm0_f32(std::vector<std::uint8_t>& bytes,
                          std::uint32_t displacement) {
-    bytes.push_back(0xf3u);
-    bytes.push_back(0x0fu);
-    bytes.push_back(0x11u);
-    bytes.push_back(0x81u);
+    bytes.insert(bytes.end(), {0xf3u, 0x0fu, 0x11u, 0x81u});
     emit_u32(bytes, displacement);
 }
 
@@ -437,6 +483,67 @@ void emit_add_f32_to_accumulator(std::vector<std::uint8_t>& bytes,
     emit_add_xmm0_f32(bytes,
                       fpr_offset(instruction.inputs[1].gpr_index));
     emit_store_xmm0_f32(bytes, fp_acc_offset());
+}
+
+void emit_store128(std::vector<std::uint8_t>& bytes,
+                   const R5900IrInstruction& instruction) {
+    // Restore state into RCX in case an earlier helper call clobbered volatile
+    // registers. The saved pointers live outside the Win64 shadow area.
+    emit_reload_state_and_context(bytes);
+
+    // mov rax, [rsp+0x28] ; context
+    bytes.insert(bytes.end(), {0x48u, 0x8bu, 0x44u, 0x24u, 0x28u});
+    // mov dword ptr [rax+current_memory_guest_pc], guest_pc
+    bytes.push_back(0xc7u);
+    bytes.push_back(0x80u);
+    emit_u32(bytes, current_memory_guest_pc_offset());
+    emit_u32(bytes, instruction.guest_pc);
+
+    // EDX = (low32(base) + signed16(offset)) & ~0xf.
+    emit_load_eax_from_state(bytes,
+                             gpr_low64_offset(instruction.inputs[0].gpr_index));
+    bytes.push_back(0x05u); // add eax, imm32
+    emit_u32(bytes, static_cast<std::uint32_t>(
+                        static_cast<std::int32_t>(instruction.inputs[2].immediate)));
+    bytes.push_back(0x25u); // and eax, imm32
+    emit_u32(bytes, 0xfffffff0u);
+    bytes.insert(bytes.end(), {0x89u, 0xc2u}); // mov edx, eax
+
+    // R8/R9 = complete 128-bit source GPR.
+    bytes.insert(bytes.end(), {0x4cu, 0x8bu, 0x81u});
+    emit_u32(bytes, gpr_low64_offset(instruction.inputs[1].gpr_index));
+    bytes.insert(bytes.end(), {0x4cu, 0x8bu, 0x89u});
+    emit_u32(bytes, gpr_high64_offset(instruction.inputs[1].gpr_index));
+
+    // RCX = context. EDX/R8/R9 already carry the remaining Win64 arguments.
+    bytes.insert(bytes.end(), {0x48u, 0x8bu, 0x4cu, 0x24u, 0x28u});
+    emit_mov_rax_imm64(
+        bytes,
+        static_cast<std::uint64_t>(
+            reinterpret_cast<std::uintptr_t>(&r5900_native_store128)));
+    bytes.insert(bytes.end(), {0xffu, 0xd0u}); // call rax
+    bytes.insert(bytes.end(), {0x84u, 0xc0u}); // test al, al
+
+    // jnz success. Helper failure is terminal for the current native block.
+    bytes.insert(bytes.end(), {0x0fu, 0x85u});
+    const auto success_rel32_offset = bytes.size();
+    emit_u32(bytes, 0u);
+
+    emit_xor_eax_eax(bytes);
+    emit_helper_frame_epilogue(bytes);
+    bytes.push_back(0xc3u);
+
+    const auto success_offset = bytes.size();
+    const auto branch_end = success_rel32_offset + sizeof(std::uint32_t);
+    const auto displacement =
+        static_cast<std::int64_t>(success_offset) -
+        static_cast<std::int64_t>(branch_end);
+    patch_u32(bytes,
+              success_rel32_offset,
+              static_cast<std::uint32_t>(
+                  static_cast<std::int32_t>(displacement)));
+
+    emit_reload_state_and_context(bytes);
 }
 
 R5900X64CompileResult failure(R5900X64CompileError error,
@@ -466,9 +573,20 @@ EmitResult emit_failure(R5900X64CompileError error,
     return {error, message.str()};
 }
 
+bool sequence_needs_helper(
+    const std::vector<R5900IrInstruction>& instructions) noexcept {
+    for (const auto& instruction : instructions) {
+        if (instruction.opcode == R5900IrOpcode::Store128) {
+            return true;
+        }
+    }
+    return false;
+}
+
 EmitResult emit_ir_instruction(std::vector<std::uint8_t>& bytes,
                                const R5900IrInstruction& instruction,
-                               std::size_t index) {
+                               std::size_t index,
+                               bool helper_frame) {
     switch (instruction.opcode) {
     case R5900IrOpcode::Nop:
         return {};
@@ -499,6 +617,14 @@ EmitResult emit_ir_instruction(std::vector<std::uint8_t>& bytes,
     case R5900IrOpcode::AddF32ToAccumulator:
         emit_add_f32_to_accumulator(bytes, instruction);
         return {};
+    case R5900IrOpcode::Store128:
+        if (!helper_frame) {
+            return emit_failure(R5900X64CompileError::UnsupportedOpcode,
+                                index,
+                                instruction);
+        }
+        emit_store128(bytes, instruction);
+        return {};
     default:
         return emit_failure(R5900X64CompileError::UnsupportedOpcode,
                             index,
@@ -508,10 +634,14 @@ EmitResult emit_ir_instruction(std::vector<std::uint8_t>& bytes,
 
 EmitResult emit_ir_sequence(std::vector<std::uint8_t>& bytes,
                             const std::vector<R5900IrInstruction>& instructions,
-                            std::size_t base_index) {
+                            std::size_t base_index,
+                            bool helper_frame) {
     for (std::size_t index = 0; index < instructions.size(); ++index) {
-        const auto emitted =
-            emit_ir_instruction(bytes, instructions[index], base_index + index);
+        const auto emitted = emit_ir_instruction(
+            bytes,
+            instructions[index],
+            base_index + index,
+            helper_frame);
         if (!emitted.ok()) {
             return emitted;
         }
@@ -585,30 +715,50 @@ PendingX64Code compile_linear_code(
         }
     }
 
+    const bool helper_frame = sequence_needs_helper(instructions);
     std::vector<std::uint8_t> bytes;
-    bytes.reserve(80u + instructions.size() * 64u);
+    bytes.reserve(96u + instructions.size() * 128u);
+    if (helper_frame) {
+        emit_helper_frame_prologue(bytes);
+    }
     emit_zero_gpr0(bytes);
 
-    const auto emitted = emit_ir_sequence(bytes, instructions, 0u);
+    const auto emitted = emit_ir_sequence(bytes,
+                                          instructions,
+                                          0u,
+                                          helper_frame);
     if (!emitted.ok()) {
         return pending_failure(emitted.error, emitted.message);
     }
 
     emit_zero_gpr0(bytes);
     emit_mov_eax_imm32(bytes, fallthrough_pc);
+    if (helper_frame) {
+        emit_helper_frame_epilogue(bytes);
+    }
     bytes.push_back(0xc3u);
     return publish_code(bytes);
 }
 
 PendingX64Code compile_branch_equal_code(const R5900IrBlock& block) {
-    std::vector<std::uint8_t> bytes;
-    bytes.reserve(128u +
-                  block.body.size() * 64u +
-                  block.terminator.delay_slot.size() * 128u);
+    const bool helper_frame =
+        sequence_needs_helper(block.body) ||
+        sequence_needs_helper(block.terminator.delay_slot);
 
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(160u +
+                  block.body.size() * 128u +
+                  block.terminator.delay_slot.size() * 256u);
+
+    if (helper_frame) {
+        emit_helper_frame_prologue(bytes);
+    }
     emit_zero_gpr0(bytes);
 
-    const auto body_emitted = emit_ir_sequence(bytes, block.body, 0u);
+    const auto body_emitted = emit_ir_sequence(bytes,
+                                               block.body,
+                                               0u,
+                                               helper_frame);
     if (!body_emitted.ok()) {
         return pending_failure(body_emitted.error, body_emitted.message);
     }
@@ -620,16 +770,8 @@ PendingX64Code compile_branch_equal_code(const R5900IrBlock& block) {
         bytes,
         gpr_low64_offset(block.terminator.inputs[1].gpr_index));
 
-    // cmp rax, rdx. Equality is captured by the conditional transfer before
-    // either duplicated delay-slot path can mutate rs/rt or clobber flags.
-    bytes.push_back(0x48u);
-    bytes.push_back(0x39u);
-    bytes.push_back(0xd0u);
-
-    // jne rel32 -> not-taken path. Patch only after both native paths have
-    // emitted successfully; executable memory is not published before then.
-    bytes.push_back(0x0fu);
-    bytes.push_back(0x85u);
+    bytes.insert(bytes.end(), {0x48u, 0x39u, 0xd0u}); // cmp rax, rdx
+    bytes.insert(bytes.end(), {0x0fu, 0x85u});          // jne rel32
     const auto not_taken_rel32_offset = bytes.size();
     emit_u32(bytes, 0u);
 
@@ -637,12 +779,16 @@ PendingX64Code compile_branch_equal_code(const R5900IrBlock& block) {
     const auto taken_delay = emit_ir_sequence(
         bytes,
         block.terminator.delay_slot,
-        block.body.size() + 1u);
+        block.body.size() + 1u,
+        helper_frame);
     if (!taken_delay.ok()) {
         return pending_failure(taken_delay.error, taken_delay.message);
     }
     emit_zero_gpr0(bytes);
     emit_mov_eax_imm32(bytes, block.terminator.taken_pc);
+    if (helper_frame) {
+        emit_helper_frame_epilogue(bytes);
+    }
     bytes.push_back(0xc3u);
 
     const auto not_taken_offset = bytes.size();
@@ -664,12 +810,16 @@ PendingX64Code compile_branch_equal_code(const R5900IrBlock& block) {
     const auto not_taken_delay = emit_ir_sequence(
         bytes,
         block.terminator.delay_slot,
-        block.body.size() + 1u);
+        block.body.size() + 1u,
+        helper_frame);
     if (!not_taken_delay.ok()) {
         return pending_failure(not_taken_delay.error, not_taken_delay.message);
     }
     emit_zero_gpr0(bytes);
     emit_mov_eax_imm32(bytes, block.terminator.fallthrough_pc);
+    if (helper_frame) {
+        emit_helper_frame_epilogue(bytes);
+    }
     bytes.push_back(0xc3u);
 
     return publish_code(bytes);
@@ -704,11 +854,40 @@ bool R5900X64CompiledBlock::valid() const noexcept {
     return code_ != nullptr && size_ != 0u;
 }
 
+R5900X64ExecutionResult R5900X64CompiledBlock::execute(
+    R5900IrExecutionContext& context) const noexcept {
+    if (!valid()) {
+        return {R5900IrExecutionError::MalformedInstruction,
+                "R5900 x64 compiled block is not valid",
+                0u};
+    }
+    if (context.state == nullptr) {
+        return {R5900IrExecutionError::MalformedInstruction,
+                "R5900 x64 execution context has no CPU state",
+                0u};
+    }
+
+    context.memory_fault = {};
+    context.current_memory_guest_pc = 0u;
+
+    using GeneratedFunction = std::uint32_t (*)(R5900IrExecutionState*,
+                                                R5900IrExecutionContext*);
+    const auto function = reinterpret_cast<GeneratedFunction>(code_);
+    const auto next_pc = function(context.state, &context);
+
+    if (context.memory_fault.active) {
+        return {R5900IrExecutionError::MemoryAccessFailure,
+                "R5900 x64 guest-memory access failed",
+                0u};
+    }
+    return {R5900IrExecutionError::None, {}, next_pc};
+}
+
 std::uint32_t R5900X64CompiledBlock::execute(
     R5900IrExecutionState& state) const noexcept {
-    using GeneratedFunction = std::uint32_t (*)(R5900IrExecutionState*);
-    const auto function = reinterpret_cast<GeneratedFunction>(code_);
-    return function(&state);
+    R5900IrExecutionContext context{};
+    context.state = &state;
+    return execute(context).next_pc;
 }
 
 void R5900X64CompiledBlock::release() noexcept {
