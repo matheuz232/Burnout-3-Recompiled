@@ -242,11 +242,7 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             native_next_pc = cached->second.native_block.execute(state);
             executed_instruction_count = cached->second.guest_instruction_count;
         } else {
-            if (cached == cache_.end()) {
-                ++result.cache_misses;
-            } else {
-                ++result.recompilations;
-            }
+            const bool cache_miss = cached == cache_.end();
 
             R5900IrBlock ir_block{};
             ir_block.body.reserve(body_sites.size());
@@ -324,12 +320,14 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             replacement.guest_instruction_count = guest_words.size();
             replacement.native_block = std::move(*compiled.block);
 
-            if (cached == cache_.end()) {
+            if (cache_miss) {
+                ++result.cache_misses;
                 auto [inserted, did_insert] = cache_.emplace(current_pc, std::move(replacement));
                 (void)did_insert;
                 native_next_pc = inserted->second.native_block.execute(state);
                 executed_instruction_count = inserted->second.guest_instruction_count;
             } else {
+                ++result.recompilations;
                 cached->second = std::move(replacement);
                 native_next_pc = cached->second.native_block.execute(state);
                 executed_instruction_count = cached->second.guest_instruction_count;
