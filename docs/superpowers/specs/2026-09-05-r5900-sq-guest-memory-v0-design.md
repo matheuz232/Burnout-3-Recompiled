@@ -153,7 +153,7 @@ The validator must not inspect whether the eventual guest address is mapped; map
 
 Memory operations require execution state plus mutable guest memory. Introduce a shared execution context used by reference and native execution without moving guest PC into architectural CPU state.
 
-Recommended shape:
+Required shape:
 
 ```cpp
 namespace b3r::runtime {
@@ -176,13 +176,16 @@ struct R5900IrMemoryFault {
 struct R5900IrExecutionContext {
     R5900IrExecutionState* state{};
     runtime::Ps2MemoryMap* memory{};
+    std::uint32_t current_memory_guest_pc{};
     R5900IrMemoryFault memory_fault{};
 };
 ```
 
 The context uses pointers rather than references so it remains a stable POD-like object suitable for native-helper access and `offsetof`-based layout checks.
 
-Every top-level execution call resets `memory_fault` before executing generated or reference code.
+Every top-level execution call resets `current_memory_guest_pc` and `memory_fault` before executing generated or reference code.
+
+Immediately before any emitted memory-helper call, generated code stores that IR instruction's constant `guest_pc` into `context.current_memory_guest_pc`. The helper copies that value into `memory_fault.guest_pc` only when a runtime memory failure occurs. This is the v0 provenance mechanism; no alternate helper signature is left open for implementation choice.
 
 Existing state-only reference-executor overloads may remain as compatibility wrappers that create a context with `memory == nullptr`. Memoryless IR continues to work unchanged. A memory opcode executed without a memory map fails deterministically.
 
@@ -197,9 +200,10 @@ For `Store128`:
 3. sign-extend the immediate and perform modulo-32-bit addition;
 4. align the result down to 16 bytes;
 5. read the complete 128-bit source GPR value;
-6. call `memory->write_u128(aligned_address, {low64, high64})`;
-7. if the write fails, populate `memory_fault` and return a memory-access execution error;
-8. if it succeeds, continue to the next IR instruction.
+6. set `context.current_memory_guest_pc = instruction.guest_pc`;
+7. call `memory->write_u128(aligned_address, {low64, high64})`;
+8. if the write fails, populate `memory_fault` and return a memory-access execution error;
+9. if it succeeds, continue to the next IR instruction.
 
 The source GPR value and effective address are evaluated before the memory write. This preserves correct behavior when source and base use the same GPR.
 
@@ -207,7 +211,7 @@ Reference execution must never partially mutate guest memory on a failed 128-bit
 
 ## Execution error model
 
-Extend reference/native execution errors with a distinct runtime memory failure, for example:
+Extend `R5900IrExecutionError` with:
 
 ```cpp
 MemoryAccessFailure,
@@ -219,7 +223,7 @@ A failed `SQ` reports at minimum:
 stage        = runtime-memory
 operation    = store
 width        = 128 bits
- guest_pc     = faulting SQ PC
+guest_pc     = faulting SQ PC
 address      = aligned guest address
 ```
 
@@ -235,7 +239,7 @@ A mapping failure is not a lowering or compilation failure and must not be repor
 
 Generated code must not dereference `Ps2MemoryMap` internals. It calls a C++ helper in the backend translation unit.
 
-Conceptual helper:
+Required helper contract:
 
 ```cpp
 bool r5900_native_store128(R5900IrExecutionContext* context,
@@ -246,16 +250,43 @@ bool r5900_native_store128(R5900IrExecutionContext* context,
 
 The helper:
 
-- rejects `nullptr` state/memory context deterministically;
+- rejects a null context or null memory pointer deterministically;
 - writes through `Ps2MemoryMap::write_u128`;
-- records `guest_pc`, access kind, aligned address and width on failure;
+- on failure copies `context.current_memory_guest_pc` into the fault record and records store kind, aligned address and width 16;
 - returns `true` only after the complete 16-byte write succeeds.
 
-Because `guest_pc` is instruction-specific, emitted code must make the current store provenance available to the helper before the call. This may be done by setting a current-memory-operation field in the execution context or by using a helper variant whose arguments include enough provenance. The implementation plan must choose one stable representation and test it explicitly.
+### Public compiled-block execution result
+
+Replace the state-only public execution call with a structured context-aware result:
+
+```cpp
+enum class R5900X64ExecutionError {
+    None = 0,
+    InvalidContext,
+    MemoryAccessFailure,
+};
+
+struct R5900X64ExecutionResult {
+    R5900X64ExecutionError error{R5900X64ExecutionError::None};
+    std::uint32_t next_pc{};
+    std::string message{};
+
+    [[nodiscard]] bool ok() const noexcept {
+        return error == R5900X64ExecutionError::None;
+    }
+};
+
+[[nodiscard]] R5900X64ExecutionResult
+R5900X64CompiledBlock::execute(R5900IrExecutionContext& context) const noexcept;
+```
+
+All existing native-backend tests/callers migrate to the context API. Memoryless blocks may use `context.memory == nullptr`; they only require a valid `context.state`.
+
+This deliberately avoids retaining a state-only overload that could silently lose runtime memory errors on a memory-bearing block.
 
 ### Raw generated-function calling convention
 
-The public compiled-block API should accept `R5900IrExecutionContext&`, but the internal machine-code function may keep state addressing efficient by receiving two arguments:
+Internally the machine-code function keeps state addressing efficient by receiving two arguments:
 
 ```text
 RCX = R5900IrExecutionState*
@@ -263,7 +294,7 @@ RDX = R5900IrExecutionContext*
 EAX = next guest PC
 ```
 
-`R5900X64CompiledBlock::execute(context)` verifies `context.state`, resets the fault field, and calls the native function with both pointers.
+`R5900X64CompiledBlock::execute(context)` verifies `context.state`, resets the current-memory/fault fields, and calls the native function with both pointers.
 
 This preserves the current generated state-offset model based on `RCX` for memoryless instructions while making the context available to memory helpers.
 
@@ -280,18 +311,19 @@ The first emitted helper call introduces a real nested Win64 call into generated
 
 A straightforward v0 strategy is to reserve one fixed stack frame for any block containing memory helpers, save the context pointer in the local stack area, materialize helper arguments in `RCX/RDX/R8/R9`, call through an absolute helper address, reload state/context, test the helper result, and return immediately on failure.
 
-Memoryless blocks should retain the current no-helper fast path.
+Memoryless blocks retain the current no-helper fast path.
 
 ## Native failure propagation
 
-The generated block continues returning the normal next guest PC in `EAX` on success.
+The raw generated function returns the normal next guest PC in `EAX` on success.
 
 On a helper failure:
 
 1. the helper populates `context.memory_fault`;
 2. generated code stops immediately and returns through a dedicated failure epilogue;
-3. `R5900X64CompiledBlock::execute(context)` observes the active fault and returns a structured native-execution failure to the dispatcher;
-4. the dispatcher reports `MemoryAccessFailure` with the recorded provenance.
+3. `R5900X64CompiledBlock::execute(context)` observes the active fault and returns `R5900X64ExecutionError::MemoryAccessFailure`;
+4. `next_pc` is zero on failure and is ignored by callers;
+5. the dispatcher reports `MemoryAccessFailure` with the recorded provenance.
 
 No host access violation or C++ exception is used for normal guest mapping failure.
 
