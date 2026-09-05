@@ -54,3 +54,4 @@ if text.count(old) != 1:
     raise SystemExit("obsolete indirect-boundary regression block missing or duplicated")
 path.write_text(text.replace(old, new, 1), encoding="utf-8")
 print("Task 4 generic dispatcher regression updated")
+# trigger one-shot runner
