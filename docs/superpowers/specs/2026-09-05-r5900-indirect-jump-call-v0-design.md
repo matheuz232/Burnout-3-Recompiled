@@ -407,18 +407,20 @@ The milestone replaces the old `JR` boundary with an executable return and arran
 0x0010018c  ORI   r5, r5, 0x01c0       ; r5 = 0x001001c0
 0x00100190  JALR  r5, r5               ; rd == rs aliasing case
 0x00100194  ADDIU r6, r5, 0            ; sees JALR link 0x00100198
-0x00100198..0x001001bc                  ; poison/guard region
+0x00100198  poison
+0x0010019c  poison/guard
 
 0x001001a0  ADDIU r24, r0, 0x0055
 0x001001a4  JR    r31
 0x001001a8  ADDIU r29, r0, 0x0077      ; proves JR delay executes
+0x001001ac..0x001001bc                  ; poison/guard region
 
 0x001001c0  ADDIU r7, r0, 0x0066       ; proves indirect target entry
 0x001001c4  BNE   ...                   ; new unsupported boundary
 0x001001c8  NOP                         ; mapped BNE delay, not executed
 ```
 
-The call-continuation region must retain poison writes outside the intended `LUI/ORI/JALR/delay` sequence so an accidental fallthrough is visible.
+Poison registers in both unreachable guard regions must remain unchanged. The only intended path through the call-continuation region is `LUI/ORI/JALR/delay`; the direct callee remains independently reachable through the earlier `JAL` target at `0x001001a0`.
 
 ### Expected final state
 
