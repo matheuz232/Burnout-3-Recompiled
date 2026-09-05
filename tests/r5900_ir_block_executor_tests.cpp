@@ -1,5 +1,6 @@
 #include "recompiler/r5900_ir_executor.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -71,14 +72,23 @@ R5900IrBlock beq_block(std::uint32_t pc,
 
 bool states_equal(const R5900IrExecutionState& lhs,
                   const R5900IrExecutionState& rhs) {
-    if (lhs.gpr != rhs.gpr ||
-        lhs.hi != rhs.hi || lhs.lo != rhs.lo ||
+    for (std::size_t index = 0; index < lhs.gpr.size(); ++index) {
+        if (lhs.gpr[index].low64 != rhs.gpr[index].low64 ||
+            lhs.gpr[index].high64 != rhs.gpr[index].high64) {
+            return false;
+        }
+    }
+    if (lhs.hi != rhs.hi || lhs.lo != rhs.lo ||
         lhs.hi1 != rhs.hi1 || lhs.lo1 != rhs.lo1 ||
-        lhs.sa != rhs.sa || lhs.fpr != rhs.fpr ||
-        lhs.fcr31 != rhs.fcr31 || lhs.fp_acc != rhs.fp_acc) {
+        lhs.sa != rhs.sa) {
         return false;
     }
-    return true;
+    for (std::size_t index = 0; index < lhs.fpr.size(); ++index) {
+        if (lhs.fpr[index] != rhs.fpr[index]) {
+            return false;
+        }
+    }
+    return lhs.fcr31 == rhs.fcr31 && lhs.fp_acc == rhs.fp_acc;
 }
 
 } // namespace
