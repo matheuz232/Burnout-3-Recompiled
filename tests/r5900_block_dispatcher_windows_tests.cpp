@@ -299,16 +299,16 @@ int main() {
         R5900IrExecutionState state{};
 
         const auto result = dispatcher.run(base, state, 1u);
-        expect(result.reason == R5900DispatchStopReason::ControlFlow,
-               "supported prefix must stop before unsupported BNE terminator");
-        expect(result.next_pc == base + 4u,
-               "control-flow boundary PC must be exact");
-        expect(result.blocks_executed == 1u && result.instructions_executed == 1u,
-               "only straight-line prefix must execute");
+        expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+               "supported BNE block must consume one block budget");
+        expect(result.next_pc == base + 12u,
+               "not-taken BNE must continue at PC+8 after its delay slot");
+        expect(result.blocks_executed == 1u && result.instructions_executed == 3u,
+               "BNE block must execute prefix, terminator, and one delay instruction");
         expect(state.gpr[1].low64 == 7u,
-               "straight-line prefix must execute before control-flow stop");
-        expect(state.gpr[2].low64 == 0u,
-               "unsupported BNE delay slot must not execute");
+               "straight-line prefix must execute before BNE");
+        expect(state.gpr[2].low64 == 9u,
+               "BNE delay slot must execute exactly once");
     }
 
     {
