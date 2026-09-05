@@ -32,6 +32,18 @@ bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
     case R5900Instruction::Addu:
     case R5900Instruction::Addiu:
     case R5900Instruction::Ori:
+    case R5900Instruction::Andi:
+    case R5900Instruction::Lui:
+    case R5900Instruction::Mthi:
+    case R5900Instruction::Mtlo:
+    case R5900Instruction::Mthi1:
+    case R5900Instruction::Mtlo1:
+    case R5900Instruction::Mtsah:
+    case R5900Instruction::Padduw:
+    case R5900Instruction::Mtc1:
+    case R5900Instruction::Ctc1:
+    case R5900Instruction::AddaS:
+    case R5900Instruction::Sync:
         return true;
     default:
         return false;
