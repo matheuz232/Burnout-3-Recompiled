@@ -132,7 +132,7 @@ constexpr std::uint32_t cop1_type(std::uint8_t rs,
 
 std::vector<std::uint32_t> make_synthetic_startup_words(std::uint32_t base) {
     std::vector<std::uint32_t> words;
-    words.reserve(87u);
+    words.reserve(89u);
 
     for (std::uint8_t rd = 1u; rd <= 30u; ++rd) {
         words.push_back(mmi_type(0u, 0u, rd, 0x10u, 0x28u));
@@ -180,9 +180,17 @@ std::vector<std::uint32_t> make_synthetic_startup_words(std::uint32_t base) {
     words.push_back(i_type(0x09u, 0u, 21u, 0x22u));
     words.push_back(i_type(0x1fu, 2u, 0u, 0u));
 
-    expect(words.size() == 87u, "synthetic startup full fixture count mismatch");
+    expect(words.size() == 87u, "synthetic startup architectural fixture count mismatch");
     expect(base + static_cast<std::uint32_t>((words.size() - 1u) * 4u) == 0x00100160u,
            "synthetic startup SQ boundary layout mismatch");
+
+    // Analyzer-only sentinel after SQ: J + mapped delay slot let control-flow analysis
+    // return a block containing SQ, while the dispatcher must still stop before SQ.
+    words.push_back(0x08000000u);
+    words.push_back(0u);
+    expect(words.size() == 89u, "synthetic startup mapped sentinel count mismatch");
+    expect(base + static_cast<std::uint32_t>((words.size() - 3u) * 4u) == 0x00100160u,
+           "synthetic startup SQ must remain at the milestone boundary");
     return words;
 }
 
