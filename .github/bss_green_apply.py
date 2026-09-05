@@ -1,6 +1,7 @@
 from pathlib import Path
 import subprocess
 
+# Trigger one-shot production patch after the RED is confirmed.
 path = Path('src/recompiler/windows/r5900_block_dispatcher.cpp')
 text = path.read_text(encoding='utf-8')
 
