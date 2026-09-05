@@ -107,6 +107,20 @@ std::uint64_t fingerprint_guest_words(
     return hash;
 }
 
+bool cached_guest_words_match(
+    const runtime::Ps2MemoryMap& memory,
+    std::uint32_t start_pc,
+    const std::vector<std::uint32_t>& expected) noexcept {
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+        const auto pc = start_pc + static_cast<std::uint32_t>(index * 4u);
+        const auto word = memory.read_u32(pc);
+        if (!word.has_value() || *word != expected[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 R5900BlockDispatcher::R5900BlockDispatcher(runtime::Ps2MemoryMap& memory,
@@ -137,6 +151,59 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
     std::uint32_t current_pc = start_pc;
 
     while (result.blocks_executed < max_blocks) {
+        auto fast_cached = cache_.find(current_pc);
+        if (fast_cached != cache_.end() &&
+            fast_cached->second.fast_replay_eligible &&
+            cached_guest_words_match(memory_, current_pc, fast_cached->second.guest_words)) {
+            R5900IrExecutionContext execution_context{};
+            execution_context.state = &state;
+            execution_context.memory.user = &memory_;
+            execution_context.memory.write128 = &ps2_memory_write128_adapter;
+
+            ++result.cache_hits;
+            ++result.fast_cache_hits;
+            const auto native_execution =
+                fast_cached->second.native_block.execute(execution_context);
+
+            if (!native_execution.ok()) {
+                if (native_execution.error == R5900IrExecutionError::MemoryAccessFailure &&
+                    execution_context.memory_fault.active) {
+                    const auto& fault = execution_context.memory_fault;
+                    std::size_t completed_prefix{};
+                    if (fault.guest_pc >= current_pc &&
+                        ((fault.guest_pc - current_pc) % 4u) == 0u) {
+                        completed_prefix = static_cast<std::size_t>(
+                            (fault.guest_pc - current_pc) / 4u);
+                    }
+                    result.instructions_executed += completed_prefix;
+                    result.reason = R5900DispatchStopReason::MemoryAccessFailure;
+                    result.next_pc = fault.guest_pc;
+                    result.message = format_stage_error(
+                        "runtime-memory",
+                        fault.guest_pc,
+                        format_memory_fault_detail(fault));
+                    return result;
+                }
+
+                result.reason = R5900DispatchStopReason::CompileFailure;
+                result.next_pc = current_pc;
+                result.message = format_stage_error(
+                    "x64 execute", current_pc, native_execution.message);
+                return result;
+            }
+
+            ++result.blocks_executed;
+            result.instructions_executed += fast_cached->second.guest_instruction_count;
+            current_pc = native_execution.next_pc;
+            result.next_pc = native_execution.next_pc;
+
+            if (result.blocks_executed == max_blocks) {
+                result.reason = R5900DispatchStopReason::BlockBudgetExhausted;
+                return result;
+            }
+            continue;
+        }
+
         const auto analyzed = analysis::analyze_r5900_basic_block(
             memory_, current_pc, options_.block_options);
         if (!analyzed.ok()) {
@@ -453,6 +520,7 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             replacement.fingerprint = fingerprint;
             replacement.guest_words = guest_words;
             replacement.guest_instruction_count = guest_words.size();
+            replacement.fast_replay_eligible = has_supported_transfer;
             replacement.native_block = std::move(*compiled.block);
 
             if (cache_miss) {
