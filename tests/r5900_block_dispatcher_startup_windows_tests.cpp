@@ -369,14 +369,14 @@ void validate_synthetic_startup() {
     R5900IrExecutionState state{};
 
     const auto result = dispatcher.run(base, state, 8u);
-    expect(result.reason == R5900DispatchStopReason::ControlFlow,
-           "synthetic startup must stop at unsupported BNE boundary");
-    expect(result.next_pc == 0x001001c4u,
-           "synthetic startup must stop at BNE PC");
-    expect(result.blocks_executed == 7u,
-           "synthetic startup must execute seven native blocks");
-    expect(result.instructions_executed == 94u,
-           "synthetic startup must execute ninety-four guest instructions");
+    expect(result.reason == R5900DispatchStopReason::AnalysisFailure,
+           "synthetic startup must stop when analysis reaches the end of the fixture");
+    expect(result.next_pc == 0x001001ccu,
+           "synthetic startup must advance beyond BNE and its delay slot");
+    expect(result.blocks_executed == 8u,
+           "synthetic startup must execute eight native blocks");
+    expect(result.instructions_executed == 96u,
+           "synthetic startup must execute ninety-six guest instructions");
 
     const auto target_after = memory.read_u128(kSqTarget);
     expect(target_after.has_value() &&
@@ -431,8 +431,8 @@ void validate_synthetic_startup() {
                state.gpr[30].low64 == 0u,
            "direct-transfer poison fallthrough must remain untouched");
 
-    std::cout << "SYNTHETIC_STARTUP_JR_JALR_VALIDATED sq=0x00100160 target=0x004e2680 "
-                 "stop=0x001001c4 blocks=7 instructions=94\n";
+    std::cout << "SYNTHETIC_STARTUP_BNE_VALIDATED sq=0x00100160 target=0x004e2680 "
+                 "stop=0x001001cc blocks=8 instructions=96\n";
 }
 
 } // namespace
