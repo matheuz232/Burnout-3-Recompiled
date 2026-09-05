@@ -38,6 +38,26 @@ R5900IrInstruction nop(std::uint32_t pc) {
     ir.opcode = R5900IrOpcode::Nop;
     return ir;
 }
+
+R5900IrBlock direct_jump(std::uint32_t pc,
+                         std::uint32_t target,
+                         R5900IrInstruction delay) {
+    R5900IrBlock block{};
+    block.terminator.guest_pc = pc;
+    block.terminator.kind = R5900IrTerminatorKind::DirectJump;
+    block.terminator.target_pc = target;
+    block.terminator.delay_slot = {delay};
+    return block;
+}
+
+R5900IrBlock direct_call(std::uint32_t pc,
+                         std::uint32_t target,
+                         R5900IrInstruction delay) {
+    auto block = direct_jump(pc, target, delay);
+    block.terminator.kind = R5900IrTerminatorKind::DirectCall;
+    block.terminator.link_pc = pc + 8u;
+    return block;
+}
 } // namespace
 
 int main() {
@@ -105,6 +125,74 @@ int main() {
         invalid.terminator.delay_slot = {bad_delay};
         expect(validate_r5900_ir_block(invalid).error == R5900IrValidationError::UnsupportedOpcode,
                "unsupported delay-slot IR must be rejected");
+    }
+
+    const auto jump = direct_jump(0x00106000u,
+                                  0x00106100u,
+                                  nop(0x00106004u));
+    expect(validate_r5900_ir_block(jump).ok(),
+           "valid DirectJump must validate");
+
+    const auto call = direct_call(0x00106200u,
+                                  0x00106300u,
+                                  nop(0x00106204u));
+    expect(validate_r5900_ir_block(call).ok(),
+           "valid DirectCall must validate");
+
+    {
+        auto invalid = jump;
+        invalid.terminator.target_pc |= 2u;
+        expect(validate_r5900_ir_block(invalid).error == R5900IrValidationError::MalformedInstruction,
+               "unaligned DirectJump target must fail");
+    }
+    {
+        auto invalid = jump;
+        invalid.terminator.link_pc = 0x00106008u;
+        expect(validate_r5900_ir_block(invalid).error == R5900IrValidationError::MalformedInstruction,
+               "DirectJump link state must fail");
+    }
+    {
+        auto invalid = call;
+        invalid.terminator.link_pc += 4u;
+        expect(validate_r5900_ir_block(invalid).error == R5900IrValidationError::MalformedInstruction,
+               "DirectCall link must equal guest PC plus eight");
+    }
+    {
+        auto invalid = call;
+        invalid.terminator.inputs = {gpr(1u)};
+        expect(validate_r5900_ir_block(invalid).error == R5900IrValidationError::MalformedInstruction,
+               "DirectCall inputs must be empty");
+    }
+    {
+        auto invalid = jump;
+        invalid.terminator.taken_pc = 0x00106080u;
+        expect(validate_r5900_ir_block(invalid).error == R5900IrValidationError::MalformedInstruction,
+               "DirectJump branch fields must be empty");
+    }
+    {
+        auto invalid = call;
+        invalid.terminator.fallthrough_pc = 0x00106208u;
+        expect(validate_r5900_ir_block(invalid).error == R5900IrValidationError::MalformedInstruction,
+               "DirectCall fallthrough state must be empty");
+    }
+    {
+        auto invalid = call;
+        invalid.terminator.delay_slot.clear();
+        expect(validate_r5900_ir_block(invalid).error == R5900IrValidationError::MalformedInstruction,
+               "DirectCall requires one delay slot");
+    }
+    {
+        auto invalid = jump;
+        invalid.terminator.delay_slot.push_back(nop(0x00106008u));
+        expect(validate_r5900_ir_block(invalid).error == R5900IrValidationError::MalformedInstruction,
+               "DirectJump rejects multiple delay-slot IR instructions");
+    }
+    {
+        auto invalid = call;
+        invalid.terminator.delay_slot.front().opcode =
+            static_cast<R5900IrOpcode>(0xffu);
+        expect(validate_r5900_ir_block(invalid).error == R5900IrValidationError::UnsupportedOpcode,
+               "invalid direct-transfer delay IR must propagate validation error");
     }
 
     std::cout << "r5900_ir_block_validation_tests: PASS\n";
