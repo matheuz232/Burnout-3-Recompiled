@@ -3,6 +3,7 @@
 #include "recompiler/r5900_ir_executor.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -25,6 +26,9 @@ struct R5900X64CompileResult;
 [[nodiscard]] R5900X64CompileResult compile_r5900_ir_x64(
     const std::vector<R5900IrInstruction>& instructions);
 
+[[nodiscard]] R5900X64CompileResult compile_r5900_ir_x64(
+    const R5900IrBlock& block);
+
 class R5900X64CompiledBlock {
 public:
     R5900X64CompiledBlock() noexcept = default;
@@ -36,11 +40,14 @@ public:
     R5900X64CompiledBlock& operator=(R5900X64CompiledBlock&& other) noexcept;
 
     [[nodiscard]] bool valid() const noexcept;
-    void execute(R5900IrExecutionState& state) const noexcept;
+    [[nodiscard]] std::uint32_t execute(
+        R5900IrExecutionState& state) const noexcept;
 
 private:
     friend R5900X64CompileResult compile_r5900_ir_x64(
         const std::vector<R5900IrInstruction>& instructions);
+    friend R5900X64CompileResult compile_r5900_ir_x64(
+        const R5900IrBlock& block);
 
     R5900X64CompiledBlock(void* code, std::size_t size) noexcept;
     void release() noexcept;
