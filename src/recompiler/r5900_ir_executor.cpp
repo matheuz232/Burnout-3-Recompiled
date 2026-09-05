@@ -107,8 +107,8 @@ execute_r5900_ir(const std::vector<R5900IrInstruction>& instructions,
         }
 
         case R5900IrOpcode::And64: {
-            const auto value = state.gpr[ir.inputs[0].gpr_index].low64 &
-                               static_cast<std::uint64_t>(ir.inputs[1].immediate);
+            const auto value = read_operand_value(ir.inputs[0], state) &
+                               read_operand_value(ir.inputs[1], state);
             if (ir.destination->index != 0u) {
                 state.gpr[ir.destination->index].low64 = value;
             }
