@@ -1,0 +1,27 @@
+name: Branch Likely Task3 GREEN Apply
+
+on:
+  push:
+    paths:
+      - 'tools/apply_branch_likely_task3_green.py'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/r5900-branch-likely-v0
+          fetch-depth: 0
+      - name: Apply Task 3 GREEN
+        run: python tools/apply_branch_likely_task3_green.py
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/recompiler/windows/r5900_x64_backend.cpp
+          git commit -m "feat: compile R5900 likely branches on x64"
+          git push origin HEAD:feature/r5900-branch-likely-v0
