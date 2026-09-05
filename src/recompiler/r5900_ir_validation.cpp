@@ -473,7 +473,8 @@ R5900IrValidationResult validate_r5900_ir_block(const R5900IrBlock& block) {
             !terminator.delay_slot.empty() ||
             terminator.taken_pc != 0u ||
             terminator.target_pc != 0u ||
-            terminator.link_pc != 0u) {
+            terminator.link_pc != 0u ||
+            terminator.link_gpr != 0u) {
             return failure(R5900IrValidationError::MalformedInstruction,
                            terminator_index,
                            terminator.guest_pc,
@@ -486,6 +487,7 @@ R5900IrValidationResult validate_r5900_ir_block(const R5900IrBlock& block) {
             (terminator.fallthrough_pc & 0x3u) != 0u ||
             terminator.target_pc != 0u ||
             terminator.link_pc != 0u ||
+            terminator.link_gpr != 0u ||
             terminator.inputs.size() != 2u ||
             terminator.inputs[0].kind != R5900IrOperandKind::Gpr ||
             terminator.inputs[1].kind != R5900IrOperandKind::Gpr) {
@@ -508,6 +510,7 @@ R5900IrValidationResult validate_r5900_ir_block(const R5900IrBlock& block) {
             terminator.taken_pc != 0u ||
             terminator.fallthrough_pc != 0u ||
             terminator.link_pc != 0u ||
+            terminator.link_gpr != 0u ||
             (terminator.target_pc & 0x3u) != 0u) {
             return failure(R5900IrValidationError::MalformedInstruction,
                            terminator_index,
@@ -520,6 +523,7 @@ R5900IrValidationResult validate_r5900_ir_block(const R5900IrBlock& block) {
         if (!terminator.inputs.empty() ||
             terminator.taken_pc != 0u ||
             terminator.fallthrough_pc != 0u ||
+            terminator.link_gpr != 0u ||
             (terminator.target_pc & 0x3u) != 0u ||
             (terminator.link_pc & 0x3u) != 0u ||
             terminator.link_pc !=
@@ -530,6 +534,55 @@ R5900IrValidationResult validate_r5900_ir_block(const R5900IrBlock& block) {
                            "malformed direct-call terminator");
         }
         return validate_single_delay_slot(terminator, terminator_index);
+
+    case R5900IrTerminatorKind::IndirectJump: {
+        if (terminator.inputs.size() != 1u ||
+            terminator.inputs[0].kind != R5900IrOperandKind::Gpr ||
+            terminator.taken_pc != 0u ||
+            terminator.fallthrough_pc != 0u ||
+            terminator.target_pc != 0u ||
+            terminator.link_pc != 0u ||
+            terminator.link_gpr != 0u) {
+            return failure(R5900IrValidationError::MalformedInstruction,
+                           terminator_index,
+                           terminator.guest_pc,
+                           "malformed indirect-jump terminator");
+        }
+        const auto input = validate_operand(
+            terminator.inputs[0], terminator_index, terminator.guest_pc);
+        if (!input.ok()) {
+            return input;
+        }
+        return validate_single_delay_slot(terminator, terminator_index);
+    }
+
+    case R5900IrTerminatorKind::IndirectCall: {
+        if (terminator.link_gpr >= 32u) {
+            return failure(R5900IrValidationError::InvalidRegister,
+                           terminator_index,
+                           terminator.guest_pc,
+                           "invalid indirect-call link GPR");
+        }
+        if (terminator.inputs.size() != 1u ||
+            terminator.inputs[0].kind != R5900IrOperandKind::Gpr ||
+            terminator.taken_pc != 0u ||
+            terminator.fallthrough_pc != 0u ||
+            terminator.target_pc != 0u ||
+            (terminator.link_pc & 0x3u) != 0u ||
+            terminator.link_pc !=
+                static_cast<std::uint32_t>(terminator.guest_pc + 8u)) {
+            return failure(R5900IrValidationError::MalformedInstruction,
+                           terminator_index,
+                           terminator.guest_pc,
+                           "malformed indirect-call terminator");
+        }
+        const auto input = validate_operand(
+            terminator.inputs[0], terminator_index, terminator.guest_pc);
+        if (!input.ok()) {
+            return input;
+        }
+        return validate_single_delay_slot(terminator, terminator_index);
+    }
 
     default:
         return failure(R5900IrValidationError::UnsupportedOpcode,

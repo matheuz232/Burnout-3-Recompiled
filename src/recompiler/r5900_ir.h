@@ -87,6 +87,8 @@ enum class R5900IrTerminatorKind {
     BranchEqual64,
     DirectJump,
     DirectCall,
+    IndirectJump,
+    IndirectCall,
 };
 
 struct R5900IrTerminator {
@@ -98,6 +100,7 @@ struct R5900IrTerminator {
     std::uint32_t fallthrough_pc{};
     std::uint32_t target_pc{};
     std::uint32_t link_pc{};
+    std::uint8_t link_gpr{};
     std::vector<R5900IrInstruction> delay_slot{};
 };
 

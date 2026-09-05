@@ -73,4 +73,26 @@ inline R5900IrBlock direct_call(std::uint32_t pc,
     return block;
 }
 
+inline R5900IrBlock indirect_jump(std::uint32_t pc,
+                                  std::uint8_t rs,
+                                  R5900IrInstruction delay) {
+    R5900IrBlock block{};
+    block.terminator.guest_pc = pc;
+    block.terminator.kind = R5900IrTerminatorKind::IndirectJump;
+    block.terminator.inputs = {gpr(rs)};
+    block.terminator.delay_slot = {delay};
+    return block;
+}
+
+inline R5900IrBlock indirect_call(std::uint32_t pc,
+                                  std::uint8_t rs,
+                                  std::uint8_t rd,
+                                  R5900IrInstruction delay) {
+    auto block = indirect_jump(pc, rs, delay);
+    block.terminator.kind = R5900IrTerminatorKind::IndirectCall;
+    block.terminator.link_pc = pc + 8u;
+    block.terminator.link_gpr = rd;
+    return block;
+}
+
 } // namespace b3r::test_support

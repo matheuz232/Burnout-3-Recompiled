@@ -25,26 +25,6 @@ void expect_malformed(const R5900IrBlock& block, const char* message) {
 } // namespace
 
 int main() {
-    {
-        R5900IrBlock indirect_jump_probe{};
-        indirect_jump_probe.terminator.guest_pc = 0x00108000u;
-        indirect_jump_probe.terminator.kind = R5900IrTerminatorKind::IndirectJump;
-        indirect_jump_probe.terminator.inputs = {gpr(5u)};
-        indirect_jump_probe.terminator.link_gpr = 0u;
-        indirect_jump_probe.terminator.delay_slot = {nop(0x00108004u)};
-        expect(validate_r5900_ir_block(indirect_jump_probe).ok(),
-               "valid IndirectJump must validate");
-
-        auto indirect_call_probe = indirect_jump_probe;
-        indirect_call_probe.terminator.guest_pc = 0x00108200u;
-        indirect_call_probe.terminator.kind = R5900IrTerminatorKind::IndirectCall;
-        indirect_call_probe.terminator.link_pc = 0x00108208u;
-        indirect_call_probe.terminator.link_gpr = 9u;
-        indirect_call_probe.terminator.delay_slot = {nop(0x00108204u)};
-        expect(validate_r5900_ir_block(indirect_call_probe).ok(),
-               "valid IndirectCall must validate");
-    }
-
     const auto jump = direct_jump(0x00106000u, 0x00106100u, nop(0x00106004u));
     const auto call = direct_call(0x00106200u, 0x00106300u, nop(0x00106204u));
     expect(validate_r5900_ir_block(jump).ok(), "valid DirectJump must validate");
