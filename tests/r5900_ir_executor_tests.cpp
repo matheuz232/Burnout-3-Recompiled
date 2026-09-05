@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <initializer_list>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -48,6 +49,39 @@ R5900IrInstruction write_ir(R5900IrOpcode opcode,
     ir.write_mode = R5900IrGprWriteMode::Low64PreserveUpper64;
     ir.inputs = {lhs, rhs};
     return ir;
+}
+
+R5900IrInstruction make_ir(R5900IrOpcode opcode,
+                           R5900IrDestination destination,
+                           R5900IrGprWriteMode mode,
+                           std::initializer_list<R5900IrOperand> inputs,
+                           std::uint32_t guest_pc) {
+    R5900IrInstruction ir{};
+    ir.guest_pc = guest_pc;
+    ir.opcode = opcode;
+    ir.destination = destination;
+    ir.write_mode = mode;
+    ir.inputs.assign(inputs.begin(), inputs.end());
+    return ir;
+}
+
+R5900IrGprValue packed_u32(std::uint32_t lane0,
+                           std::uint32_t lane1,
+                           std::uint32_t lane2,
+                           std::uint32_t lane3) {
+    return {
+        static_cast<std::uint64_t>(lane0) |
+            (static_cast<std::uint64_t>(lane1) << 32u),
+        static_cast<std::uint64_t>(lane2) |
+            (static_cast<std::uint64_t>(lane3) << 32u),
+    };
+}
+
+std::uint32_t packed_lane(const R5900IrGprValue& value, std::size_t lane) {
+    if (lane < 2u) {
+        return static_cast<std::uint32_t>(value.low64 >> (lane * 32u));
+    }
+    return static_cast<std::uint32_t>(value.high64 >> ((lane - 2u) * 32u));
 }
 
 constexpr std::uint32_t r_type(std::uint8_t rs,
@@ -285,6 +319,136 @@ int main() {
         expect(state.gpr[29].high64 == 0xaaaabbbbccccddddull, "ADDIU pipeline must preserve high64");
         expect(state.gpr[5].low64 == 0x123456780000ff00ull, "ORI result must flow through decoder, IR and executor");
         expect(state.gpr[5].high64 == 0x5555666677778888ull, "ORI pipeline must preserve high64");
+    }
+
+    // RED: startup execution v0 reference semantics.
+    {
+        R5900IrExecutionState state{};
+        state.gpr[1] = {0x12345678abcdef12ull, 0xaabbccddeeff0011ull};
+        state.gpr[2].high64 = 0x1122334455667788ull;
+        const auto ir = make_ir(
+            R5900IrOpcode::And64,
+            {R5900IrDestinationKind::Gpr, 2u},
+            R5900IrGprWriteMode::Low64PreserveUpper64,
+            {gpr(1), immediate(0xff00)},
+            0x00102000u);
+        expect(execute_r5900_ir({ir}, state).ok(), "And64 reference IR must execute");
+        expect(state.gpr[2].low64 == 0xef00u,
+               "ANDI semantics must AND low64 with zero-extended immediate");
+        expect(state.gpr[2].high64 == 0x1122334455667788ull,
+               "ANDI semantics must preserve destination high64");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[2].high64 = 0x123456789abcdef0ull;
+        const auto positive = make_ir(
+            R5900IrOpcode::LoadUpperImmediateSignExtend,
+            {R5900IrDestinationKind::Gpr, 2u},
+            R5900IrGprWriteMode::Low64PreserveUpper64,
+            {immediate(0x004e)},
+            0x00102004u);
+        expect(execute_r5900_ir({positive}, state).ok(), "positive LUI reference IR must execute");
+        expect(state.gpr[2].low64 == 0x00000000004e0000ull,
+               "positive LUI must place immediate in bits 31:16");
+        expect(state.gpr[2].high64 == 0x123456789abcdef0ull,
+               "LUI must preserve upper 64 bits");
+
+        const auto negative = make_ir(
+            R5900IrOpcode::LoadUpperImmediateSignExtend,
+            {R5900IrDestinationKind::Gpr, 2u},
+            R5900IrGprWriteMode::Low64PreserveUpper64,
+            {immediate(0x8040)},
+            0x00102008u);
+        expect(execute_r5900_ir({negative}, state).ok(), "negative LUI reference IR must execute");
+        expect(state.gpr[2].low64 == 0xffffffff80400000ull,
+               "negative LUI word must sign-extend to low64");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[7].low64 = 0x1111222233334444ull;
+        state.gpr[8].low64 = 0x5555666677778888ull;
+        state.gpr[9].low64 = 0x9999aaaabbbbccccull;
+        state.gpr[10].low64 = 0xddddeeeeffff0001ull;
+        state.gpr[11].low64 = 5u;
+
+        const std::vector<R5900IrInstruction> program = {
+            make_ir(R5900IrOpcode::MoveGprLow64,
+                    {R5900IrDestinationKind::Hi, 0u}, R5900IrGprWriteMode::None,
+                    {gpr(7)}, 0x00102010u),
+            make_ir(R5900IrOpcode::MoveGprLow64,
+                    {R5900IrDestinationKind::Lo, 0u}, R5900IrGprWriteMode::None,
+                    {gpr(8)}, 0x00102014u),
+            make_ir(R5900IrOpcode::MoveGprLow64,
+                    {R5900IrDestinationKind::Hi1, 0u}, R5900IrGprWriteMode::None,
+                    {gpr(9)}, 0x00102018u),
+            make_ir(R5900IrOpcode::MoveGprLow64,
+                    {R5900IrDestinationKind::Lo1, 0u}, R5900IrGprWriteMode::None,
+                    {gpr(10)}, 0x0010201cu),
+            make_ir(R5900IrOpcode::ComputeMtsah,
+                    {R5900IrDestinationKind::Sa, 0u}, R5900IrGprWriteMode::None,
+                    {gpr(11), immediate(3)}, 0x00102020u),
+        };
+
+        expect(execute_r5900_ir(program, state).ok(), "special-register reference program must execute");
+        expect(state.hi == 0x1111222233334444ull, "MTHI reference semantics mismatch");
+        expect(state.lo == 0x5555666677778888ull, "MTLO reference semantics mismatch");
+        expect(state.hi1 == 0x9999aaaabbbbccccull, "MTHI1 reference semantics mismatch");
+        expect(state.lo1 == 0xddddeeeeffff0001ull, "MTLO1 reference semantics mismatch");
+        expect(state.sa == 12u, "MTSAH must compute ((5&7)^(3&7))<<1 == 12");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[12] = packed_u32(0xffffffffu, 1u, 0xfffffffeu, 0x80000000u);
+        state.gpr[13] = packed_u32(1u, 2u, 1u, 0x80000000u);
+        state.gpr[14] = packed_u32(0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u);
+
+        const auto ir = make_ir(
+            R5900IrOpcode::AddPackedU32Saturate128,
+            {R5900IrDestinationKind::Gpr, 14u},
+            R5900IrGprWriteMode::Full128,
+            {gpr(12), gpr(13)},
+            0x00102030u);
+        expect(execute_r5900_ir({ir}, state).ok(), "PADDUW reference IR must execute");
+        expect(packed_lane(state.gpr[14], 0) == 0xffffffffu,
+               "PADDUW lane0 must saturate on overflow");
+        expect(packed_lane(state.gpr[14], 1) == 3u,
+               "PADDUW lane1 must add without saturation");
+        expect(packed_lane(state.gpr[14], 2) == 0xffffffffu,
+               "PADDUW lane2 exact maximum must remain maximum");
+        expect(packed_lane(state.gpr[14], 3) == 0xffffffffu,
+               "PADDUW lane3 must saturate on overflow");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[1] = packed_u32(1u, 2u, 3u, 4u);
+        state.gpr[2] = packed_u32(10u, 20u, 30u, 40u);
+        const auto rd_eq_rs = make_ir(
+            R5900IrOpcode::AddPackedU32Saturate128,
+            {R5900IrDestinationKind::Gpr, 1u}, R5900IrGprWriteMode::Full128,
+            {gpr(1), gpr(2)}, 0x00102034u);
+        expect(execute_r5900_ir({rd_eq_rs}, state).ok(), "PADDUW rd==rs alias must execute");
+        expect(packed_lane(state.gpr[1], 0) == 11u &&
+                   packed_lane(state.gpr[1], 1) == 22u &&
+                   packed_lane(state.gpr[1], 2) == 33u &&
+                   packed_lane(state.gpr[1], 3) == 44u,
+               "PADDUW rd==rs must snapshot sources before write");
+
+        state.gpr[1] = packed_u32(1u, 2u, 3u, 4u);
+        state.gpr[2] = packed_u32(10u, 20u, 30u, 40u);
+        const auto rd_eq_rt = make_ir(
+            R5900IrOpcode::AddPackedU32Saturate128,
+            {R5900IrDestinationKind::Gpr, 2u}, R5900IrGprWriteMode::Full128,
+            {gpr(1), gpr(2)}, 0x00102038u);
+        expect(execute_r5900_ir({rd_eq_rt}, state).ok(), "PADDUW rd==rt alias must execute");
+        expect(packed_lane(state.gpr[2], 0) == 11u &&
+                   packed_lane(state.gpr[2], 1) == 22u &&
+                   packed_lane(state.gpr[2], 2) == 33u &&
+                   packed_lane(state.gpr[2], 3) == 44u,
+               "PADDUW rd==rt must snapshot sources before write");
     }
 
     std::cout << "r5900_ir_executor_tests: PASS\n";
