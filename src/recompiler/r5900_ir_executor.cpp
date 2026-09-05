@@ -26,6 +26,17 @@ R5900IrExecutionResult map_validation_failure(const R5900IrValidationResult& val
     }
 }
 
+R5900IrBlockExecutionResult map_block_validation_failure(
+    const R5900IrValidationResult& validation) {
+    const auto mapped = map_validation_failure(validation);
+    return {mapped.error, mapped.message, 0u};
+}
+
+R5900IrBlockExecutionResult map_block_execution_failure(
+    const R5900IrExecutionResult& execution) {
+    return {execution.error, execution.message, 0u};
+}
+
 std::uint64_t read_operand_value(const R5900IrOperand& operand,
                                  const R5900IrExecutionState& state) {
     if (operand.kind == R5900IrOperandKind::Immediate) {
@@ -194,6 +205,48 @@ execute_r5900_ir(const std::vector<R5900IrInstruction>& instructions,
 
     normalize_zero(state);
     return {};
+}
+
+R5900IrBlockExecutionResult
+execute_r5900_ir_block(const R5900IrBlock& block,
+                       R5900IrExecutionState& state) {
+    const auto validation = validate_r5900_ir_block(block);
+    if (!validation.ok()) {
+        return map_block_validation_failure(validation);
+    }
+
+    const auto body_result = execute_r5900_ir(block.body, state);
+    if (!body_result.ok()) {
+        return map_block_execution_failure(body_result);
+    }
+
+    switch (block.terminator.kind) {
+    case R5900IrTerminatorKind::Fallthrough:
+        return {R5900IrExecutionError::None,
+                {},
+                block.terminator.fallthrough_pc};
+
+    case R5900IrTerminatorKind::BranchEqual64: {
+        const bool taken =
+            state.gpr[block.terminator.inputs[0].gpr_index].low64 ==
+            state.gpr[block.terminator.inputs[1].gpr_index].low64;
+
+        const auto delay_result = execute_r5900_ir(block.terminator.delay_slot, state);
+        if (!delay_result.ok()) {
+            return map_block_execution_failure(delay_result);
+        }
+
+        return {R5900IrExecutionError::None,
+                {},
+                taken ? block.terminator.taken_pc
+                      : block.terminator.fallthrough_pc};
+    }
+
+    default:
+        return {R5900IrExecutionError::UnsupportedOpcode,
+                "unsupported R5900 block terminator",
+                0u};
+    }
 }
 
 } // namespace b3r::recompiler
