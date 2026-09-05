@@ -201,18 +201,18 @@ void validate_external_startup(const char* path) {
     state.gpr[31] = {0x1122334455667788ull, 0x8877665544332211ull};
 
     const auto result = dispatcher.run(parsed.image->entry_point(), state, 1u);
-    expect(result.reason == R5900DispatchStopReason::ControlFlow,
-           "real startup dispatch must stop before control flow");
-    expect(result.next_pc == 0x00100130u,
-           "real startup control-flow boundary mismatch");
-    expect(result.blocks_executed == 1u && result.instructions_executed == 74u,
-           "real startup dispatcher must execute exactly 74 instructions");
+    expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+           "real startup first native BEQ must consume one block budget");
+    expect(result.next_pc == 0x0010014cu,
+           "real startup first BEQ target mismatch");
+    expect(result.blocks_executed == 1u && result.instructions_executed == 76u,
+           "real startup dispatcher must execute 74 body instructions plus BEQ and delay");
     expect(state.gpr[2].low64 == 0x00000000004e2680ull,
            "real startup r2 result mismatch");
     expect(state.gpr[3].low64 == 0x0000000001ecea00ull,
            "real startup r3 result mismatch");
     expect(state.gpr[4].low64 == 0u,
-           "real startup must stop before BEQ delay slot");
+           "real startup first BEQ delay must preserve r4");
     expect(state.gpr[31].low64 == 0u && state.gpr[31].high64 == 0u,
            "real startup PADDUW must clear GPR31");
     expect(state.hi == 0u && state.lo == 0u && state.hi1 == 0u && state.lo1 == 0u,
@@ -223,7 +223,7 @@ void validate_external_startup(const char* path) {
         expect(raw == 0u, "real startup FPR must remain raw zero");
     }
 
-    std::cout << "REAL_ELF_STARTUP_VALIDATED start=0x00100008 stop=0x00100130 instructions=74\n";
+    std::cout << "REAL_ELF_STARTUP_VALIDATED start=0x00100008 stop=0x0010014c instructions=76\n";
 }
 
 void validate_synthetic_startup() {
@@ -241,18 +241,18 @@ void validate_synthetic_startup() {
     state.gpr[31] = {0x1122334455667788ull, 0x8877665544332211ull};
 
     const auto result = dispatcher.run(base, state, 1u);
-    expect(result.reason == R5900DispatchStopReason::ControlFlow,
-           "synthetic startup dispatch must stop before BEQ");
-    expect(result.next_pc == 0x00100130u,
-           "synthetic startup BEQ boundary PC mismatch");
-    expect(result.blocks_executed == 1u && result.instructions_executed == 74u,
-           "synthetic startup dispatcher must execute exactly 74 instructions");
+    expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+           "synthetic startup first BEQ must consume one block budget");
+    expect(result.next_pc == 0x00100138u,
+           "synthetic startup first BEQ target mismatch");
+    expect(result.blocks_executed == 1u && result.instructions_executed == 76u,
+           "synthetic startup dispatcher must execute 74 body instructions plus BEQ and delay");
     expect(state.gpr[2].low64 == 0x00000000004e2680ull,
            "synthetic startup r2 result mismatch");
     expect(state.gpr[3].low64 == 0x0000000001ecea00ull,
            "synthetic startup r3 result mismatch");
-    expect(state.gpr[4].low64 == 0u,
-           "synthetic startup delay slot executed unexpectedly");
+    expect(state.gpr[4].low64 == 1u,
+           "synthetic startup BEQ delay slot must execute exactly once");
     expect(state.hi == 0u && state.lo == 0u && state.hi1 == 0u && state.lo1 == 0u,
            "synthetic startup HI/LO state mismatch");
     expect(state.sa == 0u && state.fcr31 == 0u && state.fp_acc == 0u,
@@ -260,11 +260,10 @@ void validate_synthetic_startup() {
     for (const auto raw : state.fpr) {
         expect(raw == 0u, "synthetic startup FPR must remain raw zero");
     }
-    expect(state.gpr[31].low64 == 0x1122334455667788ull &&
-               state.gpr[31].high64 == 0x8877665544332211ull,
-           "synthetic startup sentinel GPR31 must remain unchanged");
+    expect(state.gpr[31].low64 == 0u && state.gpr[31].high64 == 0u,
+           "synthetic startup PADDUW must clear GPR31");
 
-    std::cout << "SYNTHETIC_STARTUP_PREFIX_VALIDATED start=0x00100008 stop=0x00100130 instructions=74\n";
+    std::cout << "SYNTHETIC_STARTUP_BEQ_VALIDATED start=0x00100008 stop=0x00100138 instructions=76\n";
 }
 
 } // namespace
