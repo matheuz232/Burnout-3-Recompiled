@@ -47,6 +47,17 @@ R5900IrInstruction addiu(std::uint8_t rt,
     return ir;
 }
 
+R5900IrInstruction store128(std::uint8_t base,
+                            std::uint8_t source,
+                            std::int16_t imm,
+                            std::uint32_t pc) {
+    R5900IrInstruction ir{};
+    ir.guest_pc = pc;
+    ir.opcode = R5900IrOpcode::Store128;
+    ir.inputs = {gpr(base), gpr(source), immediate(imm)};
+    return ir;
+}
+
 R5900IrInstruction nop(std::uint32_t pc) {
     R5900IrInstruction ir{};
     ir.guest_pc = pc;
@@ -67,6 +78,26 @@ R5900IrBlock beq_block(std::uint32_t pc,
     block.terminator.taken_pc = taken_pc;
     block.terminator.fallthrough_pc = fallthrough_pc;
     block.terminator.delay_slot = {delay};
+    return block;
+}
+
+R5900IrBlock direct_jump(std::uint32_t pc,
+                         std::uint32_t target_pc,
+                         R5900IrInstruction delay) {
+    R5900IrBlock block{};
+    block.terminator.guest_pc = pc;
+    block.terminator.kind = R5900IrTerminatorKind::DirectJump;
+    block.terminator.target_pc = target_pc;
+    block.terminator.delay_slot = {delay};
+    return block;
+}
+
+R5900IrBlock direct_call(std::uint32_t pc,
+                         std::uint32_t target_pc,
+                         R5900IrInstruction delay) {
+    auto block = direct_jump(pc, target_pc, delay);
+    block.terminator.kind = R5900IrTerminatorKind::DirectCall;
+    block.terminator.link_pc = pc + 8u;
     return block;
 }
 
@@ -221,6 +252,86 @@ int main() {
                "fallthrough block must return explicit fallthrough PC");
         expect(state.gpr[6].low64 == 9u,
                "fallthrough block body must execute");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[7] = {9u, 0x7777777777777777ull};
+        state.gpr[31] = {0x1111222233334444ull, 0xaaaabbbbccccddddull};
+        const auto block = direct_jump(0x00107000u,
+                                       0x00107100u,
+                                       addiu(7u, 7u, 1, 0x00107004u));
+        const auto result = execute_r5900_ir_block(block, state);
+        expect(result.ok(), "direct J block must execute");
+        expect(result.next_pc == 0x00107100u,
+               "direct J must return target PC");
+        expect(state.gpr[7].low64 == 10u,
+               "direct J delay slot must execute exactly once");
+        expect(state.gpr[31].low64 == 0x1111222233334444ull &&
+                   state.gpr[31].high64 == 0xaaaabbbbccccddddull,
+               "direct J must not modify r31");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[31] = {0xdeadbeefdeadbeefull, 0x0123456789abcdefull};
+        const auto block = direct_call(0x00107200u,
+                                       0x00107300u,
+                                       addiu(23u, 31u, 0, 0x00107204u));
+        const auto result = execute_r5900_ir_block(block, state);
+        expect(result.ok(), "direct JAL block must execute");
+        expect(result.next_pc == 0x00107300u,
+               "JAL must return direct target");
+        expect(state.gpr[31].low64 == 0x00107208u,
+               "JAL link mismatch");
+        expect(state.gpr[31].high64 == 0x0123456789abcdefull,
+               "JAL must preserve r31 high64");
+        expect(state.gpr[23].low64 == 0x00107208u,
+               "JAL delay must observe new link");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[31] = {0x5555666677778888ull, 0xfedcba9876543210ull};
+        const auto block = direct_call(0x00107400u,
+                                       0x00107500u,
+                                       addiu(31u, 0u, 9, 0x00107404u));
+        const auto result = execute_r5900_ir_block(block, state);
+        expect(result.ok(), "JAL with r31-writing delay must execute");
+        expect(state.gpr[31].low64 == 9u,
+               "delay write to r31 must occur after link and win");
+        expect(state.gpr[31].high64 == 0xfedcba9876543210ull,
+               "delay ADDIU must preserve r31 high64");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[2].low64 = 0x00400000u;
+        state.gpr[3] = {0x1111222233334444ull, 0x5555666677778888ull};
+        state.gpr[24] = {0x9999u, 0xaaaaull};
+        state.gpr[31] = {0x1234567890abcdefull, 0x0fedcba987654321ull};
+        const auto before_r31 = state.gpr[31];
+        const auto before_r24 = state.gpr[24];
+
+        auto block = direct_call(0x00107604u,
+                                 0x00107700u,
+                                 addiu(24u, 0u, 1, 0x00107608u));
+        block.body = {store128(2u, 3u, 0, 0x00107600u)};
+
+        R5900IrExecutionContext context{};
+        context.state = &state;
+        const auto result = execute_r5900_ir_block(block, context);
+        expect(result.error == R5900IrExecutionError::MemoryAccessFailure,
+               "body Store128 failure must propagate before JAL");
+        expect(state.gpr[31].low64 == before_r31.low64 &&
+                   state.gpr[31].high64 == before_r31.high64,
+               "body failure must prevent JAL link write");
+        expect(state.gpr[24].low64 == before_r24.low64 &&
+                   state.gpr[24].high64 == before_r24.high64,
+               "body failure must prevent JAL delay execution");
+        expect(context.memory_fault.active &&
+                   context.memory_fault.guest_pc == 0x00107600u,
+               "body failure must retain Store128 provenance");
     }
 
     std::cout << "r5900_ir_block_executor_tests: PASS\n";
