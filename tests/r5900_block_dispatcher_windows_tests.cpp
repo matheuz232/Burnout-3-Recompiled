@@ -238,19 +238,21 @@ int main() {
 
     {
         const auto beq = i_type(0x04, 1, 2, 1u);
-        const auto delay = i_type(0x09, 0, 3, 9u);
-        auto memory = make_memory({beq, delay}, base);
+        const auto delay = i_type(0x09, 3, 3, 1u);
+        auto memory = make_memory({beq, delay, 0u}, base);
         R5900BlockDispatcher dispatcher(memory);
         R5900IrExecutionState state{};
+        state.gpr[1].low64 = 5u;
+        state.gpr[2].low64 = 5u;
 
         const auto result = dispatcher.run(base, state, 1u);
-        expect(result.reason == R5900DispatchStopReason::ControlFlow,
-               "BEQ at entry must stop as control flow");
-        expect(result.next_pc == base && result.blocks_executed == 0u &&
-                   result.instructions_executed == 0u,
-               "control-flow entry must execute nothing");
-        expect(state.gpr[3].low64 == 0u,
-               "control-flow entry must not execute delay slot");
+        expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+               "supported BEQ-only block must consume one block budget");
+        expect(result.next_pc == base + 12u && result.blocks_executed == 1u &&
+                   result.instructions_executed == 2u,
+               "BEQ-only block must execute BEQ and one delay instruction");
+        expect(state.gpr[3].low64 == 1u,
+               "BEQ delay slot must execute exactly once");
     }
 
     {
