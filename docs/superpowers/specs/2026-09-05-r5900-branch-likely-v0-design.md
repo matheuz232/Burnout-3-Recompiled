@@ -117,7 +117,7 @@ else:
 
 For both instructions, the branch predicate is evaluated from GPR low64 values before any delay-slot execution.
 
-The not-taken path must not call the delay executor at all. Therefore a delay instruction that would mutate registers, write memory, or fail must have no observable effect when the likely branch is not taken.
+The not-taken path must not call the delay executor at all. Therefore a delay instruction that would mutate registers, write memory, or fail must have no observable architectural effect when the likely branch is not taken.
 
 ## IR Validation
 
@@ -236,6 +236,14 @@ Required behavior:
 - changing the delay-slot word invalidates/recompiles the cached block even if a particular execution would annul that delay;
 - changing `BEQL` to `BNEL` must invalidate/recompile because the terminator guest word changes.
 
+## Dispatcher Accounting Contract
+
+`R5900DispatchResult::instructions_executed` currently counts the selected guest words represented by a successfully executed cached/native block, not dynamically retired architectural instructions. A supported control-transfer block fingerprints and stores body words plus the terminator and its architectural delay word, and that guest-word count is added after successful native execution.
+
+This milestone preserves that existing metric deliberately. Therefore a successful not-taken `BEQL`/`BNEL` block still contributes the delay-slot guest word to `instructions_executed`, even though the delay instruction is architecturally annulled and produces no register, memory, helper-call, or fault side effect.
+
+Tests must prove annulment through architectural state, memory/helper behavior, and next PC. They must not redefine the global dispatcher counter as a dynamic-retirement metric.
+
 ## Delay-Slot Store Restriction
 
 `SQ` in any dispatcher-managed branch delay remains outside v0 scope.
@@ -295,14 +303,13 @@ Prove:
 - BEQL/BNEL at block entry;
 - BEQL/BNEL after straight-line body instructions;
 - taken/not-taken next PCs;
-- one architectural delay instruction counted only when executed by the native semantic path while guest block fingerprint still covers it;
+- architectural delay effects occur only on taken likely branches;
+- successful dispatcher `instructions_executed` accounting remains based on selected guest words on both taken and not-taken paths;
 - cache hit across changed runtime predicate values;
 - changed delay word recompiles;
 - changed terminator word recompiles;
 - BEQL <-> BNEL mutation recompiles;
 - `SQ` in likely delay is rejected deterministically.
-
-Dispatcher accounting must follow the project's established convention for `instructions_executed`. If that field represents selected guest words rather than dynamically retired guest instructions, this milestone must preserve that convention rather than silently redefining global accounting semantics. Tests must make the convention explicit.
 
 ### Regression suite
 
