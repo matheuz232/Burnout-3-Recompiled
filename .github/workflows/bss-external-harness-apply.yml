@@ -1,0 +1,21 @@
+name: BSS External Harness Apply
+
+on:
+  push:
+    branches:
+      - feature/r5900-bss-clear-loop-v0
+    paths:
+      - .github/bss_external_harness_apply.py
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply external BSS harness update
+        run: python .github/bss_external_harness_apply.py
