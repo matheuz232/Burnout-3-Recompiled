@@ -152,15 +152,54 @@ int main() {
 
     {
         R5900IrExecutionState state{};
+        state.gpr[0] = {0xffffffffffffffffull, 0xffffffffffffffffull};
+        const auto block = beq_block(0x00105280u,
+                                     0u,
+                                     0u,
+                                     0x001052c0u,
+                                     0x00105288u,
+                                     addiu(7u, 0u, 3, 0x00105284u));
+        const auto result = execute_r5900_ir_block(block, state);
+        expect(result.ok(), "BEQ r0,r0 block must execute");
+        expect(result.next_pc == 0x001052c0u,
+               "BEQ r0,r0 must always take after GPR0 normalization");
+        expect(state.gpr[0].low64 == 0u && state.gpr[0].high64 == 0u,
+               "block execution must keep GPR0 normalized");
+        expect(state.gpr[7].low64 == 3u,
+               "BEQ r0,r0 delay slot must execute exactly once");
+    }
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[8] = {12u, 0x8888888888888888ull};
+        state.gpr[9] = {12u, 0x9999999999999999ull};
+        const auto block = beq_block(0x001052d0u,
+                                     8u,
+                                     9u,
+                                     0x00105310u,
+                                     0x001052d8u,
+                                     addiu(9u, 9u, 1, 0x001052d4u));
+        const auto result = execute_r5900_ir_block(block, state);
+        expect(result.ok(), "BEQ with rt-mutating delay must execute");
+        expect(result.next_pc == 0x00105310u,
+               "BEQ predicate must be captured before delay slot mutates rt");
+        expect(state.gpr[9].low64 == 13u,
+               "rt-mutating delay slot must execute exactly once");
+        expect(state.gpr[9].high64 == 0x9999999999999999ull,
+               "delay ADDIU must preserve rt high64");
+    }
+
+    {
+        R5900IrExecutionState state{};
         state.gpr[5] = {10u, 0x5555555555555555ull};
         const auto before = state;
-        auto block = beq_block(0x00105300u,
+        auto block = beq_block(0x00105340u,
                                0u,
                                0u,
-                               0x00105340u,
-                               0x00105308u,
-                               nop(0x00105304u));
-        block.body = {addiu(5u, 5u, 1, 0x001052fcu)};
+                               0x00105380u,
+                               0x00105348u,
+                               nop(0x00105344u));
+        block.body = {addiu(5u, 5u, 1, 0x0010533cu)};
         block.terminator.delay_slot.front().opcode =
             static_cast<R5900IrOpcode>(0xffu);
         const auto result = execute_r5900_ir_block(block, state);
