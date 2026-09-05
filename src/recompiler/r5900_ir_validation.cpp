@@ -124,7 +124,7 @@ R5900IrValidationResult validate_and64(const R5900IrInstruction& ir,
         return failure(R5900IrValidationError::MalformedInstruction,
                        index,
                        ir.guest_pc,
-                       "And64 expects GPR and immediate inputs");
+                       "And64 expects exactly two inputs");
     }
     const auto lhs = validate_operand(ir.inputs[0], index, ir.guest_pc);
     if (!lhs.ok()) {
@@ -135,11 +135,12 @@ R5900IrValidationResult validate_and64(const R5900IrInstruction& ir,
         return rhs;
     }
     if (ir.inputs[0].kind != R5900IrOperandKind::Gpr ||
-        ir.inputs[1].kind != R5900IrOperandKind::Immediate) {
+        (ir.inputs[1].kind != R5900IrOperandKind::Gpr &&
+         ir.inputs[1].kind != R5900IrOperandKind::Immediate)) {
         return failure(R5900IrValidationError::MalformedInstruction,
                        index,
                        ir.guest_pc,
-                       "And64 expects GPR and immediate inputs");
+                       "And64 expects GPR plus GPR or immediate input");
     }
     return {};
 }
