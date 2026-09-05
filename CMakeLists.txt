@@ -237,6 +237,13 @@ if(B3R_BUILD_TESTS)
   add_test(NAME r5900_ir_indirect_transfer_validation_tests
     COMMAND r5900_ir_indirect_transfer_validation_tests)
 
+  add_executable(r5900_ir_branch_likely_validation_tests
+    tests/r5900_ir_branch_likely_validation_tests.cpp
+  )
+  target_link_libraries(r5900_ir_branch_likely_validation_tests PRIVATE b3r_recompiler)
+  add_test(NAME r5900_ir_branch_likely_validation_tests
+    COMMAND r5900_ir_branch_likely_validation_tests)
+
   add_executable(r5900_ir_direct_transfer_executor_tests
     tests/r5900_ir_direct_transfer_executor_tests.cpp
   )

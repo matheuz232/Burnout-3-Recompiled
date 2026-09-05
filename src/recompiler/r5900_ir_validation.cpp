@@ -505,6 +505,30 @@ R5900IrValidationResult validate_r5900_ir_block(const R5900IrBlock& block) {
         }
         return validate_single_delay_slot(terminator, terminator_index);
 
+    case R5900IrTerminatorKind::BranchEqualLikely64:
+    case R5900IrTerminatorKind::BranchNotEqualLikely64:
+        if ((terminator.taken_pc & 0x3u) != 0u ||
+            (terminator.fallthrough_pc & 0x3u) != 0u ||
+            terminator.target_pc != 0u ||
+            terminator.link_pc != 0u ||
+            terminator.link_gpr != 0u ||
+            terminator.inputs.size() != 2u ||
+            terminator.inputs[0].kind != R5900IrOperandKind::Gpr ||
+            terminator.inputs[1].kind != R5900IrOperandKind::Gpr) {
+            return failure(R5900IrValidationError::MalformedInstruction,
+                           terminator_index,
+                           terminator.guest_pc,
+                           "malformed likely-branch terminator");
+        }
+        for (const auto& operand : terminator.inputs) {
+            const auto operand_validation =
+                validate_operand(operand, terminator_index, terminator.guest_pc);
+            if (!operand_validation.ok()) {
+                return operand_validation;
+            }
+        }
+        return validate_single_delay_slot(terminator, terminator_index);
+
     case R5900IrTerminatorKind::DirectJump:
         if (!terminator.inputs.empty() ||
             terminator.taken_pc != 0u ||
