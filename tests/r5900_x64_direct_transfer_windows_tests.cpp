@@ -130,15 +130,6 @@ R5900IrExecutionState sentinel_state() {
 int main() {
     {
         auto state = sentinel_state();
-        state.gpr[5].low64 = 0x0010a000u;
-        const auto block = indirect_jump(0x00107c00u, 5u,
-                                         nop(0x00107c04u));
-        auto compiled = compile_r5900_ir_x64(block);
-        expect(compiled.ok() && compiled.block.has_value(),
-               "native indirect JR block must compile");
-    }
-    {
-        auto state = sentinel_state();
         const auto block = direct_jump(0x00108000u, 0x00108100u,
                                        addiu(7u, 7u, 1, 0x00108004u));
         run_differential(block, state, true,

@@ -217,6 +217,16 @@ void emit_mov_edx_imm32(std::vector<std::uint8_t>& bytes,
     emit_u32(bytes, immediate);
 }
 
+void emit_store_eax_to_rsp_30(std::vector<std::uint8_t>& bytes) {
+    // mov dword ptr [rsp+0x30], eax
+    bytes.insert(bytes.end(), {0x89u, 0x44u, 0x24u, 0x30u});
+}
+
+void emit_load_eax_from_rsp_30(std::vector<std::uint8_t>& bytes) {
+    // mov eax, dword ptr [rsp+0x30]
+    bytes.insert(bytes.end(), {0x8bu, 0x44u, 0x24u, 0x30u});
+}
+
 void emit_mov_rax_imm64(std::vector<std::uint8_t>& bytes,
                         std::uint64_t immediate) {
     bytes.push_back(0x48u);
@@ -873,6 +883,51 @@ PendingX64Code compile_direct_transfer_code(const R5900IrBlock& block) {
     return publish_code(bytes);
 }
 
+PendingX64Code compile_indirect_transfer_code(const R5900IrBlock& block) {
+    constexpr bool helper_frame = true;
+
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(160u +
+        block.body.size() * 128u +
+        block.terminator.delay_slot.size() * 256u);
+
+    emit_helper_frame_prologue(bytes);
+    emit_zero_gpr0(bytes);
+
+    const auto body_emitted = emit_ir_sequence(
+        bytes, block.body, 0u, helper_frame);
+    if (!body_emitted.ok()) {
+        return pending_failure(body_emitted.error, body_emitted.message);
+    }
+
+    emit_load_eax_from_state(
+        bytes, gpr_low64_offset(block.terminator.inputs[0].gpr_index));
+    emit_store_eax_to_rsp_30(bytes);
+
+    if (block.terminator.kind == R5900IrTerminatorKind::IndirectCall &&
+        block.terminator.link_gpr != 0u) {
+        emit_mov_eax_imm32(bytes, block.terminator.link_pc);
+        emit_store_rax_to_state(
+            bytes, gpr_low64_offset(block.terminator.link_gpr));
+    }
+
+    emit_zero_gpr0(bytes);
+    const auto delay_emitted = emit_ir_sequence(
+        bytes,
+        block.terminator.delay_slot,
+        block.body.size() + 1u,
+        helper_frame);
+    if (!delay_emitted.ok()) {
+        return pending_failure(delay_emitted.error, delay_emitted.message);
+    }
+
+    emit_zero_gpr0(bytes);
+    emit_load_eax_from_rsp_30(bytes);
+    emit_helper_frame_epilogue(bytes);
+    bytes.push_back(0xc3u);
+    return publish_code(bytes);
+}
+
 } // namespace
 
 R5900X64CompiledBlock::R5900X64CompiledBlock(void* code,
@@ -981,6 +1036,10 @@ R5900X64CompileResult compile_r5900_ir_x64(const R5900IrBlock& block) {
     case R5900IrTerminatorKind::DirectJump:
     case R5900IrTerminatorKind::DirectCall:
         pending = compile_direct_transfer_code(block);
+        break;
+    case R5900IrTerminatorKind::IndirectJump:
+    case R5900IrTerminatorKind::IndirectCall:
+        pending = compile_indirect_transfer_code(block);
         break;
     default:
         return failure(R5900X64CompileError::UnsupportedOpcode,
