@@ -40,6 +40,19 @@ constexpr std::uint32_t i_type(std::uint8_t op,
            imm;
 }
 
+constexpr std::uint32_t mmi_type(std::uint8_t rs,
+                                 std::uint8_t rt,
+                                 std::uint8_t rd,
+                                 std::uint8_t sa,
+                                 std::uint8_t funct) {
+    return (0x1cu << 26u) |
+           (static_cast<std::uint32_t>(rs) << 21u) |
+           (static_cast<std::uint32_t>(rt) << 16u) |
+           (static_cast<std::uint32_t>(rd) << 11u) |
+           (static_cast<std::uint32_t>(sa) << 6u) |
+           funct;
+}
+
 } // namespace
 
 int main() {
@@ -64,7 +77,9 @@ int main() {
 
         const auto& ir = result.instructions[0];
         expect(ir.opcode == R5900IrOpcode::AddWordSignExtend, "ADDU must preserve 32-bit add/sign-extend semantics");
-        expect(ir.destination.has_value() && ir.destination->index == 8u, "ADDU destination must be rd");
+        expect(ir.destination.has_value() && ir.destination->kind == R5900IrDestinationKind::Gpr &&
+                   ir.destination->index == 8u,
+               "ADDU destination must be rd GPR");
         expect(ir.write_mode == R5900IrGprWriteMode::Low64PreserveUpper64,
                "ADDU must explicitly preserve the upper 64 bits of the 128-bit EE GPR");
         expect(ir.inputs.size() == 2u, "ADDU must have two inputs");
@@ -81,7 +96,9 @@ int main() {
 
         const auto& ir = result.instructions[0];
         expect(ir.opcode == R5900IrOpcode::AddWordSignExtend, "ADDIU must share non-trapping word-add semantics");
-        expect(ir.destination.has_value() && ir.destination->index == 29u, "ADDIU destination must be rt");
+        expect(ir.destination.has_value() && ir.destination->kind == R5900IrDestinationKind::Gpr &&
+                   ir.destination->index == 29u,
+               "ADDIU destination must be rt GPR");
         expect(ir.write_mode == R5900IrGprWriteMode::Low64PreserveUpper64,
                "ADDIU must explicitly preserve the upper 64 bits of the 128-bit EE GPR");
         expect(ir.inputs.size() == 2u, "ADDIU must have register plus immediate inputs");
@@ -98,12 +115,130 @@ int main() {
 
         const auto& ir = result.instructions[0];
         expect(ir.opcode == R5900IrOpcode::Or64, "ORI must lower to 64-bit OR semantics");
-        expect(ir.destination.has_value() && ir.destination->index == 5u, "ORI destination must be rt");
+        expect(ir.destination.has_value() && ir.destination->kind == R5900IrDestinationKind::Gpr &&
+                   ir.destination->index == 5u,
+               "ORI destination must be rt GPR");
         expect(ir.write_mode == R5900IrGprWriteMode::Low64PreserveUpper64,
                "ORI must explicitly preserve the upper 64 bits of the 128-bit EE GPR");
         expect(ir.inputs.size() == 2u, "ORI must have register plus immediate inputs");
         expect(ir.inputs[1].kind == R5900IrOperandKind::Immediate && ir.inputs[1].immediate == 0xFF00,
                "ORI immediate must be zero-extended before entering IR");
+    }
+
+    // RED: real-startup non-COP1 lowering subset.
+    {
+        const auto word = i_type(0x0c, 1, 2, 0x00ff); // andi r2,r1,0xff
+        const auto result = lower_r5900_instruction(decode_r5900(word), 0x00101000u);
+        expect(result.ok(), "ANDI must lower for startup execution");
+        const auto& ir = result.instructions.at(0);
+        expect(ir.opcode == R5900IrOpcode::And64, "ANDI must lower to And64");
+        expect(ir.destination.has_value() && ir.destination->kind == R5900IrDestinationKind::Gpr &&
+                   ir.destination->index == 2u,
+               "ANDI destination mismatch");
+        expect(ir.write_mode == R5900IrGprWriteMode::Low64PreserveUpper64,
+               "ANDI must preserve upper64");
+        expect(ir.inputs.size() == 2u && ir.inputs[0].kind == R5900IrOperandKind::Gpr &&
+                   ir.inputs[0].gpr_index == 1u && ir.inputs[1].kind == R5900IrOperandKind::Immediate &&
+                   ir.inputs[1].immediate == 0x00ff,
+               "ANDI operands/immediate mismatch");
+        expect(ir.guest_pc == 0x00101000u && ir.guest_raw == word,
+               "ANDI must preserve provenance");
+    }
+
+    {
+        const auto word = i_type(0x0f, 0, 2, 0x8040); // lui r2,0x8040
+        const auto result = lower_r5900_instruction(decode_r5900(word), 0x00101004u);
+        expect(result.ok(), "LUI must lower for startup execution");
+        const auto& ir = result.instructions.at(0);
+        expect(ir.opcode == R5900IrOpcode::LoadUpperImmediateSignExtend,
+               "LUI must lower to explicit sign-extending upper-immediate op");
+        expect(ir.destination.has_value() && ir.destination->kind == R5900IrDestinationKind::Gpr &&
+                   ir.destination->index == 2u,
+               "LUI destination mismatch");
+        expect(ir.inputs.size() == 1u && ir.inputs[0].kind == R5900IrOperandKind::Immediate &&
+                   ir.inputs[0].immediate == 0x8040,
+               "LUI must retain raw 16-bit immediate in IR");
+    }
+
+    {
+        const auto result = lower_r5900_instruction(decode_r5900(r_type(7, 0, 0, 0, 0x11)), 0x00101008u);
+        expect(result.ok(), "MTHI must lower");
+        const auto& ir = result.instructions.at(0);
+        expect(ir.opcode == R5900IrOpcode::MoveGprLow64 && ir.destination.has_value() &&
+                   ir.destination->kind == R5900IrDestinationKind::Hi && ir.destination->index == 0u &&
+                   ir.inputs.size() == 1u && ir.inputs[0].kind == R5900IrOperandKind::Gpr &&
+                   ir.inputs[0].gpr_index == 7u,
+               "MTHI lowering mismatch");
+    }
+
+    {
+        const auto result = lower_r5900_instruction(decode_r5900(r_type(8, 0, 0, 0, 0x13)), 0x0010100cu);
+        expect(result.ok(), "MTLO must lower");
+        expect(result.instructions.at(0).destination->kind == R5900IrDestinationKind::Lo,
+               "MTLO destination mismatch");
+    }
+
+    {
+        const auto result = lower_r5900_instruction(decode_r5900(mmi_type(9, 0, 0, 0, 0x11)), 0x00101010u);
+        expect(result.ok(), "MTHI1 must lower");
+        expect(result.instructions.at(0).destination->kind == R5900IrDestinationKind::Hi1,
+               "MTHI1 destination mismatch");
+    }
+
+    {
+        const auto result = lower_r5900_instruction(decode_r5900(mmi_type(10, 0, 0, 0, 0x13)), 0x00101014u);
+        expect(result.ok(), "MTLO1 must lower");
+        expect(result.instructions.at(0).destination->kind == R5900IrDestinationKind::Lo1,
+               "MTLO1 destination mismatch");
+    }
+
+    {
+        const auto result = lower_r5900_instruction(decode_r5900(i_type(0x01, 11, 0x19, 5)), 0x00101018u);
+        expect(result.ok(), "MTSAH must lower");
+        const auto& ir = result.instructions.at(0);
+        expect(ir.opcode == R5900IrOpcode::ComputeMtsah && ir.destination.has_value() &&
+                   ir.destination->kind == R5900IrDestinationKind::Sa,
+               "MTSAH destination/opcode mismatch");
+        expect(ir.inputs.size() == 2u && ir.inputs[0].kind == R5900IrOperandKind::Gpr &&
+                   ir.inputs[0].gpr_index == 11u && ir.inputs[1].kind == R5900IrOperandKind::Immediate &&
+                   ir.inputs[1].immediate == 5,
+               "MTSAH inputs mismatch");
+    }
+
+    {
+        const auto result = lower_r5900_instruction(
+            decode_r5900(mmi_type(12, 13, 14, 0x10, 0x28)), 0x0010101cu);
+        expect(result.ok(), "PADDUW must lower");
+        const auto& ir = result.instructions.at(0);
+        expect(ir.opcode == R5900IrOpcode::AddPackedU32Saturate128 && ir.destination.has_value() &&
+                   ir.destination->kind == R5900IrDestinationKind::Gpr && ir.destination->index == 14u,
+               "PADDUW destination/opcode mismatch");
+        expect(ir.write_mode == R5900IrGprWriteMode::Full128,
+               "PADDUW must explicitly replace full 128-bit GPR");
+        expect(ir.inputs.size() == 2u && ir.inputs[0].gpr_index == 12u && ir.inputs[1].gpr_index == 13u,
+               "PADDUW source mismatch");
+    }
+
+    {
+        const auto result = lower_r5900_instruction(
+            decode_r5900(r_type(0, 0, 0, 16, 0x0f)), 0x00101020u);
+        expect(result.ok() && result.instructions.size() == 1u &&
+                   result.instructions[0].opcode == R5900IrOpcode::Nop,
+               "SYNC must lower to semantic Nop");
+    }
+
+    {
+        const std::uint32_t words[] = {
+            i_type(0x0c, 1, 0, 0x00ff),
+            i_type(0x0f, 0, 0, 0x8040),
+            mmi_type(1, 2, 0, 0x10, 0x28),
+        };
+        for (const auto word : words) {
+            const auto result = lower_r5900_instruction(decode_r5900(word), 0x00101024u);
+            expect(result.ok() && result.instructions.size() == 1u &&
+                       result.instructions[0].opcode == R5900IrOpcode::Nop,
+                   "side-effect-free startup write to GPR0 must lower to provenance Nop");
+        }
     }
 
     {
