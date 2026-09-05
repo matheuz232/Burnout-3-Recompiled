@@ -52,6 +52,17 @@ R5900IrInstruction write_ir(R5900IrOpcode opcode,
 int main() {
     using namespace b3r::recompiler;
 
+    // RED for startup-execution v0 model: these types/fields must be introduced
+    // before any production semantics are added.
+    R5900IrInstruction model_probe{};
+    model_probe.destination = R5900IrDestination{R5900IrDestinationKind::Fpr, 3u};
+    model_probe.write_mode = R5900IrGprWriteMode::Full128;
+    R5900IrOperand fpr_probe{};
+    fpr_probe.kind = R5900IrOperandKind::Fpr;
+    fpr_probe.gpr_index = 4u;
+    (void)model_probe;
+    (void)fpr_probe;
+
     R5900IrInstruction nop{};
     nop.guest_pc = 0x00102000u;
     nop.opcode = R5900IrOpcode::Nop;
