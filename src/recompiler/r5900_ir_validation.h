@@ -27,4 +27,7 @@ struct R5900IrValidationResult {
     const R5900IrInstruction& instruction,
     std::size_t instruction_index);
 
+[[nodiscard]] R5900IrValidationResult
+validate_r5900_ir_block(const R5900IrBlock& block);
+
 } // namespace b3r::recompiler
