@@ -39,7 +39,8 @@
 - `src/recompiler/windows/r5900_x64_backend.cpp` — emit indirect target snapshot/link/delay/native return using `[rsp+0x30]`.
 - `src/recompiler/windows/r5900_block_dispatcher.cpp` — recognize/lower/cache/execute analyzer `IndirectJump/IndirectCall` only when final decoded instruction is `JR/JALR`.
 - `CMakeLists.txt` — register four dedicated indirect-transfer test executables.
-- `tests/r5900_direct_transfer_test_support.h` — extend the existing control-transfer test helpers with `indirect_jump()` and `indirect_call()`; keep shared `gpr`, `addiu`, `nop`, and `store128` helpers.
+- `tests/r5900_direct_transfer_test_support.h` — extend shared transfer test helpers with `indirect_jump()` and `indirect_call()`.
+- `tests/r5900_block_dispatcher_direct_transfer_windows_tests.cpp` — replace obsolete JR sentinel boundaries with unsupported BNE boundaries and remove the old assertion that JR/JALR are unsupported.
 - `tests/r5900_block_dispatcher_startup_windows_tests.cpp` — expand synthetic startup through `JR` and aliasing `JALR`, ending at unsupported `BNE`.
 - `README.md` — update milestone/status wording after full CI.
 - `docs/PROGRESS.md` — record JR/JALR coverage, exact E2E accounting, CI evidence, and remaining boundary.
@@ -63,17 +64,17 @@
 - Modify: `CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: existing `R5900IrOperand`, `R5900IrTerminator`, `validate_r5900_ir_block()`, and the test helpers `gpr()`, `nop()`.
+- Consumes: existing `R5900IrOperand`, `R5900IrTerminator`, `validate_r5900_ir_block()`, and test helpers `gpr()` / `nop()`.
 - Produces:
   - `R5900IrTerminatorKind::IndirectJump`
   - `R5900IrTerminatorKind::IndirectCall`
   - `R5900IrTerminator::link_gpr` as `std::uint8_t`
-  - `b3r::test_support::indirect_jump(std::uint32_t pc, std::uint8_t rs, R5900IrInstruction delay)`
-  - `b3r::test_support::indirect_call(std::uint32_t pc, std::uint8_t rs, std::uint8_t rd, R5900IrInstruction delay)`
+  - `b3r::test_support::indirect_jump(std::uint32_t, std::uint8_t, R5900IrInstruction)`
+  - `b3r::test_support::indirect_call(std::uint32_t, std::uint8_t, std::uint8_t, R5900IrInstruction)`
 
-- [ ] **Step 1: Register a dedicated validation test target and write the RED test**
+- [ ] **Step 1: Register the dedicated validation target and write RED**
 
-Add to the portable test section of `CMakeLists.txt` immediately after the direct-transfer validation target:
+Add to the portable test section of `CMakeLists.txt` after the direct-transfer validation target:
 
 ```cmake
 add_executable(r5900_ir_indirect_transfer_validation_tests
@@ -84,162 +85,112 @@ add_test(NAME r5900_ir_indirect_transfer_validation_tests
   COMMAND r5900_ir_indirect_transfer_validation_tests)
 ```
 
-Extend `tests/r5900_direct_transfer_test_support.h` only after the RED compile has been observed; the initial test should refer to the not-yet-existing enum/field/helpers so it fails for the intended reason.
-
-Create `tests/r5900_ir_indirect_transfer_validation_tests.cpp` with this test shape:
+Create `tests/r5900_ir_indirect_transfer_validation_tests.cpp`. Its `main()` must cover this exact matrix:
 
 ```cpp
-#include "r5900_direct_transfer_test_support.h"
-#include "recompiler/r5900_ir_validation.h"
+const auto jump = indirect_jump(0x00108000u, 5u, nop(0x00108004u));
+const auto call = indirect_call(0x00108200u, 7u, 9u, nop(0x00108204u));
+expect(validate_r5900_ir_block(jump).ok(), "valid IndirectJump must validate");
+expect(validate_r5900_ir_block(call).ok(), "valid IndirectCall must validate");
 
-#include <cstdlib>
-#include <iostream>
-
-namespace {
-using namespace b3r::recompiler;
-using namespace b3r::test_support;
-
-[[noreturn]] void fail(const char* message) {
-    std::cerr << "r5900_ir_indirect_transfer_validation_tests: FAIL: "
-              << message << '\n';
-    std::exit(EXIT_FAILURE);
+{
+    auto invalid = jump;
+    invalid.terminator.inputs.clear();
+    expect_malformed(invalid, "IndirectJump requires one target GPR");
 }
-void expect(bool condition, const char* message) {
-    if (!condition) fail(message);
+{
+    auto invalid = jump;
+    invalid.terminator.inputs = {gpr(5u), gpr(6u)};
+    expect_malformed(invalid, "IndirectJump rejects multiple target inputs");
 }
-void expect_malformed(const R5900IrBlock& block, const char* message) {
-    expect(validate_r5900_ir_block(block).error ==
-               R5900IrValidationError::MalformedInstruction,
-           message);
+{
+    auto invalid = jump;
+    invalid.terminator.inputs[0].kind = R5900IrOperandKind::Immediate;
+    expect_malformed(invalid, "IndirectJump target must be a GPR");
 }
-} // namespace
-
-int main() {
-    const auto jump = indirect_jump(0x00108000u, 5u, nop(0x00108004u));
-    const auto call = indirect_call(0x00108200u, 7u, 9u, nop(0x00108204u));
-    expect(validate_r5900_ir_block(jump).ok(), "valid IndirectJump must validate");
-    expect(validate_r5900_ir_block(call).ok(), "valid IndirectCall must validate");
-
-    {
-        auto invalid = jump;
-        invalid.terminator.inputs.clear();
-        expect_malformed(invalid, "IndirectJump requires one target GPR");
-    }
-    {
-        auto invalid = jump;
-        invalid.terminator.inputs = {gpr(5u), gpr(6u)};
-        expect_malformed(invalid, "IndirectJump rejects multiple target inputs");
-    }
-    {
-        auto invalid = jump;
-        invalid.terminator.inputs[0].kind = R5900IrOperandKind::Immediate;
-        expect_malformed(invalid, "IndirectJump target must be a GPR");
-    }
-    {
-        auto invalid = jump;
-        invalid.terminator.inputs[0].gpr_index = 32u;
-        expect(validate_r5900_ir_block(invalid).error ==
-                   R5900IrValidationError::InvalidRegister,
-               "IndirectJump rejects out-of-range target GPR");
-    }
-    {
-        auto invalid = jump;
-        invalid.terminator.target_pc = 0x00109000u;
-        expect_malformed(invalid, "IndirectJump rejects direct target field");
-    }
-    {
-        auto invalid = jump;
-        invalid.terminator.taken_pc = 0x00109000u;
-        expect_malformed(invalid, "IndirectJump rejects branch target field");
-    }
-    {
-        auto invalid = jump;
-        invalid.terminator.fallthrough_pc = 0x00108008u;
-        expect_malformed(invalid, "IndirectJump rejects fallthrough field");
-    }
-    {
-        auto invalid = jump;
-        invalid.terminator.link_pc = 0x00108008u;
-        expect_malformed(invalid, "IndirectJump rejects link PC");
-    }
-    {
-        auto invalid = jump;
-        invalid.terminator.link_gpr = 31u;
-        expect_malformed(invalid, "IndirectJump rejects link GPR");
-    }
-    {
-        auto invalid = call;
-        invalid.terminator.link_pc += 4u;
-        expect_malformed(invalid, "IndirectCall link must equal PC+8");
-    }
-    {
-        auto invalid = call;
-        invalid.terminator.link_gpr = 32u;
-        expect(validate_r5900_ir_block(invalid).error ==
-                   R5900IrValidationError::InvalidRegister,
-               "IndirectCall rejects out-of-range link GPR");
-    }
-    {
-        auto invalid = call;
-        invalid.terminator.delay_slot.clear();
-        expect_malformed(invalid, "IndirectCall requires exactly one delay instruction");
-    }
-    {
-        auto invalid = jump;
-        invalid.terminator.delay_slot.push_back(nop(0x00108008u));
-        expect_malformed(invalid, "IndirectJump rejects multiple delay instructions");
-    }
-    {
-        auto invalid = call;
-        invalid.terminator.delay_slot.front().opcode =
-            static_cast<R5900IrOpcode>(0xffu);
-        expect(validate_r5900_ir_block(invalid).error ==
-                   R5900IrValidationError::UnsupportedOpcode,
-               "invalid delay opcode must propagate UnsupportedOpcode");
-    }
-
-    for (auto kind : {R5900IrTerminatorKind::Fallthrough,
-                      R5900IrTerminatorKind::BranchEqual64,
-                      R5900IrTerminatorKind::DirectJump,
-                      R5900IrTerminatorKind::DirectCall}) {
-        R5900IrBlock invalid{};
-        invalid.terminator.guest_pc = 0x00108400u;
-        invalid.terminator.kind = kind;
-        invalid.terminator.link_gpr = 1u;
-        if (kind == R5900IrTerminatorKind::Fallthrough) {
-            invalid.terminator.fallthrough_pc = 0x00108404u;
-        } else if (kind == R5900IrTerminatorKind::BranchEqual64) {
-            invalid.terminator.inputs = {gpr(0u), gpr(0u)};
-            invalid.terminator.taken_pc = 0x00108408u;
-            invalid.terminator.fallthrough_pc = 0x00108408u;
-            invalid.terminator.delay_slot = {nop(0x00108404u)};
-        } else {
-            invalid.terminator.target_pc = 0x00108500u;
-            invalid.terminator.delay_slot = {nop(0x00108404u)};
-            if (kind == R5900IrTerminatorKind::DirectCall) {
-                invalid.terminator.link_pc = 0x00108408u;
-            }
-        }
-        expect_malformed(invalid, "existing terminators must reject link_gpr");
-    }
-
-    std::cout << "r5900_ir_indirect_transfer_validation_tests: PASS\n";
-    return EXIT_SUCCESS;
+{
+    auto invalid = jump;
+    invalid.terminator.inputs[0].gpr_index = 32u;
+    expect(validate_r5900_ir_block(invalid).error ==
+               R5900IrValidationError::InvalidRegister,
+           "IndirectJump rejects out-of-range target GPR");
+}
+{
+    auto invalid = jump;
+    invalid.terminator.target_pc = 0x00109000u;
+    expect_malformed(invalid, "IndirectJump rejects target_pc");
+}
+{
+    auto invalid = jump;
+    invalid.terminator.taken_pc = 0x00109000u;
+    expect_malformed(invalid, "IndirectJump rejects taken_pc");
+}
+{
+    auto invalid = jump;
+    invalid.terminator.fallthrough_pc = 0x00108008u;
+    expect_malformed(invalid, "IndirectJump rejects fallthrough_pc");
+}
+{
+    auto invalid = jump;
+    invalid.terminator.link_pc = 0x00108008u;
+    expect_malformed(invalid, "IndirectJump rejects link_pc");
+}
+{
+    auto invalid = jump;
+    invalid.terminator.link_gpr = 31u;
+    expect_malformed(invalid, "IndirectJump rejects link_gpr");
+}
+{
+    auto invalid = call;
+    invalid.terminator.link_pc += 4u;
+    expect_malformed(invalid, "IndirectCall link must equal PC+8");
+}
+{
+    auto invalid = call;
+    invalid.terminator.link_pc |= 2u;
+    expect_malformed(invalid, "IndirectCall link must be aligned");
+}
+{
+    auto invalid = call;
+    invalid.terminator.link_gpr = 32u;
+    expect(validate_r5900_ir_block(invalid).error ==
+               R5900IrValidationError::InvalidRegister,
+           "IndirectCall rejects out-of-range link GPR");
+}
+{
+    auto invalid = call;
+    invalid.terminator.delay_slot.clear();
+    expect_malformed(invalid, "IndirectCall requires exactly one delay instruction");
+}
+{
+    auto invalid = jump;
+    invalid.terminator.delay_slot.push_back(nop(0x00108008u));
+    expect_malformed(invalid, "IndirectJump rejects multiple delay instructions");
+}
+{
+    auto invalid = call;
+    invalid.terminator.delay_slot.front().opcode =
+        static_cast<R5900IrOpcode>(0xffu);
+    expect(validate_r5900_ir_block(invalid).error ==
+               R5900IrValidationError::UnsupportedOpcode,
+           "invalid delay opcode must propagate UnsupportedOpcode");
 }
 ```
 
-- [ ] **Step 2: Run the RED validation target**
+Also construct valid `Fallthrough`, `BranchEqual64`, `DirectJump`, and `DirectCall` blocks, set `terminator.link_gpr = 1`, and require `MalformedInstruction` for each so the new field cannot leak into existing terminator kinds.
 
-Windows commands:
+Use the same local `fail()`, `expect()`, and `expect_malformed()` style as `tests/r5900_ir_direct_transfer_validation_tests.cpp`.
+
+- [ ] **Step 2: Run RED before adding production symbols**
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DB3R_BUILD_TESTS=ON
 cmake --build build --config Release --target r5900_ir_indirect_transfer_validation_tests
 ```
 
-Expected RED: MSVC reports missing `IndirectJump`, `IndirectCall`, `link_gpr`, and/or the indirect test helpers. Do not accept an unrelated compile failure.
+Expected RED: missing `IndirectJump`, `IndirectCall`, `link_gpr`, and/or the indirect helper functions. Reject unrelated failures.
 
-- [ ] **Step 3: Add the minimal typed IR and test helpers**
+- [ ] **Step 3: Add minimal IR and test helpers**
 
 In `src/recompiler/r5900_ir.h`:
 
@@ -293,11 +244,15 @@ inline R5900IrBlock indirect_call(std::uint32_t pc,
 }
 ```
 
-- [ ] **Step 4: Implement validator cases without changing execution**
+- [ ] **Step 4: Implement exact validator contracts**
 
-Before the block terminator switch, keep existing guest-PC alignment validation. Tighten all existing cases by adding `terminator.link_gpr != 0u` to their malformed conditions.
+Tighten existing `Fallthrough`, `BranchEqual64`, `DirectJump`, and `DirectCall` malformed conditions with:
 
-Add these two cases:
+```cpp
+terminator.link_gpr != 0u
+```
+
+Add:
 
 ```cpp
 case R5900IrTerminatorKind::IndirectJump: {
@@ -313,21 +268,24 @@ case R5900IrTerminatorKind::IndirectJump: {
                        terminator.guest_pc,
                        "malformed indirect-jump terminator");
     }
-    const auto input_validation =
+    const auto input =
         validate_operand(terminator.inputs[0], terminator_index, terminator.guest_pc);
-    if (!input_validation.ok()) {
-        return input_validation;
-    }
+    if (!input.ok()) return input;
     return validate_single_delay_slot(terminator, terminator_index);
 }
 
 case R5900IrTerminatorKind::IndirectCall: {
+    if (terminator.link_gpr >= 32u) {
+        return failure(R5900IrValidationError::InvalidRegister,
+                       terminator_index,
+                       terminator.guest_pc,
+                       "invalid indirect-call link GPR");
+    }
     if (terminator.inputs.size() != 1u ||
         terminator.inputs[0].kind != R5900IrOperandKind::Gpr ||
         terminator.taken_pc != 0u ||
         terminator.fallthrough_pc != 0u ||
         terminator.target_pc != 0u ||
-        terminator.link_gpr >= 32u ||
         (terminator.link_pc & 0x3u) != 0u ||
         terminator.link_pc != static_cast<std::uint32_t>(terminator.guest_pc + 8u)) {
         return failure(R5900IrValidationError::MalformedInstruction,
@@ -335,27 +293,14 @@ case R5900IrTerminatorKind::IndirectCall: {
                        terminator.guest_pc,
                        "malformed indirect-call terminator");
     }
-    const auto input_validation =
+    const auto input =
         validate_operand(terminator.inputs[0], terminator_index, terminator.guest_pc);
-    if (!input_validation.ok()) {
-        return input_validation;
-    }
+    if (!input.ok()) return input;
     return validate_single_delay_slot(terminator, terminator_index);
 }
 ```
 
-For the `link_gpr >= 32` path, preserve the spec's `InvalidRegister` classification by splitting that check before the malformed-condition block:
-
-```cpp
-if (terminator.link_gpr >= 32u) {
-    return failure(R5900IrValidationError::InvalidRegister,
-                   terminator_index,
-                   terminator.guest_pc,
-                   "invalid indirect-call link GPR");
-}
-```
-
-- [ ] **Step 5: Run focused and existing validation tests**
+- [ ] **Step 5: Run focused GREEN and validation regressions**
 
 ```powershell
 cmake --build build --config Release --target `
@@ -365,7 +310,7 @@ cmake --build build --config Release --target `
 ctest --test-dir build -C Release --output-on-failure -R "r5900_ir_(indirect_transfer_validation|direct_transfer_validation|block_validation)_tests"
 ```
 
-Expected: all selected validation tests PASS.
+Expected: all selected tests PASS.
 
 - [ ] **Step 6: Commit Task 1**
 
@@ -384,10 +329,10 @@ git commit -m "feat: model R5900 indirect transfers"
 - Modify: `CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: Task 1 `IndirectJump`, `IndirectCall`, `link_gpr`, and `indirect_jump()/indirect_call()` helpers.
-- Produces: reference execution contract used as oracle by Task 3 x64 differential tests.
+- Consumes: Task 1 typed terminators/helpers.
+- Produces: reference behavior used as the Task 3 differential oracle.
 
-- [ ] **Step 1: Register and write the RED executor test**
+- [ ] **Step 1: Register executor test and write RED**
 
 Add:
 
@@ -400,131 +345,79 @@ add_test(NAME r5900_ir_indirect_transfer_executor_tests
   COMMAND r5900_ir_indirect_transfer_executor_tests)
 ```
 
-Create the test with cases equivalent to the following:
+The test file must define a local `MemoryProbe`, `write128()` callback, `fail()`, and `expect()`. Cover these exact cases:
 
 ```cpp
-#include "r5900_direct_transfer_test_support.h"
-#include "recompiler/r5900_ir_executor.h"
+// JR snapshots low32 before delay mutates source and does not touch r31.
+state.gpr[5] = {0x1234000012345678ull, 0xfeedfacefeedfaceull};
+state.gpr[31] = {0x1111222233334444ull, 0xaaaabbbbccccddddull};
+auto block = indirect_jump(0x00109000u, 5u,
+                           addiu(5u, 0u, 9, 0x00109004u));
+auto result = execute_r5900_ir_block(block, state);
+expect(result.ok() && result.next_pc == 0x12345678u,
+       "JR must return snapshotted low32 target");
+expect(state.gpr[5].low64 == 9u,
+       "JR delay may mutate source after snapshot");
 
-#include <cstdlib>
-#include <iostream>
+// JALR rd==rs snapshots old target, writes PC+8, preserves high64,
+// and exposes the new link to the delay slot.
+state.gpr[5] = {0x000000000010a000ull, 0x0123456789abcdefull};
+block = indirect_call(0x00109200u, 5u, 5u,
+                      addiu(6u, 5u, 0, 0x00109204u));
+result = execute_r5900_ir_block(block, state);
+expect(result.ok() && result.next_pc == 0x0010a000u,
+       "JALR rd==rs must jump using old source");
+expect(state.gpr[5].low64 == 0x00109208u &&
+       state.gpr[5].high64 == 0x0123456789abcdefull,
+       "JALR must write PC+8 low64 and preserve high64");
+expect(state.gpr[6].low64 == 0x00109208u,
+       "JALR delay must see new link");
 
-namespace {
-using namespace b3r::recompiler;
-using namespace b3r::test_support;
-[[noreturn]] void fail(const char* m) { std::cerr << "r5900_ir_indirect_transfer_executor_tests: FAIL: " << m << '\n'; std::exit(EXIT_FAILURE); }
-void expect(bool c, const char* m) { if (!c) fail(m); }
+// JALR rd==0 still jumps and leaves normalized GPR0.
+state = {};
+state.gpr[7].low64 = 0x0010b000u;
+state.gpr[0] = {0x1111u, 0x2222u};
+block = indirect_call(0x00109400u, 7u, 0u, nop(0x00109404u));
+result = execute_r5900_ir_block(block, state);
+expect(result.ok() && result.next_pc == 0x0010b000u,
+       "JALR rd==0 must still jump");
+expect(state.gpr[0].low64 == 0u && state.gpr[0].high64 == 0u,
+       "JALR rd==0 must leave GPR0 normalized");
 
-struct MemoryProbe {
-    bool succeed{true};
-    std::uint32_t address{};
-    std::uint64_t low{};
-    std::uint64_t high{};
-    std::size_t calls{};
-};
-
-bool write128(void* user,
-              std::uint32_t address,
-              std::uint64_t low,
-              std::uint64_t high) noexcept {
-    auto& probe = *static_cast<MemoryProbe*>(user);
-    ++probe.calls;
-    probe.address = address;
-    probe.low = low;
-    probe.high = high;
-    return probe.succeed;
-}
-} // namespace
-
-int main() {
-    {
-        R5900IrExecutionState state{};
-        state.gpr[5] = {0x1234000012345678ull, 0xfeedfacefeedfaceull};
-        state.gpr[31] = {0x1111222233334444ull, 0xaaaabbbbccccddddull};
-        const auto block = indirect_jump(0x00109000u, 5u,
-                                         addiu(5u, 0u, 9, 0x00109004u));
-        const auto result = execute_r5900_ir_block(block, state);
-        expect(result.ok() && result.next_pc == 0x12345678u,
-               "JR must return the snapshotted low32 target");
-        expect(state.gpr[5].low64 == 9u,
-               "JR delay may mutate source after target snapshot");
-        expect(state.gpr[31].low64 == 0x1111222233334444ull &&
-               state.gpr[31].high64 == 0xaaaabbbbccccddddull,
-               "JR must not modify link registers");
-    }
-
-    {
-        R5900IrExecutionState state{};
-        state.gpr[5] = {0x000000000010a000ull, 0x0123456789abcdefull};
-        const auto block = indirect_call(0x00109200u, 5u, 5u,
-                                         addiu(6u, 5u, 0, 0x00109204u));
-        const auto result = execute_r5900_ir_block(block, state);
-        expect(result.ok() && result.next_pc == 0x0010a000u,
-               "JALR rd==rs must jump using old source value");
-        expect(state.gpr[5].low64 == 0x00109208u &&
-               state.gpr[5].high64 == 0x0123456789abcdefull,
-               "JALR must write PC+8 low64 and preserve high64");
-        expect(state.gpr[6].low64 == 0x00109208u,
-               "JALR delay must see new link");
-    }
-
-    {
-        R5900IrExecutionState state{};
-        state.gpr[7].low64 = 0x0010b000u;
-        state.gpr[0] = {0x1111u, 0x2222u};
-        const auto block = indirect_call(0x00109400u, 7u, 0u,
-                                         nop(0x00109404u));
-        const auto result = execute_r5900_ir_block(block, state);
-        expect(result.ok() && result.next_pc == 0x0010b000u,
-               "JALR rd==0 must still jump");
-        expect(state.gpr[0].low64 == 0u && state.gpr[0].high64 == 0u,
-               "JALR rd==0 must leave normalized GPR0");
-    }
-
-    {
-        R5900IrExecutionState state{};
-        state.gpr[8].low64 = 0x0010c000u;
-        state.gpr[9] = {0x7777u, 0x9999aaaabbbbccccull};
-        const auto block = indirect_call(0x00109600u, 8u, 9u,
-                                         addiu(9u, 0u, 3, 0x00109604u));
-        const auto result = execute_r5900_ir_block(block, state);
-        expect(result.ok(), "JALR delay overwrite case must execute");
-        expect(state.gpr[9].low64 == 3u &&
-               state.gpr[9].high64 == 0x9999aaaabbbbccccull,
-               "delay write must win after JALR link and preserve high64");
-    }
-
-    {
-        R5900IrExecutionState state{};
-        state.gpr[2].low64 = 0x00400000u;
-        state.gpr[3] = {0x1111222233334444ull, 0x5555666677778888ull};
-        state.gpr[5].low64 = 0x0010d000u;
-        state.gpr[9] = {0xaaaaull, 0xbbbbccccddddeeeeull};
-        MemoryProbe probe{};
-        probe.succeed = false;
-        auto block = indirect_call(0x00109800u, 5u, 9u,
-                                   store128(2u, 3u, 0, 0x00109804u));
-        R5900IrExecutionContext context{};
-        context.state = &state;
-        context.memory.user = &probe;
-        context.memory.write128 = &write128;
-        const auto result = execute_r5900_ir_block(block, context);
-        expect(result.error == R5900IrExecutionError::MemoryAccessFailure,
-               "JALR delay memory failure must propagate");
-        expect(state.gpr[9].low64 == 0x00109808u &&
-               state.gpr[9].high64 == 0xbbbbccccddddeeeeull,
-               "JALR link remains committed before delay failure");
-        expect(probe.calls == 1u && context.memory_fault.active &&
-               context.memory_fault.guest_pc == 0x00109804u,
-               "delay memory fault must retain exact guest PC");
-    }
-
-    std::cout << "r5900_ir_indirect_transfer_executor_tests: PASS\n";
-    return EXIT_SUCCESS;
-}
+// Delay write to link destination wins after link.
+state = {};
+state.gpr[8].low64 = 0x0010c000u;
+state.gpr[9] = {0x7777u, 0x9999aaaabbbbccccull};
+block = indirect_call(0x00109600u, 8u, 9u,
+                      addiu(9u, 0u, 3, 0x00109604u));
+result = execute_r5900_ir_block(block, state);
+expect(result.ok() && state.gpr[9].low64 == 3u &&
+       state.gpr[9].high64 == 0x9999aaaabbbbccccull,
+       "delay write must win after JALR link");
 ```
 
-Also add one body-failure case by putting `Store128` in `block.body`, leaving the execution context memory callback absent, and asserting the destination link GPR and delay destination remain unchanged.
+Add a lower-level delay-memory-failure case using:
+
+```cpp
+MemoryProbe probe{};
+probe.succeed = false;
+R5900IrExecutionContext context{};
+context.state = &state;
+context.memory.user = &probe;
+context.memory.write128 = &write128;
+block = indirect_call(0x00109800u, 5u, 9u,
+                      store128(2u, 3u, 0, 0x00109804u));
+result = execute_r5900_ir_block(block, context);
+expect(result.error == R5900IrExecutionError::MemoryAccessFailure,
+       "JALR delay memory failure must propagate");
+expect(state.gpr[9].low64 == 0x00109808u,
+       "JALR link remains committed before delay failure");
+expect(context.memory_fault.active &&
+       context.memory_fault.guest_pc == 0x00109804u,
+       "delay fault PC mismatch");
+```
+
+Add a body-failure case with `Store128` in `block.body`, no memory callback, and assert link GPR plus delay destination remain unchanged.
 
 - [ ] **Step 2: Run RED**
 
@@ -533,11 +426,11 @@ cmake --build build --config Release --target r5900_ir_indirect_transfer_executo
 ctest --test-dir build -C Release --output-on-failure -R r5900_ir_indirect_transfer_executor_tests
 ```
 
-Expected RED: build succeeds, test fails because `execute_r5900_ir_block()` still returns `UnsupportedOpcode` for indirect terminators.
+Expected RED: test executes but returns `UnsupportedOpcode` for indirect terminators.
 
-- [ ] **Step 3: Implement minimal reference executor cases**
+- [ ] **Step 3: Implement reference cases**
 
-In `execute_r5900_ir_block()` add:
+Add to the block terminator switch:
 
 ```cpp
 case R5900IrTerminatorKind::IndirectJump: {
@@ -545,9 +438,7 @@ case R5900IrTerminatorKind::IndirectJump: {
         state.gpr[block.terminator.inputs[0].gpr_index].low64);
     const auto delay_result =
         execute_ir_sequence(block.terminator.delay_slot, context);
-    if (!delay_result.ok()) {
-        return map_block_execution_failure(delay_result);
-    }
+    if (!delay_result.ok()) return map_block_execution_failure(delay_result);
     return {R5900IrExecutionError::None, {}, target};
 }
 
@@ -562,16 +453,14 @@ case R5900IrTerminatorKind::IndirectCall: {
     normalize_zero(state);
     const auto delay_result =
         execute_ir_sequence(block.terminator.delay_slot, context);
-    if (!delay_result.ok()) {
-        return map_block_execution_failure(delay_result);
-    }
+    if (!delay_result.ok()) return map_block_execution_failure(delay_result);
     return {R5900IrExecutionError::None, {}, target};
 }
 ```
 
-Do not read the target register after link or delay execution.
+Never read `inputs[0]` again after the snapshot.
 
-- [ ] **Step 4: Run reference GREEN and regression pair**
+- [ ] **Step 4: Run GREEN and direct-transfer regression**
 
 ```powershell
 cmake --build build --config Release --target `
@@ -599,12 +488,12 @@ git commit -m "feat: execute R5900 indirect transfers"
 - Modify: `CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: reference semantics from Task 2 and existing x64 ABI `std::uint32_t (*)(R5900IrExecutionState*, R5900IrExecutionContext*)`.
-- Produces: native `compile_r5900_ir_x64()` support for both indirect terminators, with target snapshot in `[rsp+0x30]`.
+- Consumes: Task 2 reference semantics and existing generated-function ABI `std::uint32_t (*)(R5900IrExecutionState*, R5900IrExecutionContext*)`.
+- Produces: native support with target snapshot in `[rsp+0x30]`.
 
-- [ ] **Step 1: Register the Windows-only differential target and write RED tests**
+- [ ] **Step 1: Register Windows-only target and write RED differential tests**
 
-Inside `if(WIN32)` tests, after `r5900_x64_direct_transfer_windows_tests`:
+Inside `if(WIN32)` tests after the direct-transfer x64 target:
 
 ```cmake
 add_executable(r5900_x64_indirect_transfer_windows_tests
@@ -617,46 +506,36 @@ add_test(NAME r5900_x64_indirect_transfer_windows_tests
   COMMAND r5900_x64_indirect_transfer_windows_tests)
 ```
 
-The new test must construct identical reference/native initial states and compare:
+Reuse the proven differential structure from `tests/r5900_x64_direct_transfer_windows_tests.cpp`: copy its `MemoryProbe`, `write128()`, `context_for()`, `expect_states_equal()`, `expect_faults_equal()`, and `sentinel_state()` helpers verbatim. Do **not** use `memcmp` over `R5900IrExecutionState`; compare fields exactly as `expect_states_equal()` already does.
 
-1. JR low32 target while source high64 is non-zero.
-2. JR delay mutates source after snapshot.
+Add a local `run_differential()` that compiles the block, runs the reference and native contexts, and compares error, next PC, CPU state, memory probe fields, and memory-fault fields.
+
+Cover:
+
+1. JR low32 target with non-zero source high64.
+2. JR delay mutates target source after snapshot.
 3. JALR ordinary `rd != rs`.
 4. JALR alias `rd == rs`.
 5. JALR `rd == 0`.
-6. non-zero destination `high64` preservation.
+6. non-zero link-destination high64 preservation.
 7. delay reads new link.
-8. delay overwrites link destination afterward.
-9. representative body before indirect terminator.
+8. delay overwrites link destination.
+9. representative eligible body before terminator.
 10. `Store128` delay success.
-11. `Store128` delay failure with link committed.
+11. `Store128` delay failure with link committed and matching fault.
 
-Use a local `MemoryProbe` callback identical in semantics to Task 2 and a helper such as:
-
-```cpp
-void expect_same_state(const R5900IrExecutionState& reference,
-                       const R5900IrExecutionState& native,
-                       const char* message) {
-    expect(std::memcmp(&reference, &native, sizeof(reference)) == 0, message);
-}
-```
-
-For success cases:
+For the alias case seed:
 
 ```cpp
-auto compiled = compile_r5900_ir_x64(block);
-expect(compiled.ok(), "indirect transfer must compile natively");
-const auto reference_result = execute_r5900_ir_block(block, reference_context);
-const auto native_result = compiled.block->execute(native_context);
-expect(reference_result.error == native_result.error,
-       "reference/native error must match");
-expect(reference_result.next_pc == native_result.next_pc,
-       "reference/native next PC must match");
-expect_same_state(reference_state, native_state,
-                  "reference/native CPU state must match");
+auto state = sentinel_state();
+state.gpr[5] = {0x000000000010a000ull, 0x0123456789abcdefull};
+const auto block = indirect_call(0x0010a200u, 5u, 5u,
+                                 addiu(6u, 5u, 0, 0x0010a204u));
+run_differential(block, state, true,
+                 "native/reference JALR rd==rs mismatch");
 ```
 
-For `Store128` failure, compare `MemoryAccessFailure`, CPU state, link commitment, and fault `{access, guest_pc, address, width_bytes}`; do not compare `next_pc` because both failure APIs return zero there.
+For failing delay, require both paths return `MemoryAccessFailure`, both have link `PC+8`, both preserve high64, and both faults report the delay guest PC.
 
 - [ ] **Step 2: Run RED**
 
@@ -665,11 +544,11 @@ cmake --build build --config Release --target r5900_x64_indirect_transfer_window
 ctest --test-dir build -C Release --output-on-failure -R r5900_x64_indirect_transfer_windows_tests
 ```
 
-Expected RED: first compile attempt fails with backend unsupported terminator. Build itself must succeed.
+Expected RED: first indirect block fails native compilation with unsupported terminator; test compilation itself succeeds.
 
-- [ ] **Step 3: Add stack-local snapshot emit helpers**
+- [ ] **Step 3: Add exact stack-local emit helpers**
 
-In `r5900_x64_backend.cpp` near other scalar emit helpers:
+Near scalar emit helpers:
 
 ```cpp
 void emit_store_eax_to_rsp_30(std::vector<std::uint8_t>& bytes) {
@@ -683,11 +562,9 @@ void emit_load_eax_from_rsp_30(std::vector<std::uint8_t>& bytes) {
 }
 ```
 
-Do not change the helper-frame size: the existing `sub rsp, 0x38` already reserves `[rsp+0x30..0x37]` outside the 32-byte shadow area and the saved state/context slots.
+Keep existing `sub rsp,0x38`: `[rsp+0x00..0x1f]` is shadow, `[rsp+0x20]` state, `[rsp+0x28]` context, `[rsp+0x30..0x37]` local snapshot.
 
-- [ ] **Step 4: Implement a dedicated indirect-transfer emitter**
-
-Add:
+- [ ] **Step 4: Add dedicated indirect emitter**
 
 ```cpp
 PendingX64Code compile_indirect_transfer_code(const R5900IrBlock& block) {
@@ -701,8 +578,7 @@ PendingX64Code compile_indirect_transfer_code(const R5900IrBlock& block) {
     emit_helper_frame_prologue(bytes);
     emit_zero_gpr0(bytes);
 
-    const auto body_emitted = emit_ir_sequence(
-        bytes, block.body, 0u, helper_frame);
+    const auto body_emitted = emit_ir_sequence(bytes, block.body, 0u, helper_frame);
     if (!body_emitted.ok()) {
         return pending_failure(body_emitted.error, body_emitted.message);
     }
@@ -736,11 +612,9 @@ PendingX64Code compile_indirect_transfer_code(const R5900IrBlock& block) {
 }
 ```
 
-The `Store128` emitter's existing failure path already restores `rsp` and returns immediately with `context.memory_fault.active`; do not add a second epilogue on that path.
+The existing `Store128` failure path already emits helper-frame epilogue + `ret`; do not add a second epilogue there.
 
-- [ ] **Step 5: Route indirect terminators through the new emitter**
-
-In the compile switch:
+- [ ] **Step 5: Route new terminators**
 
 ```cpp
 case R5900IrTerminatorKind::IndirectJump:
@@ -749,9 +623,9 @@ case R5900IrTerminatorKind::IndirectCall:
     break;
 ```
 
-Do not merge this with `compile_direct_transfer_code()`; the indirect path has a required runtime snapshot and mandatory frame even without memory helpers.
+Keep direct and indirect emitters separate.
 
-- [ ] **Step 6: Run differential GREEN plus direct/backend regressions**
+- [ ] **Step 6: Run GREEN plus native regressions**
 
 ```powershell
 cmake --build build --config Release --target `
@@ -777,16 +651,17 @@ git commit -m "feat: emit native R5900 indirect transfers"
 
 **Files:**
 - Modify: `src/recompiler/windows/r5900_block_dispatcher.cpp`
+- Modify: `tests/r5900_block_dispatcher_direct_transfer_windows_tests.cpp`
 - Create: `tests/r5900_block_dispatcher_indirect_transfer_windows_tests.cpp`
 - Modify: `CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: analyzer end kinds `IndirectJump`/`IndirectCall`, decoded `Jr`/`Jalr`, Task 1 IR kinds, Task 3 x64 compiler.
-- Produces: dispatcher execution and cache support for final decoded `JR/JALR` only.
+- Consumes: analyzer `IndirectJump/IndirectCall`, decoded `Jr/Jalr`, Task 1 IR, Task 3 native compiler.
+- Produces: dispatcher execution/cache support for final decoded JR/JALR only.
 
-- [ ] **Step 1: Register dispatcher target and write RED cases**
+- [ ] **Step 1: Register dedicated dispatcher target and build exact test scaffolding**
 
-Add after the direct-transfer dispatcher target:
+Add:
 
 ```cmake
 add_executable(r5900_block_dispatcher_indirect_transfer_windows_tests
@@ -799,34 +674,58 @@ add_test(NAME r5900_block_dispatcher_indirect_transfer_windows_tests
   COMMAND r5900_block_dispatcher_indirect_transfer_windows_tests)
 ```
 
-Build test fixtures using the same small synthetic ELF/memory-map helpers already present in `r5900_block_dispatcher_direct_transfer_windows_tests.cpp`. Include exact cases:
+Create the new test by copying these namespace-local helpers verbatim from `tests/r5900_block_dispatcher_direct_transfer_windows_tests.cpp`: `Bytes`, `fail`, `expect`, `put_u16`, `put_u32`, `r_type`, `i_type`, and `make_memory`. Omit `j_type` because indirect fixtures do not need it. Keep the same 2-segment synthetic ELF structure and executable code segment.
 
-- `JR r5` at block entry with NOP delay, mapped target containing one eligible instruction then unsupported control flow.
-- body `ADDIU` followed by `JR`.
-- `JALR r9,r5` with delay reading `r9`.
-- alias `JALR r5,r5` proving target uses old r5 and link state is `PC+8`.
-- cache-hit test: execute the same `JR r5` code twice, first with `r5 = target_a`, second with `r5 = target_b`; second execution must increase `cache_hits`, not `recompilations`, and reach target_b.
-- mutate terminator word and prove recompile.
-- mutate delay word and prove recompile.
-- `SQ` delay after JR -> `LoweringFailure` at delay PC.
-- `SQ` delay after JALR -> `LoweringFailure` at delay PC.
-- misaligned dynamic target: indirect block executes/counts, next analysis fails at returned target.
-- unmapped dynamic target: same accounting contract.
+Define:
 
-For cache span, after the first compiled run inspect the public dispatcher cache metadata if already exposed; if no direct entry accessor exists, assert behavior through mutation at `terminator_pc`/`delay_pc` plus exact `guest_instruction_count`. Do not add a production cache-inspection API solely for the test; if the existing public `cache_size()` is insufficient, cover `end_pc_exclusive` through the same private-test pattern already used by the direct-transfer tests rather than expanding runtime API surface.
+```cpp
+constexpr std::uint32_t jr(std::uint8_t rs) {
+    return r_type(rs, 0u, 0u, 0u, 0x08u);
+}
 
-- [ ] **Step 2: Run RED**
+constexpr std::uint32_t jalr(std::uint8_t rd, std::uint8_t rs) {
+    return r_type(rs, 0u, rd, 0u, 0x09u);
+}
+
+constexpr std::uint32_t bne_zero_zero() {
+    return i_type(0x05u, 0u, 0u, 0u);
+}
+```
+
+- [ ] **Step 2: Write RED dispatcher cases**
+
+Use `base = 0x00112000u`. Required cases:
+
+**JR at entry:** words `[JR r5, NOP, guard]`; seed `r5 = base + 0x20`; map target at `base+0x20` as `BNE r0,r0,0` plus NOP. Run with one-block budget and assert block executes two guest instructions and returns exact target.
+
+**JR after body:** words `[ADDIU r8,r0,7, JR r5, ADDIU r9,r0,3]`; one-block budget; require r8=7, r9=3, instructions=3, next_pc dynamic target.
+
+**JALR normal:** `[JALR r9,r5, ADDIU r10,r9,0]`; seed `r9.high64` non-zero; require target from r5, r9.low64=`base+8`, high64 preserved, r10 observes link.
+
+**JALR alias:** `[JALR r5,r5, ADDIU r6,r5,0]`; seed old r5=target; require next_pc=old target, final r5=`base+8`, r6=`base+8`.
+
+**Cache dynamic target:** use `[JR r5, NOP, ADDIU guard]`; first run one block with `r5=target_a` must miss cache; second run same code with `r5=target_b` must hit cache, have zero recompilations, and return target_b.
+
+**Cache span proof:** after compiling `[JR r5,NOP,guard]`, mutate only the word at `base+8` (`terminator+8`) and rerun one block. Require `cache_hits==1`, `recompilations==0`. This proves code after the delay slot is outside the cached guest-word span without exposing private `CachedBlock` fields.
+
+**Terminator mutation:** mutate `JR r5` to `JR r6`, seed r6 with a valid target, rerun and require `recompilations==1`.
+
+**Delay mutation:** restore JR r5, mutate NOP delay to `ADDIU r7,r0,4`, rerun and require `recompilations==1` and r7=4.
+
+**SQ delay rejection:** separately test `[JR r5, SQ ...]` and `[JALR r9,r5, SQ ...]`; require `LoweringFailure`, `next_pc=delay_pc`, zero blocks/instructions, cache size zero, guest memory unchanged.
+
+**Invalid target:** run `[JR r5,NOP]` with enough block budget for a following analysis iteration. For `r5=base+2` require `AnalysisFailure`, one completed block, two completed instructions, `next_pc=base+2`. Repeat with an aligned unmapped address such as `0x00300000`.
+
+- [ ] **Step 3: Run RED**
 
 ```powershell
 cmake --build build --config Release --target r5900_block_dispatcher_indirect_transfer_windows_tests
 ctest --test-dir build -C Release --output-on-failure -R r5900_block_dispatcher_indirect_transfer_windows_tests
 ```
 
-Expected RED: JR/JALR are still reported as `ControlFlow` boundaries with no indirect block execution.
+Expected RED: JR/JALR remain ControlFlow boundaries with zero indirect-block progress.
 
-- [ ] **Step 3: Extend supported-transfer recognition**
-
-Near existing `has_supported_beq/j/jal`:
+- [ ] **Step 4: Extend supported-transfer recognition**
 
 ```cpp
 const bool has_supported_jr =
@@ -842,11 +741,11 @@ const bool has_supported_transfer =
     has_supported_jr || has_supported_jalr;
 ```
 
-This automatically keeps the final supported transfer out of `body_sites`, includes transfer+delay in `guest_words`, and prevents the old empty-body ControlFlow stop.
+Keep the existing final-transfer exclusion from `body_sites` and existing `guest_words` collection.
 
-- [ ] **Step 4: Split direct-target lowering from indirect lowering**
+- [ ] **Step 5: Split direct and indirect terminator lowering**
 
-Do **not** call `decoded.direct_target()` unconditionally for `has_supported_transfer`. Restructure terminator creation as:
+Do not invoke `direct_target()` for JR/JALR. Use:
 
 ```cpp
 ir_block.terminator.guest_pc = transfer_site->pc;
@@ -855,7 +754,12 @@ ir_block.terminator.guest_raw = transfer_site->decoded.raw;
 if (has_supported_beq || has_supported_j || has_supported_jal) {
     const auto target = transfer_site->decoded.direct_target(transfer_site->pc);
     if (!target.has_value()) {
-        // existing AnalysisFailure path
+        result.reason = R5900DispatchStopReason::AnalysisFailure;
+        result.next_pc = transfer_site->pc;
+        result.message = format_stage_error(
+            "analysis", transfer_site->pc,
+            "decoded supported direct control transfer unexpectedly lacks target");
+        return result;
     }
 
     if (has_supported_beq) {
@@ -890,17 +794,15 @@ if (has_supported_beq || has_supported_j || has_supported_jal) {
 }
 ```
 
-Do not copy or recompute the direct J/JAL target formula in dispatcher code.
+- [ ] **Step 6: Generalize SQ-delay rejection and preserve cache identity**
 
-- [ ] **Step 5: Generalize SQ delay rejection and preserve cache span**
-
-Keep the existing `delay.decoded.instruction == Sq` guard before delay lowering. Replace the J/JAL-only wording with one message that covers every supported transfer, for example:
+Keep the SQ check before delay lowering, but use one exact message:
 
 ```cpp
 "SQ in a supported control-transfer delay slot is outside dispatcher v0 scope"
 ```
 
-Keep:
+Keep cache identity exactly based on `guest_words`, and keep:
 
 ```cpp
 replacement.end_pc_exclusive = has_supported_transfer
@@ -908,26 +810,37 @@ replacement.end_pc_exclusive = has_supported_transfer
     : current_pc + static_cast<std::uint32_t>(body_sites.size() * 4u);
 ```
 
-No dynamic GPR state is added to `fingerprint_guest_words()` or `CachedBlock` identity fields.
+Never add runtime target GPR contents to fingerprint or `CachedBlock` equality.
 
-- [ ] **Step 6: Verify invalid target accounting explicitly**
+- [ ] **Step 7: Update obsolete direct-transfer fixtures**
 
-For a one-block `JR + NOP` at `start_pc` with `r5 = 0x...02` misaligned, run with enough block budget for the next iteration and assert:
+`tests/r5900_block_dispatcher_direct_transfer_windows_tests.cpp` currently uses `JR r31` as an unsupported stop sentinel and ends with a loop that explicitly requires entry JR/JALR to remain unsupported. That contract is obsolete after this task.
+
+Add:
 
 ```cpp
-expect(result.reason == R5900DispatchStopReason::AnalysisFailure,
-       "misaligned indirect target must fail on following analysis");
-expect(result.blocks_executed == 1u,
-       "completed JR block must remain counted");
-expect(result.instructions_executed == 2u,
-       "JR and its delay must remain counted");
-expect(result.next_pc == static_cast<std::uint32_t>(state.gpr[5].low64),
-       "analysis failure must report exact dynamic target");
+const auto bne00 = i_type(0x05u, 0u, 0u, 0u);
 ```
 
-Repeat for an aligned unmapped target.
+In every J/JAL fixture that currently places `jr31` at the mapped target, replace the target pair with:
 
-- [ ] **Step 7: Run dispatcher GREEN plus direct/SQ regressions**
+```cpp
+bne00, 0u
+```
+
+This preserves a mapped unsupported ControlFlow boundary with a mapped delay slot, so direct J/JAL assertions remain focused on direct transfers.
+
+In the J/JAL SQ-delay fixtures, replace the target `jr31,0u` pair with `bne00,0u` as well.
+
+Delete the final loop whose assertion text is:
+
+```text
+entry JR/JALR must remain unsupported control-flow boundary
+```
+
+The new dedicated indirect-transfer test now owns those semantics.
+
+- [ ] **Step 8: Run dispatcher GREEN and regressions**
 
 ```powershell
 cmake --build build --config Release --target `
@@ -938,12 +851,12 @@ cmake --build build --config Release --target `
 ctest --test-dir build -C Release --output-on-failure -R "r5900_block_dispatcher_(indirect_transfer|direct_transfer|store128|windows)_tests"
 ```
 
-Expected: all selected dispatcher tests PASS.
+Expected: all selected tests PASS. Specifically verify direct-transfer tests still stop at BNE and no test still encodes “JR/JALR unsupported”.
 
-- [ ] **Step 8: Commit Task 4**
+- [ ] **Step 9: Commit Task 4**
 
 ```bash
-git add CMakeLists.txt src/recompiler/windows/r5900_block_dispatcher.cpp tests/r5900_block_dispatcher_indirect_transfer_windows_tests.cpp
+git add CMakeLists.txt src/recompiler/windows/r5900_block_dispatcher.cpp tests/r5900_block_dispatcher_direct_transfer_windows_tests.cpp tests/r5900_block_dispatcher_indirect_transfer_windows_tests.cpp
 git commit -m "feat: dispatch R5900 indirect transfers"
 ```
 
@@ -956,11 +869,11 @@ git commit -m "feat: dispatch R5900 indirect transfers"
 
 **Interfaces:**
 - Consumes: Task 4 dispatcher support.
-- Produces: exact E2E contract `ControlFlow`, `next_pc=0x001001c4`, `blocks=7`, `instructions=94` while preserving startup SQ state.
+- Produces: exact E2E `ControlFlow`, `next_pc=0x001001c4`, `blocks=7`, `instructions=94`, preserving SQ state.
 
-- [ ] **Step 1: Convert the current startup assertions into the new RED expectation before changing the fixture**
+- [ ] **Step 1: Change terminal assertions first to create RED**
 
-Change only the expected terminal accounting first:
+Before changing fixture words, require:
 
 ```cpp
 expect(result.reason == R5900DispatchStopReason::ControlFlow,
@@ -973,72 +886,66 @@ expect(result.instructions_executed == 94u,
        "synthetic startup must execute ninety-four guest instructions");
 ```
 
-Run the startup target and confirm it fails because the old fixture still terminates at JR / has the old layout.
-
-- [ ] **Step 2: Run RED startup**
+- [ ] **Step 2: Run startup RED**
 
 ```powershell
 cmake --build build --config Release --target r5900_block_dispatcher_startup_windows_tests
 ctest --test-dir build -C Release --output-on-failure -R r5900_block_dispatcher_startup_windows_tests
 ```
 
-Expected RED: mismatch with the new exact endpoint/accounting, not a build failure.
+Expected RED: old layout/accounting does not satisfy 7/94/BNE endpoint.
 
-- [ ] **Step 3: Replace the post-JAL synthetic layout with the approved addresses**
+- [ ] **Step 3: Install approved exact post-JAL layout**
 
-Keep all startup words through `JAL 0x001001a0` and its delay. Arrange exact words from `0x00100188` onward:
-
-```text
-0x00100188  LUI   r5, 0x0010
-0x0010018c  ORI   r5, r5, 0x01c0
-0x00100190  JALR  r5, r5
-0x00100194  ADDIU r6, r5, 0
-0x00100198  poison write
-0x0010019c  poison/guard write
-0x001001a0  ADDIU r24, r0, 0x0055
-0x001001a4  JR    r31
-0x001001a8  ADDIU r29, r0, 0x0077
-0x001001ac  poison write
-0x001001b0  poison write
-0x001001b4  poison write
-0x001001b8  poison write
-0x001001bc  poison/guard write
-0x001001c0  ADDIU r7, r0, 0x0066
-0x001001c4  BNE   r0, r0, <any aligned immediate>
-0x001001c8  NOP
-```
-
-Use existing helpers:
+Keep all startup words through `0x00100184`. From `0x00100188` onward use:
 
 ```cpp
-words.push_back(i_type(0x0fu, 0u, 5u, 0x0010u));       // LUI r5, 0x0010
-words.push_back(i_type(0x0du, 5u, 5u, 0x01c0u));       // ORI r5, r5, 0x01c0
-words.push_back(r_type(5u, 0u, 5u, 0u, 0x09u));        // JALR r5, r5
-words.push_back(i_type(0x09u, 5u, 6u, 0u));            // ADDIU r6, r5, 0
+words.push_back(i_type(0x0fu, 0u, 5u, 0x0010u));       // 0x188 LUI r5,0x0010
+words.push_back(i_type(0x0du, 5u, 5u, 0x01c0u));       // 0x18c ORI r5,r5,0x01c0
+words.push_back(r_type(5u, 0u, 5u, 0u, 0x09u));        // 0x190 JALR r5,r5
+words.push_back(i_type(0x09u, 5u, 6u, 0u));            // 0x194 ADDIU r6,r5,0
+words.push_back(i_type(0x09u, 0u, 25u, 1u));           // 0x198 poison
+words.push_back(i_type(0x09u, 0u, 26u, 1u));           // 0x19c poison
+words.push_back(i_type(0x09u, 0u, 24u, 0x0055u));      // 0x1a0 direct callee
+words.push_back(r_type(31u, 0u, 0u, 0u, 0x08u));       // 0x1a4 JR r31
+words.push_back(i_type(0x09u, 0u, 29u, 0x0077u));      // 0x1a8 JR delay
+words.push_back(i_type(0x09u, 0u, 25u, 2u));           // 0x1ac poison
+words.push_back(i_type(0x09u, 0u, 26u, 2u));           // 0x1b0 poison
+words.push_back(i_type(0x09u, 0u, 27u, 2u));           // 0x1b4 poison
+words.push_back(i_type(0x09u, 0u, 28u, 2u));           // 0x1b8 poison
+words.push_back(i_type(0x09u, 0u, 30u, 2u));           // 0x1bc poison/guard
+words.push_back(i_type(0x09u, 0u, 7u, 0x0066u));       // 0x1c0 indirect target
+words.push_back(i_type(0x05u, 0u, 0u, 0u));            // 0x1c4 unsupported BNE
+words.push_back(0u);                                    // 0x1c8 mapped BNE delay
 ```
 
-For BNE use opcode `0x05`; it must remain unsupported by dispatcher v0. Keep its delay mapped but unexecuted.
+Update reserve/count/layout assertions to match the new final word count. Keep poison registers distinct from architectural proof registers.
 
-Assign poison writes to dedicated registers that are not r5/r6/r7/r22/r23/r24/r29/r31 and assert those registers remain zero. Do not place poison instructions at `0x001001a0..0x001001a8` because that region is the direct callee and JR delay.
-
-- [ ] **Step 4: Add exact architectural state assertions**
-
-Require:
+- [ ] **Step 4: Add exact state and poison assertions**
 
 ```cpp
 expect(state.gpr[22].low64 == 0x33u, "J delay result mismatch");
-expect(state.gpr[23].low64 == 0x00100188u, "JAL delay must observe direct link");
+expect(state.gpr[23].low64 == 0x00100188u,
+       "JAL delay must observe direct-call link");
 expect(state.gpr[24].low64 == 0x55u, "direct callee entry mismatch");
 expect(state.gpr[29].low64 == 0x77u, "JR delay must execute");
-expect(state.gpr[31].low64 == 0x00100188u, "JR must preserve direct return address");
-expect(state.gpr[5].low64 == 0x00100198u, "JALR alias link mismatch");
-expect(state.gpr[6].low64 == 0x00100198u, "JALR delay must observe link");
-expect(state.gpr[7].low64 == 0x66u, "indirect callee entry mismatch");
+expect(state.gpr[31].low64 == 0x00100188u,
+       "JR must preserve direct return address");
+expect(state.gpr[5].low64 == 0x00100198u,
+       "JALR rd==rs link mismatch");
+expect(state.gpr[6].low64 == 0x00100198u,
+       "JALR delay must observe new link");
+expect(state.gpr[7].low64 == 0x66u,
+       "indirect target entry mismatch");
+expect(state.gpr[25].low64 == 0u && state.gpr[26].low64 == 0u &&
+       state.gpr[27].low64 == 0u && state.gpr[28].low64 == 0u &&
+       state.gpr[30].low64 == 0u,
+       "unreachable poison regions must stay untouched");
 ```
 
-Keep the existing 16-zero-byte assertion at guest `0x004e2680` and surrounding-byte integrity check for SQ. Keep the external legal-ELF harness conservative; do not make it assert the synthetic BNE endpoint.
+Retain existing SQ target 16-zero-byte and surrounding-byte integrity assertions. Do not tighten the external legal-ELF harness to the synthetic BNE endpoint.
 
-- [ ] **Step 5: Run E2E GREEN and focused control-flow suite**
+- [ ] **Step 5: Run E2E GREEN and focused control-flow tests**
 
 ```powershell
 cmake --build build --config Release --target `
@@ -1048,7 +955,7 @@ cmake --build build --config Release --target `
 ctest --test-dir build -C Release --output-on-failure -R "r5900_block_dispatcher_(startup|indirect_transfer|direct_transfer)_windows_tests"
 ```
 
-Expected: startup reports exactly 7 blocks / 94 instructions and all selected tests PASS.
+Expected: startup reaches BNE `0x001001c4` at exactly 7 blocks / 94 instructions; all selected tests PASS.
 
 - [ ] **Step 6: Commit Task 5**
 
@@ -1065,15 +972,15 @@ git commit -m "test: advance startup through R5900 indirect transfers"
 - Modify: `README.md`
 - Modify: `docs/PROGRESS.md`
 - Verify: `.github/workflows/windows-ci.yml`
-- Verify all files changed since base `27d553fcb0959407af3e6b13503c652458f7d8f1`
+- Review full diff against base `27d553fcb0959407af3e6b13503c652458f7d8f1`
 
 **Interfaces:**
-- Consumes: Tasks 1–5 complete and green.
-- Produces: milestone status `CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION`, fresh exact-SHA CI evidence, and a branch safe to fast-forward back to `feature/r5900-beq-delay-slot-v0` after user approval.
+- Consumes: Tasks 1–5 complete.
+- Produces: `CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION` with exact-SHA CI evidence.
 
-- [ ] **Step 1: Update README milestone wording**
+- [ ] **Step 1: Update README**
 
-State that the native startup infrastructure now supports:
+State that native startup infrastructure now includes:
 
 ```text
 BEQ + delay slot
@@ -1082,25 +989,26 @@ J/JAL + delay slot
 JR/JALR + delay slot
 ```
 
-State that the synthetic startup now reaches an unsupported `BNE` boundary after 7 native blocks / 94 guest instructions. Explicitly say the game does not boot and external legal-ELF validation has not been performed in this environment.
+State synthetic startup now reaches unsupported BNE after 7 native blocks / 94 guest instructions. Explicitly state game does not boot and legal external ELF has not been validated in this environment.
 
-- [ ] **Step 2: Update PROGRESS with exact contracts**
+- [ ] **Step 2: Update PROGRESS**
 
 Record:
 
-- `IndirectJump` / `IndirectCall` IR support.
-- JR low32 dynamic target snapshot before delay.
-- JALR target snapshot before link, including `rd == rs`.
-- arbitrary link GPR including `rd == 0`.
-- low64-only link and high64 preservation.
-- x64 target snapshot in `[rsp+0x30]` under the existing `0x38` Win64 frame.
-- cache target-value independence.
-- invalid dynamic target failure on following analysis.
-- dispatcher SQ-delay rejection retained.
-- synthetic exact endpoint: `BNE 0x001001c4`, 7 blocks, 94 instructions.
-- next architectural boundary: BNE; legal-ELF post-SQ path still needs external inspection.
+- `IndirectJump` / `IndirectCall` typed IR.
+- JR low32 target snapshot before delay.
+- JALR target snapshot before link, including `rd==rs`.
+- arbitrary link GPR including `rd==0`.
+- PC+8 low64-only link/high64 preservation.
+- native snapshot `[rsp+0x30]` under existing 0x38 frame.
+- cache independence from runtime target value.
+- code-after-delay excluded from cached span; terminator/delay mutations recompile.
+- invalid target failure on following analysis with previous block committed.
+- SQ-delay dispatcher restriction retained.
+- exact synthetic endpoint BNE `0x001001c4`, 7 blocks, 94 instructions.
+- next synthetic boundary BNE; external legal-ELF path still requires inspection.
 
-- [ ] **Step 3: Run full local Windows validation if a Windows workspace is available**
+- [ ] **Step 3: Run full Windows validation**
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DB3R_BUILD_TESTS=ON
@@ -1110,30 +1018,20 @@ ctest --test-dir build -C Release --output-on-failure
 .\build\Release\Burnout3PacingProbe.exe --seconds 1
 ```
 
-Expected after four new focused targets: **47/47 CTest** (baseline 43 + 4 new tests), 0 failures. Pacing must retain `TARGET_HZ 120`, mean near 8.333 ms, high-resolution timer YES, and no >9/10/12 ms regressions under the existing CI acceptance behavior.
+Expected count: baseline 43 + four new focused tests = **47/47**, 0 failures. Pacing probe remains `TARGET_HZ 120`, 120 frames for one second, mean near 8.333 ms, high-resolution timer YES, and no >9/10/12 ms regressions under existing acceptance behavior.
 
-- [ ] **Step 4: Commit documentation**
+- [ ] **Step 4: Commit docs**
 
 ```bash
 git add README.md docs/PROGRESS.md
 git commit -m "docs: record R5900 indirect transfer milestone"
 ```
 
-- [ ] **Step 5: Push/verify the feature branch and require fresh GitHub Actions Windows CI for the exact HEAD**
+- [ ] **Step 5: Require fresh GitHub Actions CI at exact final feature SHA**
 
-The accepted CI job must run on `feature/r5900-indirect-jump-call-v0` at the exact final SHA and show:
+Require success for configure, build, CTest, frame pacing telemetry, pacing probe, analyzer package staging/validation, and pacing package staging/validation.
 
-```text
-Configure: success
-Build: success
-Test: success
-Frame pacing telemetry: success
-Pacing probe smoke: success
-Stage/validate analyzer package: success
-Stage/validate pacing probe package: success
-```
-
-From job logs, explicitly verify:
+From the same run logs verify:
 
 ```text
 100% tests passed, 0 tests failed out of 47
@@ -1144,40 +1042,42 @@ r5900_block_dispatcher_indirect_transfer_windows_tests ... Passed
 r5900_block_dispatcher_startup_windows_tests ... Passed
 ```
 
-Also record the frame-pacing telemetry and 120-frame probe from that same exact-SHA run.
+Record exact pacing telemetry from that run rather than reusing an earlier milestone's numbers.
 
-- [ ] **Step 6: Review the full feature diff against the base SHA**
+- [ ] **Step 6: Review full diff against base**
 
-Review from:
+Review:
 
 ```text
 base = 27d553fcb0959407af3e6b13503c652458f7d8f1
-head = feature/r5900-indirect-jump-call-v0 final SHA
+head = final feature SHA
 ```
 
-Specifically inspect:
+Check every item:
 
-- no direct-target calculation is duplicated for JR/JALR;
+- no duplicated direct-target formula for JR/JALR;
 - target snapshot precedes JALR link;
-- native snapshot local is outside Win64 shadow space;
-- all native failure paths restore RSP exactly once;
-- `rd == 0` never writes persistent GPR0 link state;
-- `rd == rs` uses old source target;
-- `high64` is never overwritten by link;
-- cache fingerprint contains code only;
-- runtime target changes do not trigger recompilation;
-- `end_pc_exclusive` remains terminator+8;
-- invalid targets are not pre-repaired;
+- native `[rsp+0x30]` local is outside Win64 shadow space;
+- all native return/failure paths restore RSP exactly once;
+- rd==0 does not persistently write GPR0;
+- rd==rs uses old source target;
+- link never writes high64;
+- runtime target values never affect cache fingerprint;
+- mutation at terminator+8 remains cache hit;
+- terminator/delay mutation recompiles;
+- `end_pc_exclusive` assignment remains terminator+8;
+- invalid target is not repaired/prevalidated by terminator execution;
 - SQ delay restriction remains dispatcher-only;
-- startup poison regions do not overlap the direct callee;
-- docs contain no claim of game boot or external validation;
+- direct-transfer tests no longer use JR/JALR as unsupported sentinels;
+- startup poison ranges do not overlap direct callee/JR region;
+- docs make no boot/external-validation claim;
 - no temporary workflow/script/patch files remain.
 
-Fix any issue found, then repeat fresh exact-SHA CI before claiming completion.
+If any issue is fixed after this review, rerun fresh exact-SHA Windows CI before completion.
 
 - [ ] **Step 7: Completion checkpoint**
 
-Only declare `R5900 JR/JALR v0` complete when:
+Only declare complete with:
 
 ```text
 status = CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION
@@ -1188,4 +1088,4 @@ pacing/package checks = PASS
 legal external ELF = NOT YET VALIDATED unless actually run
 ```
 
-Do not fast-forward `feature/r5900-beq-delay-slot-v0` until the user explicitly selects integration after the verified feature-branch completion.
+Do not fast-forward `feature/r5900-beq-delay-slot-v0` until the user explicitly chooses integration after verified feature completion.
