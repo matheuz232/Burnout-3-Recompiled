@@ -17,7 +17,12 @@ namespace {
 using Bytes = std::vector<std::uint8_t>;
 
 constexpr std::uint32_t kSqPc = 0x00100160u;
-constexpr std::uint32_t kSyntheticSentinelPc = 0x00100164u;
+constexpr std::uint32_t kDirectJumpPc = 0x00100164u;
+constexpr std::uint32_t kDirectJumpTarget = 0x00100180u;
+constexpr std::uint32_t kDirectCallPc = 0x00100180u;
+constexpr std::uint32_t kDirectCallTarget = 0x001001a0u;
+constexpr std::uint32_t kIndirectReturnPc = 0x001001a4u;
+constexpr std::uint32_t kExpectedLinkPc = 0x00100188u;
 constexpr std::uint32_t kSqTarget = 0x004e2680u;
 
 [[noreturn]] void fail(const char* message) {
@@ -146,6 +151,11 @@ constexpr std::uint32_t i_type(std::uint8_t op,
            imm;
 }
 
+constexpr std::uint32_t j_type(std::uint8_t op, std::uint32_t target) {
+    return (static_cast<std::uint32_t>(op) << 26u) |
+           ((target >> 2u) & 0x03ffffffu);
+}
+
 constexpr std::uint32_t mmi_type(std::uint8_t rs,
                                  std::uint8_t rt,
                                  std::uint8_t rd,
@@ -174,7 +184,7 @@ constexpr std::uint32_t cop1_type(std::uint8_t rs,
 
 std::vector<std::uint32_t> make_synthetic_startup_words(std::uint32_t base) {
     std::vector<std::uint32_t> words;
-    words.reserve(89u);
+    words.reserve(105u);
 
     for (std::uint8_t rd = 1u; rd <= 30u; ++rd) {
         words.push_back(mmi_type(0u, 0u, rd, 0x10u, 0x28u));
@@ -226,14 +236,29 @@ std::vector<std::uint32_t> make_synthetic_startup_words(std::uint32_t base) {
     expect(base + static_cast<std::uint32_t>((words.size() - 1u) * 4u) == kSqPc,
            "synthetic startup SQ boundary layout mismatch");
 
-    // Control-flow sentinel after SQ: the dispatcher must execute SQ, then stop
-    // before this J at the next boundary. The mapped NOP is its analyzer delay slot.
-    words.push_back(0x08000000u);
-    words.push_back(0u);
-    expect(words.size() == 89u, "synthetic startup mapped sentinel count mismatch");
-    expect(base + static_cast<std::uint32_t>((words.size() - 2u) * 4u) ==
-               kSyntheticSentinelPc,
-           "synthetic startup sentinel PC mismatch");
+    words.push_back(j_type(0x02u, kDirectJumpTarget));          // 0x164 J
+    words.push_back(i_type(0x09u, 0u, 22u, 0x0033u));       // 0x168 delay
+    words.push_back(i_type(0x09u, 0u, 25u, 1u));            // 0x16c poison
+    words.push_back(i_type(0x09u, 0u, 26u, 1u));            // 0x170 poison
+    words.push_back(i_type(0x09u, 0u, 27u, 1u));            // 0x174 poison
+    words.push_back(i_type(0x09u, 0u, 28u, 1u));            // 0x178 poison
+    words.push_back(i_type(0x09u, 0u, 30u, 1u));            // 0x17c poison
+    words.push_back(j_type(0x03u, kDirectCallTarget));       // 0x180 JAL
+    words.push_back(i_type(0x09u, 31u, 23u, 0u));           // 0x184 delay sees r31
+    words.push_back(i_type(0x09u, 0u, 25u, 2u));            // 0x188 poison
+    words.push_back(i_type(0x09u, 0u, 26u, 2u));            // 0x18c poison
+    words.push_back(i_type(0x09u, 0u, 27u, 2u));            // 0x190 poison
+    words.push_back(i_type(0x09u, 0u, 28u, 2u));            // 0x194 poison
+    words.push_back(i_type(0x09u, 0u, 30u, 2u));            // 0x198 poison
+    words.push_back(0u);                                    // 0x19c guard
+    words.push_back(i_type(0x09u, 0u, 24u, 0x0055u));       // 0x1a0 callee
+    words.push_back(r_type(31u, 0u, 0u, 0u, 0x08u));        // 0x1a4 JR r31
+    words.push_back(0u);                                    // 0x1a8 mapped JR delay
+    expect(words.size() == 105u, "synthetic J/JAL fixture count mismatch");
+    expect(base + static_cast<std::uint32_t>(87u * 4u) == kDirectJumpPc,
+           "synthetic direct J PC mismatch");
+    expect(base + static_cast<std::uint32_t>(94u * 4u) == kDirectCallPc,
+           "synthetic direct JAL PC mismatch");
     return words;
 }
 
@@ -334,17 +359,16 @@ void validate_synthetic_startup() {
     R5900BlockDispatcher dispatcher(memory, options);
 
     R5900IrExecutionState state{};
-    state.gpr[31] = {0x1122334455667788ull, 0x8877665544332211ull};
 
-    const auto result = dispatcher.run(base, state, 3u);
+    const auto result = dispatcher.run(base, state, 5u);
     expect(result.reason == R5900DispatchStopReason::ControlFlow,
-           "synthetic startup must advance through SQ to sentinel J");
-    expect(result.next_pc == kSyntheticSentinelPc,
-           "synthetic startup next boundary mismatch");
-    expect(result.blocks_executed == 3u,
-           "synthetic startup must complete the SQ block");
-    expect(result.instructions_executed == 82u,
-           "synthetic startup must execute 81 prior instructions plus SQ");
+           "startup must stop at unsupported JR");
+    expect(result.next_pc == kIndirectReturnPc,
+           "startup JR boundary mismatch");
+    expect(result.blocks_executed == 5u,
+           "startup block count mismatch");
+    expect(result.instructions_executed == 87u,
+           "startup instruction count mismatch");
 
     const auto target_after = memory.read_u128(kSqTarget);
     expect(target_after.has_value() &&
@@ -365,6 +389,12 @@ void validate_synthetic_startup() {
            "synthetic startup first delay slot must execute");
     expect(state.gpr[21].low64 == 0x22u,
            "synthetic startup second delay slot must execute");
+    expect(state.gpr[22].low64 == 0x33u,
+           "J delay slot mismatch");
+    expect(state.gpr[23].low64 == kExpectedLinkPc,
+           "JAL delay link observation mismatch");
+    expect(state.gpr[24].low64 == 0x55u,
+           "callee prefix mismatch");
     for (std::uint8_t index = 10u; index < 15u; ++index) {
         expect(state.gpr[index].low64 == 0u,
                "synthetic startup skipped XORI path must not execute");
@@ -376,12 +406,17 @@ void validate_synthetic_startup() {
     for (const auto raw : state.fpr) {
         expect(raw == 0u, "synthetic startup FPR must remain raw zero");
     }
-    expect(state.gpr[31].low64 == 0x1122334455667788ull &&
-               state.gpr[31].high64 == 0x8877665544332211ull,
-           "synthetic startup sentinel GPR31 must remain unchanged");
+    expect(state.gpr[31].low64 == kExpectedLinkPc,
+           "JAL link mismatch");
+    expect(state.gpr[31].high64 == 0u,
+           "startup r31 high64 mismatch");
+    expect(state.gpr[25].low64 == 0u && state.gpr[26].low64 == 0u &&
+               state.gpr[27].low64 == 0u && state.gpr[28].low64 == 0u &&
+               state.gpr[30].low64 == 0u,
+           "direct-transfer poison fallthrough must remain untouched");
 
-    std::cout << "SYNTHETIC_STARTUP_SQ_VALIDATED sq=0x00100160 target=0x004e2680 "
-                 "stop=0x00100164 blocks=3 instructions=82\n";
+    std::cout << "SYNTHETIC_STARTUP_J_JAL_VALIDATED sq=0x00100160 target=0x004e2680 "
+                 "stop=0x001001a4 blocks=5 instructions=87\n";
 }
 
 } // namespace

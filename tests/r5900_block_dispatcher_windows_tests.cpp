@@ -294,9 +294,8 @@ int main() {
         const auto prefix = i_type(0x09, 0, 1, 7u);
         const auto delay = i_type(0x09, 0, 2, 9u);
         const std::vector<std::uint32_t> terminators = {
-            j_type(0x02, base + 0x20u),
-            j_type(0x03, base + 0x20u),
             r_type(31, 0, 0, 0, 0x08),
+            r_type(31, 0, 30, 0, 0x09),
         };
 
         for (const auto terminator : terminators) {
@@ -306,7 +305,7 @@ int main() {
 
             const auto result = dispatcher.run(base, state, 1u);
             expect(result.reason == R5900DispatchStopReason::ControlFlow,
-                   "supported prefix must stop before unsupported control-flow terminator");
+                   "supported prefix must stop before unsupported indirect control-flow terminator");
             expect(result.next_pc == base + 4u,
                    "control-flow boundary PC must be exact");
             expect(result.blocks_executed == 1u && result.instructions_executed == 1u,

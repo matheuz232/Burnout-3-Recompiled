@@ -131,7 +131,6 @@ int main() {
     constexpr std::uint32_t code_base = 0x00110000u;
     constexpr std::uint32_t data_base = 0x00220000u;
     constexpr std::uint32_t target = data_base + 0x20u;
-    constexpr std::uint32_t sentinel = code_base + 4u;
     const auto sq_r7_r2 = i_type(0x1fu, 2u, 7u, 0u);
     const auto jump = j_type(0x02u, code_base + 0x40u);
 
@@ -143,12 +142,12 @@ int main() {
         state.gpr[7] = {0x0123456789abcdefull, 0xfedcba9876543210ull};
 
         const auto result = dispatcher.run(code_base, state, 1u);
-        expect(result.reason == R5900DispatchStopReason::ControlFlow,
-               "successful SQ body must stop at following J boundary");
-        expect(result.next_pc == sentinel,
-               "successful SQ body boundary PC mismatch");
-        expect(result.blocks_executed == 1u && result.instructions_executed == 1u,
-               "successful SQ body must complete one block/instruction");
+        expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+               "successful SQ+J block must consume one block budget");
+        expect(result.next_pc == code_base + 0x40u,
+               "successful SQ+J block target mismatch");
+        expect(result.blocks_executed == 1u && result.instructions_executed == 3u,
+               "successful SQ+J block must count SQ, J and delay slot");
         expect(result.cache_misses == 1u && result.cache_hits == 0u,
                "first SQ execution must compile exactly one cache entry");
         expect_stored_value(memory,
@@ -215,8 +214,9 @@ int main() {
         corrected.gpr[2].low64 = target;
         corrected.gpr[7] = {0x1111222233334444ull, 0xaaaabbbbccccddddull};
         const auto second = dispatcher.run(code_base, corrected, 1u);
-        expect(second.reason == R5900DispatchStopReason::ControlFlow,
-               "corrected runtime address must let cached SQ execute");
+        expect(second.reason == R5900DispatchStopReason::BlockBudgetExhausted &&
+                   second.next_pc == code_base + 0x40u,
+               "corrected runtime address must let cached SQ+J block execute");
         expect(second.cache_hits == 1u && second.recompilations == 0u,
                "runtime fault must not invalidate native code cache");
         expect_stored_value(memory,
