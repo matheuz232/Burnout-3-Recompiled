@@ -291,8 +291,9 @@ For a supported `J`/`JAL` block:
 6. `JAL` uses `link_pc = guest_pc + 8`;
 7. the delay slot lowers to exactly one IR instruction;
 8. `SQ` in a `J`/`JAL` delay slot is explicitly rejected with `LoweringFailure` in dispatcher v0;
-9. the block compiles/caches and executes natively;
-10. successful native `next_pc` becomes the next dispatcher PC.
+9. the completed cached block records `end_pc_exclusive = terminator_pc + 8`, covering both the transfer word and architectural delay slot;
+10. the block compiles/caches and executes natively;
+11. successful native `next_pc` becomes the next dispatcher PC.
 
 A supported direct transfer must not set the dispatcher's post-body `boundary_reason`; otherwise the dispatcher would incorrectly execute the native transfer and then overwrite `next_pc` with the old terminator PC.
 
@@ -353,10 +354,12 @@ GPR22.low64             = 0x33
 GPR23.low64             = 0x00100188
 GPR24.low64             = 0x55
 GPR31.low64             = 0x00100188
-GPR31.high64            = preserved from its value immediately before JAL
+GPR31.high64            = 0x0000000000000000 in this fixture
 SQ target 0x004e2680    = 16 zero bytes
 poison registers        = unchanged
 ```
+
+The startup prefix's earlier `PADDUW` sequence clears GPR31, so this E2E fixture can only prove that `JAL` does not introduce a nonzero high64 value. Dedicated reference/native differential tests must seed GPR31.high64 with a nonzero value to prove true preservation.
 
 Accounting derivation:
 
@@ -429,6 +432,7 @@ Cover:
 
 - supported `J` follows target and counts terminator + delay;
 - supported `JAL` follows target and writes link;
+- cached direct-transfer block records `end_pc_exclusive == terminator_pc + 8`;
 - cache hit on unchanged direct-transfer block;
 - recompile when terminator word changes;
 - recompile when delay-slot word changes;
@@ -463,11 +467,12 @@ The milestone is complete only when all of the following are true:
 3. Windows x64 backend matches reference behavior.
 4. `JAL` writes zero-extended `PC+8` to GPR31 low64 before the delay slot and preserves high64.
 5. Dispatcher executes supported `J`/`JAL` and includes terminator/delay words in cache identity.
-6. Dispatcher still rejects memory-bearing J/JAL delay slots in v0.
-7. Synthetic startup reaches the callee body and stops before `JR` at `0x001001a4` with exactly 5 blocks / 87 instructions.
-8. The startup `SQ` result at `0x004e2680` remains correct.
-9. Full Windows CI is green.
-10. Documentation reports the milestone as `CI_VALIDATED`; `EXTERNALLY_VALIDATED` is not claimed until a legal real ELF is actually executed and proves it.
+6. Cached direct-transfer span ends at `terminator_pc + 8`.
+7. Dispatcher still rejects memory-bearing J/JAL delay slots in v0.
+8. Synthetic startup reaches the callee body and stops before `JR` at `0x001001a4` with exactly 5 blocks / 87 instructions.
+9. The startup `SQ` result at `0x004e2680` remains correct.
+10. Full Windows CI is green.
+11. Documentation reports the milestone as `CI_VALIDATED`; `EXTERNALLY_VALIDATED` is not claimed until a legal real ELF is actually executed and proves it.
 
 ## Deferred next milestone
 
