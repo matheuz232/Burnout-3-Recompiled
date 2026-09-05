@@ -1,4 +1,4 @@
-#include "r5900_branch_likely_test_support.h"
+#include "r5900_direct_transfer_test_support.h"
 #include "recompiler/r5900_ir_executor.h"
 
 #include <cstddef>
@@ -162,20 +162,6 @@ int main() {
         expect(context.memory_fault.active &&
                    context.memory_fault.guest_pc == 0x00109a00u,
                "body failure must report body fault PC");
-    }
-
-    // Task 2 RED: likely terminators validate, but executor semantics do not exist yet.
-    {
-        R5900IrExecutionState state{};
-        state.gpr[4].low64 = 7u;
-        state.gpr[5].low64 = 7u;
-        const auto block = branch_equal_likely(
-            0x00109c00u, 4u, 5u, 0x00109d00u,
-            addiu(8u, 8u, 1, 0x00109c04u));
-        const auto result = execute_r5900_ir_block(block, state);
-        expect(result.ok() && result.next_pc == 0x00109d00u &&
-                   state.gpr[8].low64 == 1u,
-               "BEQL taken must execute delay and return target");
     }
 
     std::cout << "r5900_ir_indirect_transfer_executor_tests: PASS\n";

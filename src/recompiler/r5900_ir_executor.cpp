@@ -314,6 +314,33 @@ execute_r5900_ir_block(const R5900IrBlock& block,
                       : block.terminator.fallthrough_pc};
     }
 
+    case R5900IrTerminatorKind::BranchEqualLikely64:
+    case R5900IrTerminatorKind::BranchNotEqualLikely64: {
+        const bool equal =
+            state.gpr[block.terminator.inputs[0].gpr_index].low64 ==
+            state.gpr[block.terminator.inputs[1].gpr_index].low64;
+        const bool taken =
+            block.terminator.kind == R5900IrTerminatorKind::BranchEqualLikely64
+                ? equal
+                : !equal;
+
+        if (!taken) {
+            return {R5900IrExecutionError::None,
+                    {},
+                    block.terminator.fallthrough_pc};
+        }
+
+        const auto delay_result =
+            execute_ir_sequence(block.terminator.delay_slot, context);
+        if (!delay_result.ok()) {
+            return map_block_execution_failure(delay_result);
+        }
+
+        return {R5900IrExecutionError::None,
+                {},
+                block.terminator.taken_pc};
+    }
+
     case R5900IrTerminatorKind::DirectJump: {
         const auto delay_result =
             execute_ir_sequence(block.terminator.delay_slot, context);
