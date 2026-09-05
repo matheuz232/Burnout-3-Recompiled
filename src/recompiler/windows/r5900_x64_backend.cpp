@@ -205,12 +205,10 @@ void emit_add_word_sign_extend(std::vector<std::uint8_t>& bytes,
                                const R5900IrInstruction& instruction) {
     emit_operand32_to_eax(bytes, instruction.inputs[0]);
     emit_operand32_to_edx(bytes, instruction.inputs[1]);
-
     bytes.push_back(0x01u);
     bytes.push_back(0xd0u);
     bytes.push_back(0x48u);
     bytes.push_back(0x98u);
-
     if (instruction.destination->index != 0u) {
         emit_store_rax_to_state(bytes, gpr_low64_offset(instruction.destination->index));
     }
@@ -220,11 +218,9 @@ void emit_or64(std::vector<std::uint8_t>& bytes,
                const R5900IrInstruction& instruction) {
     emit_operand64_to_rax(bytes, instruction.inputs[0]);
     emit_operand64_to_rdx(bytes, instruction.inputs[1]);
-
     bytes.push_back(0x48u);
     bytes.push_back(0x09u);
     bytes.push_back(0xd0u);
-
     if (instruction.destination->index != 0u) {
         emit_store_rax_to_state(bytes, gpr_low64_offset(instruction.destination->index));
     }
@@ -234,11 +230,9 @@ void emit_and64(std::vector<std::uint8_t>& bytes,
                 const R5900IrInstruction& instruction) {
     emit_operand64_to_rax(bytes, instruction.inputs[0]);
     emit_operand64_to_rdx(bytes, instruction.inputs[1]);
-
     bytes.push_back(0x48u);
     bytes.push_back(0x21u);
     bytes.push_back(0xd0u);
-
     if (instruction.destination->index != 0u) {
         emit_store_rax_to_state(bytes, gpr_low64_offset(instruction.destination->index));
     }
@@ -251,7 +245,6 @@ void emit_lui(std::vector<std::uint8_t>& bytes,
     emit_mov_eax_imm32(bytes, word);
     bytes.push_back(0x48u);
     bytes.push_back(0x98u);
-
     if (instruction.destination->index != 0u) {
         emit_store_rax_to_state(bytes, gpr_low64_offset(instruction.destination->index));
     }
@@ -281,18 +274,14 @@ void emit_move_gpr_low64(std::vector<std::uint8_t>& bytes,
 void emit_mtsah(std::vector<std::uint8_t>& bytes,
                 const R5900IrInstruction& instruction) {
     emit_load_eax_from_state(bytes, gpr_low64_offset(instruction.inputs[0].gpr_index));
-
     bytes.push_back(0x83u);
     bytes.push_back(0xe0u);
     bytes.push_back(0x07u);
-
     bytes.push_back(0x83u);
     bytes.push_back(0xf0u);
     bytes.push_back(static_cast<std::uint8_t>(instruction.inputs[1].immediate) & 0x07u);
-
     bytes.push_back(0xd1u);
     bytes.push_back(0xe0u);
-
     emit_store_eax_to_state(bytes, sa_offset());
 }
 
@@ -332,7 +321,6 @@ void emit_shift_xmm_sources_one_lane(std::vector<std::uint8_t>& bytes) {
     bytes.push_back(0x73u);
     bytes.push_back(0xd8u);
     bytes.push_back(0x04u);
-
     bytes.push_back(0x66u);
     bytes.push_back(0x0fu);
     bytes.push_back(0x73u);
@@ -344,24 +332,20 @@ void emit_padduw(std::vector<std::uint8_t>& bytes,
                  const R5900IrInstruction& instruction) {
     emit_load_xmm0_gpr(bytes, instruction.inputs[0].gpr_index);
     emit_load_xmm1_gpr(bytes, instruction.inputs[1].gpr_index);
-
     for (std::uint32_t lane = 0u; lane < 4u; ++lane) {
         emit_movd_eax_xmm0(bytes);
         emit_movd_edx_xmm1(bytes);
-
         bytes.push_back(0x01u);
         bytes.push_back(0xd0u);
         bytes.push_back(0x19u);
         bytes.push_back(0xd2u);
         bytes.push_back(0x09u);
         bytes.push_back(0xd0u);
-
         if (instruction.destination->index != 0u) {
             emit_store_eax_to_state(
                 bytes,
                 gpr_offset(instruction.destination->index) + lane * sizeof(std::uint32_t));
         }
-
         if (lane != 3u) {
             emit_shift_xmm_sources_one_lane(bytes);
         }
@@ -416,21 +400,39 @@ R5900X64CompileResult failure(R5900X64CompileError error, std::string message) {
     return result;
 }
 
-R5900X64CompileResult unsupported_backend_opcode(std::size_t index,
-                                                  const R5900IrInstruction& instruction) {
+struct PendingX64Code {
+    R5900X64CompileError error{R5900X64CompileError::None};
+    std::string message{};
+    void* code{};
+    std::size_t size{};
+
+    [[nodiscard]] bool ok() const noexcept {
+        return error == R5900X64CompileError::None && code != nullptr && size != 0u;
+    }
+};
+
+PendingX64Code pending_failure(R5900X64CompileError error, std::string message) {
+    PendingX64Code result{};
+    result.error = error;
+    result.message = std::move(message);
+    return result;
+}
+
+PendingX64Code unsupported_pending_opcode(std::size_t index,
+                                          const R5900IrInstruction& instruction) {
     std::ostringstream message;
     message << "IR instruction " << index << " at guest PC 0x" << std::hex
             << instruction.guest_pc << ": opcode not implemented by x64 backend";
-    return failure(R5900X64CompileError::UnsupportedOpcode, message.str());
+    return pending_failure(R5900X64CompileError::UnsupportedOpcode, message.str());
 }
 
-R5900X64CompileResult compile_linear_block(
+PendingX64Code compile_linear_code(
     const std::vector<R5900IrInstruction>& instructions,
     std::uint32_t fallthrough_pc) {
     for (std::size_t index = 0; index < instructions.size(); ++index) {
         const auto validation = validate_r5900_ir_instruction(instructions[index], index);
         if (!validation.ok()) {
-            return failure(map_validation_error(validation.error), validation.message);
+            return pending_failure(map_validation_error(validation.error), validation.message);
         }
     }
 
@@ -471,7 +473,7 @@ R5900X64CompileResult compile_linear_block(
             emit_add_f32_to_accumulator(bytes, instruction);
             break;
         default:
-            return unsupported_backend_opcode(index, instruction);
+            return unsupported_pending_opcode(index, instruction);
         }
     }
 
@@ -484,8 +486,8 @@ R5900X64CompileResult compile_linear_block(
                               MEM_RESERVE | MEM_COMMIT,
                               PAGE_READWRITE);
     if (code == nullptr) {
-        return failure(R5900X64CompileError::AllocationFailed,
-                       "VirtualAlloc failed for R5900 x64 block");
+        return pending_failure(R5900X64CompileError::AllocationFailed,
+                               "VirtualAlloc failed for R5900 x64 block");
     }
 
     std::memcpy(code, bytes.data(), bytes.size());
@@ -496,19 +498,19 @@ R5900X64CompileResult compile_linear_block(
                         PAGE_EXECUTE_READ,
                         &previous_protection)) {
         VirtualFree(code, 0u, MEM_RELEASE);
-        return failure(R5900X64CompileError::ProtectionFailed,
-                       "VirtualProtect failed for R5900 x64 block");
+        return pending_failure(R5900X64CompileError::ProtectionFailed,
+                               "VirtualProtect failed for R5900 x64 block");
     }
 
     if (!FlushInstructionCache(GetCurrentProcess(), code, bytes.size())) {
         VirtualFree(code, 0u, MEM_RELEASE);
-        return failure(R5900X64CompileError::CacheFlushFailed,
-                       "FlushInstructionCache failed for R5900 x64 block");
+        return pending_failure(R5900X64CompileError::CacheFlushFailed,
+                               "FlushInstructionCache failed for R5900 x64 block");
     }
 
-    R5900X64CompiledBlock block(code, bytes.size());
-    R5900X64CompileResult result{};
-    result.block.emplace(std::move(block));
+    PendingX64Code result{};
+    result.code = code;
+    result.size = bytes.size();
     return result;
 }
 
@@ -558,7 +560,15 @@ R5900X64CompileResult compile_r5900_ir_x64(
     const auto fallthrough_pc = instructions.empty()
         ? 0u
         : instructions.back().guest_pc + 4u;
-    return compile_linear_block(instructions, fallthrough_pc);
+    auto pending = compile_linear_code(instructions, fallthrough_pc);
+    if (!pending.ok()) {
+        return failure(pending.error, std::move(pending.message));
+    }
+
+    R5900X64CompiledBlock block(pending.code, pending.size);
+    R5900X64CompileResult result{};
+    result.block.emplace(std::move(block));
+    return result;
 }
 
 R5900X64CompileResult compile_r5900_ir_x64(const R5900IrBlock& block) {
@@ -570,7 +580,16 @@ R5900X64CompileResult compile_r5900_ir_x64(const R5900IrBlock& block) {
         return failure(R5900X64CompileError::UnsupportedOpcode,
                        "R5900 x64 backend does not yet emit branch terminators");
     }
-    return compile_linear_block(block.body, block.terminator.fallthrough_pc);
+
+    auto pending = compile_linear_code(block.body, block.terminator.fallthrough_pc);
+    if (!pending.ok()) {
+        return failure(pending.error, std::move(pending.message));
+    }
+
+    R5900X64CompiledBlock native_block(pending.code, pending.size);
+    R5900X64CompileResult result{};
+    result.block.emplace(std::move(native_block));
+    return result;
 }
 
 } // namespace b3r::recompiler
