@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <vector>
@@ -65,5 +66,11 @@ struct R5900X64CompileResult {
         return error == R5900X64CompileError::None && block.has_value();
     }
 };
+
+[[nodiscard]] inline R5900X64CompileResult compile_r5900_ir_x64(
+    std::initializer_list<R5900IrInstruction> instructions) {
+    return compile_r5900_ir_x64(
+        std::vector<R5900IrInstruction>(instructions.begin(), instructions.end()));
+}
 
 } // namespace b3r::recompiler
