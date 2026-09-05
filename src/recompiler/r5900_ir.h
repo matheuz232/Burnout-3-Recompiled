@@ -85,6 +85,8 @@ struct R5900IrInstruction {
 enum class R5900IrTerminatorKind {
     Fallthrough = 0,
     BranchEqual64,
+    BranchEqualLikely64,
+    BranchNotEqualLikely64,
     DirectJump,
     DirectCall,
     IndirectJump,
