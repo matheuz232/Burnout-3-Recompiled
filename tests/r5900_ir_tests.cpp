@@ -53,6 +53,19 @@ constexpr std::uint32_t mmi_type(std::uint8_t rs,
            funct;
 }
 
+constexpr std::uint32_t cop1_type(std::uint8_t rs,
+                                  std::uint8_t rt,
+                                  std::uint8_t rd,
+                                  std::uint8_t sa,
+                                  std::uint8_t funct) {
+    return (0x11u << 26u) |
+           (static_cast<std::uint32_t>(rs) << 21u) |
+           (static_cast<std::uint32_t>(rt) << 16u) |
+           (static_cast<std::uint32_t>(rd) << 11u) |
+           (static_cast<std::uint32_t>(sa) << 6u) |
+           funct;
+}
+
 } // namespace
 
 int main() {
@@ -125,7 +138,6 @@ int main() {
                "ORI immediate must be zero-extended before entering IR");
     }
 
-    // RED: real-startup non-COP1 lowering subset.
     {
         const auto word = i_type(0x0c, 1, 2, 0x00ff); // andi r2,r1,0xff
         const auto result = lower_r5900_instruction(decode_r5900(word), 0x00101000u);
@@ -239,6 +251,70 @@ int main() {
                        result.instructions[0].opcode == R5900IrOpcode::Nop,
                    "side-effect-free startup write to GPR0 must lower to provenance Nop");
         }
+    }
+
+    // RED: narrow COP1 startup lowering.
+    {
+        const auto word = cop1_type(0x04, 3, 5, 0, 0); // mtc1 r3,f5
+        const auto result = lower_r5900_instruction(decode_r5900(word), 0x00101100u);
+        expect(result.ok(), "MTC1 must lower for startup execution");
+        const auto& ir = result.instructions.at(0);
+        expect(ir.opcode == R5900IrOpcode::MoveBits32,
+               "MTC1 must lower to raw 32-bit move");
+        expect(ir.destination.has_value() && ir.destination->kind == R5900IrDestinationKind::Fpr &&
+                   ir.destination->index == 5u,
+               "MTC1 FPR destination mismatch");
+        expect(ir.write_mode == R5900IrGprWriteMode::None,
+               "MTC1 must not claim a GPR write mode");
+        expect(ir.inputs.size() == 1u && ir.inputs[0].kind == R5900IrOperandKind::Gpr &&
+                   ir.inputs[0].gpr_index == 3u,
+               "MTC1 GPR source mismatch");
+        expect(ir.guest_pc == 0x00101100u && ir.guest_raw == word,
+               "MTC1 provenance mismatch");
+    }
+
+    {
+        const auto word = cop1_type(0x06, 4, 31, 0, 0); // ctc1 r4,fcr31
+        const auto result = lower_r5900_instruction(decode_r5900(word), 0x00101104u);
+        expect(result.ok(), "CTC1 FCR31 must lower for startup execution");
+        const auto& ir = result.instructions.at(0);
+        expect(ir.opcode == R5900IrOpcode::MoveBits32,
+               "CTC1 must lower to raw 32-bit move");
+        expect(ir.destination.has_value() && ir.destination->kind == R5900IrDestinationKind::Fcr31 &&
+                   ir.destination->index == 0u,
+               "CTC1 destination must be unindexed FCR31");
+        expect(ir.inputs.size() == 1u && ir.inputs[0].kind == R5900IrOperandKind::Gpr &&
+                   ir.inputs[0].gpr_index == 4u,
+               "CTC1 GPR source mismatch");
+    }
+
+    {
+        const auto word = cop1_type(0x10, 2, 1, 0, 0x18); // adda.s f1,f2
+        const auto result = lower_r5900_instruction(decode_r5900(word), 0x00101108u);
+        expect(result.ok(), "ADDA.S must lower for startup execution");
+        const auto& ir = result.instructions.at(0);
+        expect(ir.opcode == R5900IrOpcode::AddF32ToAccumulator,
+               "ADDA.S must lower to FP accumulator add");
+        expect(ir.destination.has_value() &&
+                   ir.destination->kind == R5900IrDestinationKind::FpAccumulator &&
+                   ir.destination->index == 0u,
+               "ADDA.S destination must be FP accumulator");
+        expect(ir.write_mode == R5900IrGprWriteMode::None,
+               "ADDA.S must not claim a GPR write mode");
+        expect(ir.inputs.size() == 2u &&
+                   ir.inputs[0].kind == R5900IrOperandKind::Fpr && ir.inputs[0].gpr_index == 1u &&
+                   ir.inputs[1].kind == R5900IrOperandKind::Fpr && ir.inputs[1].gpr_index == 2u,
+               "ADDA.S must use fs then ft FPR operands");
+    }
+
+    {
+        const auto result = lower_r5900_instruction(
+            decode_r5900(cop1_type(0x06, 4, 30, 0, 0)), 0x0010110cu);
+        expect(!result.ok(), "CTC1 to control register other than 31 must remain unsupported");
+        expect(result.error == R5900IrLoweringError::UnsupportedInstruction,
+               "unsupported CTC1 must use explicit lowering error");
+        expect(result.instructions.empty(),
+               "unsupported CTC1 must not emit partial IR");
     }
 
     {
