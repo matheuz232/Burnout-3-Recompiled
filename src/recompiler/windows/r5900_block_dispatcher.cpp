@@ -151,9 +151,19 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             block.end_kind == analysis::R5900BlockEndKind::ConditionalBranch &&
             !block.instructions.empty() &&
             block.instructions.back().decoded.instruction == R5900Instruction::Beq;
+        const bool has_supported_j =
+            block.end_kind == analysis::R5900BlockEndKind::DirectJump &&
+            !block.instructions.empty() &&
+            block.instructions.back().decoded.instruction == R5900Instruction::J;
+        const bool has_supported_jal =
+            block.end_kind == analysis::R5900BlockEndKind::DirectCall &&
+            !block.instructions.empty() &&
+            block.instructions.back().decoded.instruction == R5900Instruction::Jal;
+        const bool has_supported_transfer =
+            has_supported_beq || has_supported_j || has_supported_jal;
 
-        const analysis::R5900InstructionSite* beq_site =
-            has_supported_beq ? &block.instructions.back() : nullptr;
+        const analysis::R5900InstructionSite* transfer_site =
+            has_supported_transfer ? &block.instructions.back() : nullptr;
 
         std::vector<analysis::R5900InstructionSite> body_sites{};
         body_sites.reserve(block.instructions.size());
@@ -163,7 +173,7 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
 
         for (std::size_t index = 0; index < block.instructions.size(); ++index) {
             const auto& site = block.instructions[index];
-            if (has_supported_beq && index + 1u == block.instructions.size()) {
+            if (has_supported_transfer && index + 1u == block.instructions.size()) {
                 break;
             }
 
@@ -188,7 +198,7 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             body_sites.push_back(site);
         }
 
-        if (body_sites.empty() && !has_supported_beq) {
+        if (body_sites.empty() && !has_supported_transfer) {
             if (boundary_reason.has_value()) {
                 result.reason = *boundary_reason;
                 result.next_pc = boundary_pc;
@@ -203,7 +213,7 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
         }
 
         std::vector<std::uint32_t> guest_words{};
-        guest_words.reserve(body_sites.size() + (has_supported_beq ? 2u : 0u));
+        guest_words.reserve(body_sites.size() + (has_supported_transfer ? 2u : 0u));
         for (const auto& site : body_sites) {
             const auto word = memory_.read_u32(site.pc);
             if (!word.has_value()) {
@@ -216,35 +226,39 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             guest_words.push_back(*word);
         }
 
-        if (has_supported_beq) {
-            if (beq_site == nullptr || !block.delay_slot.has_value()) {
-                result.reason = R5900DispatchStopReason::AnalysisFailure;
-                result.next_pc = current_pc;
-                result.message = format_stage_error(
-                    "analysis", current_pc, "supported BEQ candidate lacks terminator or delay slot");
-                return result;
-            }
+        if (has_supported_transfer) {
+    if (transfer_site == nullptr || !block.delay_slot.has_value()) {
+        result.reason = R5900DispatchStopReason::AnalysisFailure;
+        result.next_pc = current_pc;
+        result.message = format_stage_error(
+  "analysis",
+  current_pc,
+  "supported control transfer lacks terminator or delay slot");
+        return result;
+    }
 
-            const auto beq_word = memory_.read_u32(beq_site->pc);
-            if (!beq_word.has_value()) {
-                result.reason = R5900DispatchStopReason::AnalysisFailure;
-                result.next_pc = beq_site->pc;
-                result.message = format_stage_error(
-                    "analysis", beq_site->pc, "selected BEQ became unreadable");
-                return result;
-            }
-            guest_words.push_back(*beq_word);
+    const auto transfer_word = memory_.read_u32(transfer_site->pc);
+    if (!transfer_word.has_value()) {
+        result.reason = R5900DispatchStopReason::AnalysisFailure;
+        result.next_pc = transfer_site->pc;
+        result.message = format_stage_error(
+  "analysis",
+  transfer_site->pc,
+  "selected control transfer became unreadable");
+        return result;
+    }
+    guest_words.push_back(*transfer_word);
 
-            const auto delay_word = memory_.read_u32(block.delay_slot->pc);
-            if (!delay_word.has_value()) {
-                result.reason = R5900DispatchStopReason::AnalysisFailure;
-                result.next_pc = block.delay_slot->pc;
-                result.message = format_stage_error(
-                    "analysis", block.delay_slot->pc, "selected delay slot became unreadable");
-                return result;
-            }
-            guest_words.push_back(*delay_word);
-        }
+    const auto delay_word = memory_.read_u32(block.delay_slot->pc);
+    if (!delay_word.has_value()) {
+        result.reason = R5900DispatchStopReason::AnalysisFailure;
+        result.next_pc = block.delay_slot->pc;
+        result.message = format_stage_error(
+  "analysis", block.delay_slot->pc, "selected delay slot became unreadable");
+        return result;
+    }
+    guest_words.push_back(*delay_word);
+}
 
         const auto fingerprint = fingerprint_guest_words(current_pc, guest_words);
         auto cached = cache_.find(current_pc);
@@ -286,57 +300,82 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                                      lowered.instructions.end());
             }
 
-            if (has_supported_beq) {
-                const auto target = beq_site->decoded.direct_target(beq_site->pc);
-                if (!target.has_value()) {
-                    result.reason = R5900DispatchStopReason::AnalysisFailure;
-                    result.next_pc = beq_site->pc;
-                    result.message = format_stage_error(
-                        "analysis", beq_site->pc, "decoded BEQ unexpectedly lacks direct target");
-                    return result;
-                }
+  if (has_supported_transfer) {
+    if (transfer_site == nullptr || !block.delay_slot.has_value()) {
+        result.reason = R5900DispatchStopReason::AnalysisFailure;
+        result.next_pc = current_pc;
+        result.message = format_stage_error(
+  "analysis",
+  current_pc,
+  "supported control transfer lacks terminator or delay slot");
+        return result;
+    }
 
-                ir_block.terminator.guest_pc = beq_site->pc;
-                ir_block.terminator.guest_raw = beq_site->decoded.raw;
-                ir_block.terminator.kind = R5900IrTerminatorKind::BranchEqual64;
-                ir_block.terminator.inputs = {
-                    dispatcher_gpr(beq_site->decoded.rs),
-                    dispatcher_gpr(beq_site->decoded.rt),
-                };
-                ir_block.terminator.taken_pc = *target;
-                ir_block.terminator.fallthrough_pc = beq_site->pc + 8u;
+    const auto target =
+        transfer_site->decoded.direct_target(transfer_site->pc);
+    if (!target.has_value()) {
+        result.reason = R5900DispatchStopReason::AnalysisFailure;
+        result.next_pc = transfer_site->pc;
+        result.message = format_stage_error(
+  "analysis",
+  transfer_site->pc,
+  "decoded supported control transfer unexpectedly lacks direct target");
+        return result;
+    }
 
-                const auto& delay = *block.delay_slot;
-                if (delay.decoded.instruction == R5900Instruction::Sq) {
-                    result.reason = R5900DispatchStopReason::LoweringFailure;
-                    result.next_pc = delay.pc;
-                    result.message = format_stage_error(
-                        "lowering",
-                        delay.pc,
-                        "SQ in a BEQ delay slot is outside dispatcher v0 scope");
-                    return result;
-                }
+    ir_block.terminator.guest_pc = transfer_site->pc;
+    ir_block.terminator.guest_raw = transfer_site->decoded.raw;
+    if (has_supported_beq) {
+        ir_block.terminator.kind = R5900IrTerminatorKind::BranchEqual64;
+        ir_block.terminator.inputs = {
+  dispatcher_gpr(transfer_site->decoded.rs),
+  dispatcher_gpr(transfer_site->decoded.rt),
+        };
+        ir_block.terminator.taken_pc = *target;
+        ir_block.terminator.fallthrough_pc = transfer_site->pc + 8u;
+    } else {
+        ir_block.terminator.kind = has_supported_j
+  ? R5900IrTerminatorKind::DirectJump
+  : R5900IrTerminatorKind::DirectCall;
+        ir_block.terminator.target_pc = *target;
+        if (has_supported_jal) {
+  ir_block.terminator.link_pc = transfer_site->pc + 8u;
+        }
+    }
 
-                const auto lowered_delay = lower_r5900_instruction(delay.decoded, delay.pc);
-                if (!lowered_delay.ok() || lowered_delay.instructions.size() != 1u) {
-                    result.reason = R5900DispatchStopReason::LoweringFailure;
-                    result.next_pc = delay.pc;
-                    result.message = format_stage_error(
-                        "lowering",
-                        delay.pc,
-                        lowered_delay.ok()
-                            ? "BEQ delay slot must lower to exactly one IR instruction"
-                            : lowered_delay.message);
-                    return result;
-                }
-                ir_block.terminator.delay_slot = lowered_delay.instructions;
-            } else {
-                const auto fallthrough_pc =
-                    current_pc + static_cast<std::uint32_t>(body_sites.size() * 4u);
-                ir_block.terminator.guest_pc = fallthrough_pc;
-                ir_block.terminator.kind = R5900IrTerminatorKind::Fallthrough;
-                ir_block.terminator.fallthrough_pc = fallthrough_pc;
-            }
+    const auto& delay = *block.delay_slot;
+    if (delay.decoded.instruction == R5900Instruction::Sq) {
+        result.reason = R5900DispatchStopReason::LoweringFailure;
+        result.next_pc = delay.pc;
+        result.message = format_stage_error(
+  "lowering",
+  delay.pc,
+  has_supported_beq
+      ? "SQ in a BEQ delay slot is outside dispatcher v0 scope"
+      : "SQ in a J/JAL delay slot is outside dispatcher v0 scope");
+        return result;
+    }
+
+    const auto lowered_delay = lower_r5900_instruction(delay.decoded, delay.pc);
+    if (!lowered_delay.ok() || lowered_delay.instructions.size() != 1u) {
+        result.reason = R5900DispatchStopReason::LoweringFailure;
+        result.next_pc = delay.pc;
+        result.message = format_stage_error(
+  "lowering",
+  delay.pc,
+  lowered_delay.ok()
+      ? "control-transfer delay slot must lower to exactly one IR instruction"
+      : lowered_delay.message);
+        return result;
+    }
+    ir_block.terminator.delay_slot = lowered_delay.instructions;
+} else {
+    const auto fallthrough_pc =
+        current_pc + static_cast<std::uint32_t>(body_sites.size() * 4u);
+    ir_block.terminator.guest_pc = fallthrough_pc;
+    ir_block.terminator.kind = R5900IrTerminatorKind::Fallthrough;
+    ir_block.terminator.fallthrough_pc = fallthrough_pc;
+}
 
             auto compiled = compile_r5900_ir_x64(ir_block);
             if (!compiled.ok()) {
@@ -348,8 +387,8 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
 
             CachedBlock replacement{};
             replacement.start_pc = current_pc;
-            replacement.end_pc_exclusive = has_supported_beq
-                ? beq_site->pc + 8u
+            replacement.end_pc_exclusive = has_supported_transfer
+                ? transfer_site->pc + 8u
                 : current_pc + static_cast<std::uint32_t>(body_sites.size() * 4u);
             replacement.fingerprint = fingerprint;
             replacement.guest_words = guest_words;
