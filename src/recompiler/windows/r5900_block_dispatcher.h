@@ -31,6 +31,7 @@ struct R5900DispatchResult {
     std::size_t blocks_executed{};
     std::size_t instructions_executed{};
     std::size_t cache_hits{};
+    std::size_t fast_cache_hits{};
     std::size_t cache_misses{};
     std::size_t recompilations{};
     std::string message{};
@@ -59,6 +60,7 @@ private:
         std::uint64_t fingerprint{};
         std::vector<std::uint32_t> guest_words{};
         std::size_t guest_instruction_count{};
+        bool fast_replay_eligible{};
         R5900X64CompiledBlock native_block{};
     };
 
