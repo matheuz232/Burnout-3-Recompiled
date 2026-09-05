@@ -240,6 +240,12 @@ if(B3R_BUILD_TESTS)
     target_link_libraries(r5900_x64_backend_windows_tests PRIVATE b3r_recompiler_x64)
     add_test(NAME r5900_x64_backend_windows_tests COMMAND r5900_x64_backend_windows_tests)
 
+    add_executable(r5900_x64_startup_integer_windows_tests
+      tests/r5900_x64_startup_integer_windows_tests.cpp
+    )
+    target_link_libraries(r5900_x64_startup_integer_windows_tests PRIVATE b3r_recompiler_x64)
+    add_test(NAME r5900_x64_startup_integer_windows_tests COMMAND r5900_x64_startup_integer_windows_tests)
+
     add_executable(r5900_block_dispatcher_windows_tests
       tests/r5900_block_dispatcher_windows_tests.cpp
     )
