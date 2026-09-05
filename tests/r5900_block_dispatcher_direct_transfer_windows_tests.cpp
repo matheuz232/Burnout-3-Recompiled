@@ -124,7 +124,7 @@ int main() {
     using namespace b3r::recompiler;
     constexpr std::uint32_t base = 0x00110000u;
     constexpr std::uint32_t target = base + 0x20u;
-    const auto jr31 = r_type(31u, 0u, 0u, 0u, 0x08u);
+    const auto bne_boundary = i_type(0x05u, 0u, 0u, 0u);
 
     {
         auto memory = make_memory({
@@ -132,7 +132,7 @@ int main() {
             i_type(0x09u, 0u, 7u, 5u),
             i_type(0x09u, 0u, 8u, 9u),
             0u, 0u, 0u, 0u, 0u,
-            jr31, 0u,
+            bne_boundary, 0u,
         }, base);
         R5900BlockDispatcher dispatcher(memory);
         R5900IrExecutionState state{};
@@ -156,7 +156,7 @@ int main() {
             i_type(0x09u, 31u, 23u, 0u),
             i_type(0x09u, 0u, 25u, 1u),
             0u, 0u, 0u, 0u, 0u,
-            jr31, 0u,
+            bne_boundary, 0u,
         }, base);
         R5900BlockDispatcher dispatcher(memory);
         R5900IrExecutionState state{};
@@ -177,7 +177,7 @@ int main() {
             j_type(0x02u, target),
             i_type(0x09u, 0u, 7u, 1u),
             0u, 0u, 0u, 0u, 0u, 0u,
-            jr31, 0u,
+            bne_boundary, 0u,
         }, base);
         R5900BlockDispatcher dispatcher(memory);
         R5900IrExecutionState first_state{};
@@ -204,7 +204,7 @@ int main() {
         auto memory = make_memory({
             j_type(op, base + 0x10u),
             i_type(0x1fu, 2u, 7u, 0u),
-            0u, 0u, jr31, 0u,
+            0u, 0u, bne_boundary, 0u,
         }, base, data_base);
         const auto before = memory.read_u128(store_target);
         expect(before.has_value(), "SQ delay target must be mapped");
@@ -222,25 +222,6 @@ int main() {
         const auto after = memory.read_u128(store_target);
         expect(after.has_value() && *after == *before,
                "rejected SQ delay must not mutate guest memory");
-    }
-
-    {
-        const std::vector<std::uint32_t> indirect = {
-            r_type(31u, 0u, 0u, 0u, 0x08u),
-            r_type(31u, 0u, 30u, 0u, 0x09u),
-        };
-        for (const auto transfer : indirect) {
-            auto memory = make_memory({transfer, i_type(0x09u, 0u, 9u, 7u)}, base);
-            R5900BlockDispatcher dispatcher(memory);
-            R5900IrExecutionState state{};
-            const auto result = dispatcher.run(base, state, 1u);
-            expect(result.reason == R5900DispatchStopReason::ControlFlow &&
-                       result.next_pc == base && result.blocks_executed == 0u &&
-                       result.instructions_executed == 0u,
-                   "entry JR/JALR must remain unsupported control-flow boundary");
-            expect(state.gpr[9].low64 == 0u,
-                   "JR/JALR mapped delay must not execute");
-        }
     }
 
     std::cout << "r5900_block_dispatcher_direct_transfer_windows_tests: PASS\n";

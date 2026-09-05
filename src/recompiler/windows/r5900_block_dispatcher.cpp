@@ -159,8 +159,17 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             block.end_kind == analysis::R5900BlockEndKind::DirectCall &&
             !block.instructions.empty() &&
             block.instructions.back().decoded.instruction == R5900Instruction::Jal;
+        const bool has_supported_jr =
+            block.end_kind == analysis::R5900BlockEndKind::IndirectJump &&
+            !block.instructions.empty() &&
+            block.instructions.back().decoded.instruction == R5900Instruction::Jr;
+        const bool has_supported_jalr =
+            block.end_kind == analysis::R5900BlockEndKind::IndirectCall &&
+            !block.instructions.empty() &&
+            block.instructions.back().decoded.instruction == R5900Instruction::Jalr;
         const bool has_supported_transfer =
-            has_supported_beq || has_supported_j || has_supported_jal;
+            has_supported_beq || has_supported_j || has_supported_jal ||
+            has_supported_jr || has_supported_jalr;
 
         const analysis::R5900InstructionSite* transfer_site =
             has_supported_transfer ? &block.instructions.back() : nullptr;
@@ -313,34 +322,48 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                     return result;
                 }
 
-                const auto target =
-                    transfer_site->decoded.direct_target(transfer_site->pc);
-                if (!target.has_value()) {
-                    result.reason = R5900DispatchStopReason::AnalysisFailure;
-                    result.next_pc = transfer_site->pc;
-                    result.message = format_stage_error(
-                        "analysis",
-                        transfer_site->pc,
-                        "decoded supported control transfer unexpectedly lacks direct target");
-                    return result;
-                }
-
                 ir_block.terminator.guest_pc = transfer_site->pc;
                 ir_block.terminator.guest_raw = transfer_site->decoded.raw;
-                if (has_supported_beq) {
-                    ir_block.terminator.kind = R5900IrTerminatorKind::BranchEqual64;
+
+                if (has_supported_beq || has_supported_j || has_supported_jal) {
+                    const auto target =
+                        transfer_site->decoded.direct_target(transfer_site->pc);
+                    if (!target.has_value()) {
+                        result.reason = R5900DispatchStopReason::AnalysisFailure;
+                        result.next_pc = transfer_site->pc;
+                        result.message = format_stage_error(
+                            "analysis",
+                            transfer_site->pc,
+                            "decoded supported direct control transfer unexpectedly lacks target");
+                        return result;
+                    }
+
+                    if (has_supported_beq) {
+                        ir_block.terminator.kind = R5900IrTerminatorKind::BranchEqual64;
+                        ir_block.terminator.inputs = {
+                            dispatcher_gpr(transfer_site->decoded.rs),
+                            dispatcher_gpr(transfer_site->decoded.rt),
+                        };
+                        ir_block.terminator.taken_pc = *target;
+                        ir_block.terminator.fallthrough_pc = transfer_site->pc + 8u;
+                    } else {
+                        ir_block.terminator.kind = has_supported_j
+                            ? R5900IrTerminatorKind::DirectJump
+                            : R5900IrTerminatorKind::DirectCall;
+                        ir_block.terminator.target_pc = *target;
+                        if (has_supported_jal) {
+                            ir_block.terminator.link_pc = transfer_site->pc + 8u;
+                        }
+                    }
+                } else {
+                    ir_block.terminator.kind = has_supported_jr
+                        ? R5900IrTerminatorKind::IndirectJump
+                        : R5900IrTerminatorKind::IndirectCall;
                     ir_block.terminator.inputs = {
                         dispatcher_gpr(transfer_site->decoded.rs),
-                        dispatcher_gpr(transfer_site->decoded.rt),
                     };
-                    ir_block.terminator.taken_pc = *target;
-                    ir_block.terminator.fallthrough_pc = transfer_site->pc + 8u;
-                } else {
-                    ir_block.terminator.kind = has_supported_j
-                        ? R5900IrTerminatorKind::DirectJump
-                        : R5900IrTerminatorKind::DirectCall;
-                    ir_block.terminator.target_pc = *target;
-                    if (has_supported_jal) {
+                    if (has_supported_jalr) {
+                        ir_block.terminator.link_gpr = transfer_site->decoded.rd;
                         ir_block.terminator.link_pc = transfer_site->pc + 8u;
                     }
                 }
@@ -354,7 +377,9 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                         delay.pc,
                         has_supported_beq
                             ? "SQ in a BEQ delay slot is outside dispatcher v0 scope"
-                            : "SQ in a J/JAL delay slot is outside dispatcher v0 scope");
+                            : (has_supported_j || has_supported_jal)
+                                ? "SQ in a J/JAL delay slot is outside dispatcher v0 scope"
+                                : "SQ in a JR/JALR delay slot is outside dispatcher v0 scope");
                     return result;
                 }
 
