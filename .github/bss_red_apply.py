@@ -1,6 +1,7 @@
 from pathlib import Path
 import subprocess
 
+# Trigger one-shot CMake registration for the RED test.
 path = Path('CMakeLists.txt')
 text = path.read_text(encoding='utf-8')
 needle = '''    add_executable(r5900_block_dispatcher_startup_windows_tests\n      tests/r5900_block_dispatcher_startup_windows_tests.cpp\n    )\n    target_link_libraries(r5900_block_dispatcher_startup_windows_tests PRIVATE\n      b3r_recompiler_dispatcher_x64\n    )\n    add_test(NAME r5900_block_dispatcher_startup_windows_tests COMMAND r5900_block_dispatcher_startup_windows_tests)\n'''
