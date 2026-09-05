@@ -1,3 +1,4 @@
+#include "recompiler/r5900_ir_executor.h"
 #include "recompiler/r5900_ir_validation.h"
 
 #include <cstdlib>
@@ -60,6 +61,18 @@ int main() {
     R5900IrOperand fpr_probe{};
     fpr_probe.kind = R5900IrOperandKind::Fpr;
     fpr_probe.gpr_index = 4u;
+
+    R5900IrExecutionState state_probe{};
+    state_probe.hi = 1u;
+    state_probe.lo = 2u;
+    state_probe.hi1 = 3u;
+    state_probe.lo1 = 4u;
+    state_probe.sa = 5u;
+    state_probe.fpr[0] = 6u;
+    state_probe.fcr31 = 7u;
+    state_probe.fp_acc = 8u;
+    expect(state_probe.gpr[0].low64 == 0u,
+           "appended architectural state must not disturb GPR zero initialization");
     (void)model_probe;
     (void)fpr_probe;
 
