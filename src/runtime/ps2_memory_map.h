@@ -2,6 +2,7 @@
 
 #include "recompiler/ps2_elf.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -10,6 +11,8 @@
 #include <vector>
 
 namespace b3r::runtime {
+
+using Ps2MemoryValue128 = std::array<std::uint64_t, 2>;
 
 enum class Ps2MemoryMapBuildError {
     None = 0,
@@ -42,10 +45,15 @@ public:
     [[nodiscard]] std::optional<std::uint8_t> read_u8(std::uint32_t address) const noexcept;
     [[nodiscard]] std::optional<std::uint16_t> read_u16(std::uint32_t address) const noexcept;
     [[nodiscard]] std::optional<std::uint32_t> read_u32(std::uint32_t address) const noexcept;
+    [[nodiscard]] std::optional<std::uint64_t> read_u64(std::uint32_t address) const noexcept;
+    [[nodiscard]] std::optional<Ps2MemoryValue128> read_u128(std::uint32_t address) const noexcept;
 
     [[nodiscard]] bool write_u8(std::uint32_t address, std::uint8_t value) noexcept;
     [[nodiscard]] bool write_u16(std::uint32_t address, std::uint16_t value) noexcept;
     [[nodiscard]] bool write_u32(std::uint32_t address, std::uint32_t value) noexcept;
+    [[nodiscard]] bool write_u64(std::uint32_t address, std::uint64_t value) noexcept;
+    [[nodiscard]] bool write_u128(std::uint32_t address,
+                                  const Ps2MemoryValue128& value) noexcept;
 
 private:
     struct BackingRegion {
