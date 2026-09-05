@@ -139,7 +139,7 @@ int main() {
 
     {
         const auto elf = parse_or_fail(make_elf({
-            {0x180, 0x00300000, 8, 16, 6, {0, 0, 0, 0, 0, 0, 0, 0}},
+            {0x180, 0x00300000, 8, 32, 6, {0, 0, 0, 0, 0, 0, 0, 0}},
         }));
         auto built = Ps2MemoryMap::from_elf(elf);
         expect(built.ok(), "read/write fixture must map");
@@ -158,8 +158,62 @@ int main() {
         expect((*bytes)[1] == 0xEFu && (*bytes)[2] == 0xCDu, "u16 must be stored little-endian");
         expect((*bytes)[4] == 0x78u && (*bytes)[7] == 0x12u, "u32 must be stored little-endian");
 
-        expect(!memory.read_u32(0x0030000Eu).has_value(), "cross-boundary scalar read must reject");
-        expect(!memory.write_u32(0x0030000Eu, 1u), "cross-boundary scalar write must reject");
+        const Ps2MemoryValue128 original{
+            0x0123456789abcdefull,
+            0xfedcba9876543210ull,
+        };
+        expect(memory.write_u64(0x00300008u, 0x8877665544332211ull),
+               "write_u64 must succeed");
+        expect(memory.read_u64(0x00300008u).value_or(0) == 0x8877665544332211ull,
+               "read_u64 must round-trip little-endian data");
+        expect(memory.write_u128(0x00300010u, original),
+               "write_u128 must succeed for a complete mapped span");
+        const auto loaded = memory.read_u128(0x00300010u);
+        expect(loaded.has_value(), "read_u128 must succeed");
+        expect((*loaded)[0] == original[0] && (*loaded)[1] == original[1],
+               "read_u128 must preserve low/high ordering");
+
+        const auto wide_bytes = memory.translate(0x00300008u, 24u);
+        expect(wide_bytes.has_value(), "wide typed writes must remain translatable");
+        expect((*wide_bytes)[0] == 0x11u && (*wide_bytes)[7] == 0x88u,
+               "u64 must be stored little-endian");
+        expect((*wide_bytes)[8] == 0xefu && (*wide_bytes)[15] == 0x01u,
+               "u128 low64 must be stored first in little-endian order");
+        expect((*wide_bytes)[16] == 0x10u && (*wide_bytes)[23] == 0xfeu,
+               "u128 high64 must follow low64 in little-endian order");
+
+        expect(!memory.read_u32(0x0030001Eu).has_value(), "cross-boundary scalar read must reject");
+        expect(!memory.write_u32(0x0030001Eu, 1u), "cross-boundary scalar write must reject");
+        expect(!memory.read_u64(0x0030001Cu).has_value(), "cross-boundary u64 read must reject");
+        expect(!memory.write_u64(0x0030001Cu, 1u), "cross-boundary u64 write must reject");
+    }
+
+    {
+        const auto elf = parse_or_fail(make_elf({
+            {0x1C0, 0x00400000u, 8u, 24u, 6u, {0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80}},
+        }));
+        auto built = Ps2MemoryMap::from_elf(elf);
+        expect(built.ok(), "atomicity fixture must map");
+        auto& memory = *built.memory;
+
+        auto tail = memory.translate(0x00400010u, 8u);
+        expect(tail.has_value(), "atomicity fixture tail must translate");
+        for (std::size_t index = 0; index < tail->size(); ++index) {
+            (*tail)[index] = static_cast<std::uint8_t>(0xa0u + index);
+        }
+        const std::vector<std::uint8_t> before(tail->begin(), tail->end());
+
+        const Ps2MemoryValue128 replacement{
+            0x1112131415161718ull,
+            0x2122232425262728ull,
+        };
+        expect(!memory.write_u128(0x00400010u, replacement),
+               "write_u128 must reject a partially mapped 16-byte span");
+
+        const auto after = memory.translate(0x00400010u, 8u);
+        expect(after.has_value(), "atomicity fixture tail must remain mapped");
+        expect(std::vector<std::uint8_t>(after->begin(), after->end()) == before,
+               "failed write_u128 must leave every mapped byte unchanged");
     }
 
     std::cout << "ps2_memory_map_tests: PASS\n";
