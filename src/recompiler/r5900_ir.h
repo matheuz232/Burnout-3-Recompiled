@@ -20,6 +20,7 @@ enum class R5900IrOpcode {
     ComputeMtsah,
     MoveBits32,
     AddF32ToAccumulator,
+    Store128,
 };
 
 enum class R5900IrOperandKind {
