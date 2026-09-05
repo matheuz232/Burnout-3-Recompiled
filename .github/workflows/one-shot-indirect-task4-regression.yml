@@ -1,0 +1,28 @@
+name: One-shot indirect task4 regression
+
+on:
+  push:
+    paths:
+      - tools/one_shot_indirect_task4_regression.py
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/r5900-indirect-jump-call-v0
+          fetch-depth: 0
+      - name: Update generic dispatcher regression
+        run: python tools/one_shot_indirect_task4_regression.py
+      - name: Commit regression update
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/r5900_block_dispatcher_windows_tests.cpp
+          git commit -m "test: retire obsolete indirect boundary expectation"
+          git push origin HEAD:feature/r5900-indirect-jump-call-v0
