@@ -1,0 +1,28 @@
+name: One-shot indirect task1 patch
+
+on:
+  push:
+    paths:
+      - tools/one_shot_indirect_task1.py
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/r5900-indirect-jump-call-v0
+          fetch-depth: 0
+      - name: Apply task1 patch
+        run: python tools/one_shot_indirect_task1.py
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CMakeLists.txt src/recompiler/r5900_ir.h src/recompiler/r5900_ir_validation.cpp tests/r5900_direct_transfer_test_support.h tests/r5900_ir_direct_transfer_validation_tests.cpp
+          git commit -m "feat: model R5900 indirect transfer terminators"
+          git push origin HEAD:feature/r5900-indirect-jump-call-v0
