@@ -237,9 +237,9 @@ int main() {
     }
 
     {
-        const auto beq = i_type(0x04, 1, 2, 1u);
+        const auto beq = i_type(0x04, 1, 2, 2u);
         const auto delay = i_type(0x09, 3, 3, 1u);
-        auto memory = make_memory({beq, delay, 0u}, base);
+        auto memory = make_memory({beq, delay, 0u, 0u}, base);
         R5900BlockDispatcher dispatcher(memory);
         R5900IrExecutionState state{};
         state.gpr[1].low64 = 5u;
