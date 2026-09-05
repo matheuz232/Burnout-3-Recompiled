@@ -79,7 +79,6 @@ int main() {
                "invalid delay opcode must propagate UnsupportedOpcode");
     }
 
-    // Task 1 RED: these symbols intentionally do not exist yet.
     {
         R5900IrBlock indirect{};
         indirect.terminator.guest_pc = 0x00106400u;
@@ -95,6 +94,23 @@ int main() {
         indirect.terminator.link_gpr = 9u;
         expect(validate_r5900_ir_block(indirect).ok(),
                "valid IndirectCall must validate");
+    }
+
+    // Task 1 RED: branch-likely terminators intentionally do not exist yet.
+    {
+        R5900IrBlock likely{};
+        likely.terminator.guest_pc = 0x00106600u;
+        likely.terminator.kind = R5900IrTerminatorKind::BranchEqualLikely64;
+        likely.terminator.inputs = {gpr(4u), gpr(5u)};
+        likely.terminator.taken_pc = 0x00106700u;
+        likely.terminator.fallthrough_pc = 0x00106608u;
+        likely.terminator.delay_slot = {nop(0x00106604u)};
+        expect(validate_r5900_ir_block(likely).ok(),
+               "valid BranchEqualLikely64 must validate");
+
+        likely.terminator.kind = R5900IrTerminatorKind::BranchNotEqualLikely64;
+        expect(validate_r5900_ir_block(likely).ok(),
+               "valid BranchNotEqualLikely64 must validate");
     }
 
     std::cout << "r5900_ir_direct_transfer_validation_tests: PASS\n";
