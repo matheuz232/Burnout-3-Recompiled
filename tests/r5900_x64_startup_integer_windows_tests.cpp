@@ -50,6 +50,34 @@ R5900IrInstruction make_ir(R5900IrOpcode opcode,
     return ir;
 }
 
+R5900IrInstruction addiu(std::uint8_t rt,
+                         std::uint8_t rs,
+                         std::int16_t imm,
+                         std::uint32_t pc) {
+    return make_ir(
+        R5900IrOpcode::AddWordSignExtend,
+        {R5900IrDestinationKind::Gpr, rt},
+        R5900IrGprWriteMode::Low64PreserveUpper64,
+        {gpr(rs), immediate(imm)},
+        pc);
+}
+
+R5900IrBlock beq_block(std::uint32_t pc,
+                       std::uint8_t rs,
+                       std::uint8_t rt,
+                       std::uint32_t taken_pc,
+                       std::uint32_t fallthrough_pc,
+                       R5900IrInstruction delay) {
+    R5900IrBlock block{};
+    block.terminator.guest_pc = pc;
+    block.terminator.kind = R5900IrTerminatorKind::BranchEqual64;
+    block.terminator.inputs = {gpr(rs), gpr(rt)};
+    block.terminator.taken_pc = taken_pc;
+    block.terminator.fallthrough_pc = fallthrough_pc;
+    block.terminator.delay_slot = {delay};
+    return block;
+}
+
 R5900IrGprValue packed_u32(std::uint32_t lane0,
                            std::uint32_t lane1,
                            std::uint32_t lane2,
@@ -174,6 +202,32 @@ int main() {
     expect(next_pc == program.back().guest_pc + 4u,
            "vector x64 compile must return sequential fallthrough PC");
     expect_states_equal(expected, actual);
+
+    {
+        R5900IrExecutionState beq_initial{};
+        beq_initial.gpr[1] = {5u, 0x1111111111111111ull};
+        beq_initial.gpr[2] = {5u, 0x2222222222222222ull};
+        const auto block = beq_block(
+            0x00104100u,
+            1u,
+            2u,
+            0x00104140u,
+            0x00104108u,
+            addiu(1u, 1u, 1, 0x00104104u));
+
+        auto expected_state = beq_initial;
+        auto actual_state = beq_initial;
+        const auto expected_result = execute_r5900_ir_block(block, expected_state);
+        expect(expected_result.ok(), "reference BEQ block must execute");
+
+        auto native = compile_r5900_ir_x64(block);
+        expect(native.ok() && native.block.has_value(),
+               "x64 backend must compile BEQ block");
+        const auto native_next_pc = native.block->execute(actual_state);
+        expect(native_next_pc == expected_result.next_pc,
+               "native BEQ must return reference next_pc");
+        expect_states_equal(expected_state, actual_state);
+    }
 
     std::cout << "r5900_x64_startup_integer_windows_tests: PASS\n";
     return EXIT_SUCCESS;
