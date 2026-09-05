@@ -12,6 +12,16 @@ void normalize_zero(R5900IrExecutionState& state) {
     state.gpr[0] = {};
 }
 
+void reset_memory_status(R5900IrExecutionContext& context) noexcept {
+    context.memory_fault = {};
+    context.current_memory_guest_pc = 0u;
+}
+
+R5900IrExecutionResult invalid_context_failure() {
+    return {R5900IrExecutionError::MalformedInstruction,
+            "R5900 execution context has no CPU state"};
+}
+
 R5900IrExecutionResult map_validation_failure(const R5900IrValidationResult& validation) {
     switch (validation.error) {
     case R5900IrValidationError::MalformedInstruction:
@@ -79,11 +89,14 @@ std::uint32_t saturating_add_u32(std::uint32_t lhs, std::uint32_t rhs) {
     return sum > 0xffffffffull ? 0xffffffffu : static_cast<std::uint32_t>(sum);
 }
 
-} // namespace
+R5900IrExecutionResult execute_ir_sequence(
+    const std::vector<R5900IrInstruction>& instructions,
+    R5900IrExecutionContext& context) {
+    if (context.state == nullptr) {
+        return invalid_context_failure();
+    }
 
-R5900IrExecutionResult
-execute_r5900_ir(const std::vector<R5900IrInstruction>& instructions,
-                 R5900IrExecutionState& state) {
+    auto& state = *context.state;
     normalize_zero(state);
 
     for (std::size_t index = 0; index < instructions.size(); ++index) {
@@ -198,8 +211,42 @@ execute_r5900_ir(const std::vector<R5900IrInstruction>& instructions,
             break;
         }
 
-        default:
+        case R5900IrOpcode::Store128: {
+            const auto base = static_cast<std::uint32_t>(
+                state.gpr[ir.inputs[0].gpr_index].low64);
+            const auto offset = static_cast<std::uint32_t>(
+                static_cast<std::int32_t>(ir.inputs[2].immediate));
+            const auto address =
+                static_cast<std::uint32_t>(base + offset) & 0xfffffff0u;
+            const auto source = state.gpr[ir.inputs[1].gpr_index];
+
+            context.current_memory_guest_pc = ir.guest_pc;
+            const bool available = context.memory.user != nullptr &&
+                                   context.memory.write128 != nullptr;
+            const bool written = available &&
+                context.memory.write128(context.memory.user,
+                                        address,
+                                        source.low64,
+                                        source.high64);
+            if (!written) {
+                context.memory_fault = {
+                    true,
+                    R5900IrMemoryAccessKind::Store,
+                    ir.guest_pc,
+                    address,
+                    16u,
+                };
+                normalize_zero(state);
+                return {R5900IrExecutionError::MemoryAccessFailure,
+                        "R5900 Store128 guest-memory write failed"};
+            }
             break;
+        }
+
+        default:
+            normalize_zero(state);
+            return {R5900IrExecutionError::UnsupportedOpcode,
+                    "unsupported R5900 IR execution opcode"};
         }
     }
 
@@ -207,19 +254,43 @@ execute_r5900_ir(const std::vector<R5900IrInstruction>& instructions,
     return {};
 }
 
+} // namespace
+
+R5900IrExecutionResult
+execute_r5900_ir(const std::vector<R5900IrInstruction>& instructions,
+                 R5900IrExecutionContext& context) {
+    reset_memory_status(context);
+    return execute_ir_sequence(instructions, context);
+}
+
+R5900IrExecutionResult
+execute_r5900_ir(const std::vector<R5900IrInstruction>& instructions,
+                 R5900IrExecutionState& state) {
+    R5900IrExecutionContext context{};
+    context.state = &state;
+    return execute_r5900_ir(instructions, context);
+}
+
 R5900IrBlockExecutionResult
 execute_r5900_ir_block(const R5900IrBlock& block,
-                       R5900IrExecutionState& state) {
+                       R5900IrExecutionContext& context) {
+    reset_memory_status(context);
+    if (context.state == nullptr) {
+        const auto failure = invalid_context_failure();
+        return map_block_execution_failure(failure);
+    }
+
     const auto validation = validate_r5900_ir_block(block);
     if (!validation.ok()) {
         return map_block_validation_failure(validation);
     }
 
-    const auto body_result = execute_r5900_ir(block.body, state);
+    const auto body_result = execute_ir_sequence(block.body, context);
     if (!body_result.ok()) {
         return map_block_execution_failure(body_result);
     }
 
+    auto& state = *context.state;
     switch (block.terminator.kind) {
     case R5900IrTerminatorKind::Fallthrough:
         return {R5900IrExecutionError::None,
@@ -231,7 +302,8 @@ execute_r5900_ir_block(const R5900IrBlock& block,
             state.gpr[block.terminator.inputs[0].gpr_index].low64 ==
             state.gpr[block.terminator.inputs[1].gpr_index].low64;
 
-        const auto delay_result = execute_r5900_ir(block.terminator.delay_slot, state);
+        const auto delay_result =
+            execute_ir_sequence(block.terminator.delay_slot, context);
         if (!delay_result.ok()) {
             return map_block_execution_failure(delay_result);
         }
@@ -247,6 +319,14 @@ execute_r5900_ir_block(const R5900IrBlock& block,
                 "unsupported R5900 block terminator",
                 0u};
     }
+}
+
+R5900IrBlockExecutionResult
+execute_r5900_ir_block(const R5900IrBlock& block,
+                       R5900IrExecutionState& state) {
+    R5900IrExecutionContext context{};
+    context.state = &state;
+    return execute_r5900_ir_block(block, context);
 }
 
 } // namespace b3r::recompiler
