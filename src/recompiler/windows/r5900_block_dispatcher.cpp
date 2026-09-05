@@ -385,8 +385,8 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                     result.message = format_stage_error(
                         "lowering",
                         delay.pc,
-                        has_supported_beq
-                            ? "SQ in a BEQ delay slot is outside dispatcher v0 scope"
+                        (has_supported_beq || has_supported_bne)
+                            ? "SQ in a BEQ/BNE delay slot is outside dispatcher v0 scope"
                             : (has_supported_j || has_supported_jal)
                                 ? "SQ in a J/JAL delay slot is outside dispatcher v0 scope"
                                 : "SQ in a JR/JALR delay slot is outside dispatcher v0 scope");
