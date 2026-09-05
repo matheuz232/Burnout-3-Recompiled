@@ -35,6 +35,19 @@ void expect_states_equal(const b3r::recompiler::R5900IrExecutionState& expected,
             fail(message);
         }
     }
+    if (expected.hi != actual.hi || expected.lo != actual.lo ||
+        expected.hi1 != actual.hi1 || expected.lo1 != actual.lo1 ||
+        expected.sa != actual.sa) {
+        fail(message);
+    }
+    for (std::size_t index = 0; index < expected.fpr.size(); ++index) {
+        if (expected.fpr[index] != actual.fpr[index]) {
+            fail(message);
+        }
+    }
+    if (expected.fcr31 != actual.fcr31 || expected.fp_acc != actual.fp_acc) {
+        fail(message);
+    }
 }
 
 void put_u16(Bytes& bytes, std::size_t offset, std::uint16_t value) {
@@ -118,6 +131,28 @@ constexpr std::uint32_t i_type(std::uint8_t op,
 constexpr std::uint32_t j_type(std::uint8_t op, std::uint32_t target) {
     return (static_cast<std::uint32_t>(op) << 26u) |
            ((target >> 2u) & 0x03ffffffu);
+}
+
+b3r::recompiler::R5900IrExecutionState make_sentinel_state() {
+    b3r::recompiler::R5900IrExecutionState state{};
+    for (std::size_t index = 0; index < state.gpr.size(); ++index) {
+        state.gpr[index].low64 =
+            0x0101010101010101ull * static_cast<std::uint64_t>(index + 1u);
+        state.gpr[index].high64 =
+            0xf000000000000000ull | static_cast<std::uint64_t>(index);
+    }
+    state.gpr[0] = {};
+    state.hi = 0x1111222233334444ull;
+    state.lo = 0x5555666677778888ull;
+    state.hi1 = 0x9999aaaabbbbccccull;
+    state.lo1 = 0xddddeeeeffff0001ull;
+    state.sa = 0x12u;
+    for (std::size_t index = 0; index < state.fpr.size(); ++index) {
+        state.fpr[index] = 0x3f000000u + static_cast<std::uint32_t>(index);
+    }
+    state.fcr31 = 0xa5a5c3c3u;
+    state.fp_acc = 0x3f800000u;
+    return state;
 }
 
 } // namespace
@@ -370,6 +405,157 @@ int main() {
     }
 
     {
+        const auto beq = i_type(0x04, 1, 2, 2u);
+        const auto delay = i_type(0x09, 3, 3, 1u);
+        auto memory = make_memory({beq, delay, 0u, 0u}, base);
+        R5900BlockDispatcher dispatcher(memory);
+
+        R5900IrExecutionState taken{};
+        taken.gpr[1].low64 = 7u;
+        taken.gpr[2].low64 = 7u;
+        const auto first = dispatcher.run(base, taken, 1u);
+        expect(first.cache_misses == 1u && first.cache_hits == 0u &&
+                   first.recompilations == 0u,
+               "first BEQ native block must compile as one cache miss");
+        expect(first.next_pc == base + 12u && taken.gpr[3].low64 == 1u,
+               "first cached BEQ execution must take branch and execute delay");
+
+        R5900IrExecutionState not_taken{};
+        not_taken.gpr[1].low64 = 7u;
+        not_taken.gpr[2].low64 = 8u;
+        const auto second = dispatcher.run(base, not_taken, 1u);
+        expect(second.cache_hits == 1u && second.cache_misses == 0u &&
+                   second.recompilations == 0u,
+               "same BEQ guest words must reuse cached native code");
+        expect(second.next_pc == base + 8u && not_taken.gpr[3].low64 == 1u,
+               "cached BEQ must resolve a different runtime outcome without recompiling");
+    }
+
+    {
+        const auto body_one = i_type(0x09, 0, 5, 1u);
+        const auto body_two = i_type(0x09, 0, 5, 2u);
+        const auto beq = i_type(0x04, 1, 2, 2u);
+        const auto delay = i_type(0x09, 3, 3, 1u);
+        auto memory = make_memory({body_one, beq, delay, 0u, 0u}, base);
+        R5900BlockDispatcher dispatcher(memory);
+
+        R5900IrExecutionState first_state{};
+        first_state.gpr[1].low64 = 4u;
+        first_state.gpr[2].low64 = 4u;
+        const auto first = dispatcher.run(base, first_state, 1u);
+        expect(first.cache_misses == 1u && first_state.gpr[5].low64 == 1u,
+               "BEQ block with body must compile and execute original body");
+
+        expect(memory.write_u32(base, body_two),
+               "BEQ body mutation must succeed");
+        R5900IrExecutionState second_state{};
+        second_state.gpr[1].low64 = 4u;
+        second_state.gpr[2].low64 = 4u;
+        const auto second = dispatcher.run(base, second_state, 1u);
+        expect(second.recompilations == 1u && second.cache_hits == 0u &&
+                   second.cache_misses == 0u,
+               "changed BEQ body word must invalidate cached native block");
+        expect(second_state.gpr[5].low64 == 2u,
+               "recompiled BEQ block must execute mutated body");
+    }
+
+    {
+        const auto beq_two = i_type(0x04, 1, 2, 2u);
+        const auto beq_three = i_type(0x04, 1, 2, 3u);
+        const auto delay = i_type(0x09, 3, 3, 1u);
+        auto memory = make_memory({beq_two, delay, 0u, 0u, 0u}, base);
+        R5900BlockDispatcher dispatcher(memory);
+
+        R5900IrExecutionState first_state{};
+        first_state.gpr[1].low64 = 9u;
+        first_state.gpr[2].low64 = 9u;
+        const auto first = dispatcher.run(base, first_state, 1u);
+        expect(first.next_pc == base + 12u && first.cache_misses == 1u,
+               "original BEQ encoding must compile with original target");
+
+        expect(memory.write_u32(base, beq_three),
+               "BEQ terminator mutation must succeed");
+        R5900IrExecutionState second_state{};
+        second_state.gpr[1].low64 = 9u;
+        second_state.gpr[2].low64 = 9u;
+        const auto second = dispatcher.run(base, second_state, 1u);
+        expect(second.recompilations == 1u && second.cache_hits == 0u &&
+                   second.next_pc == base + 16u,
+               "changed BEQ word must recompile and update native target");
+    }
+
+    {
+        const auto beq = i_type(0x04, 1, 2, 2u);
+        const auto delay_one = i_type(0x09, 3, 3, 1u);
+        const auto delay_two = i_type(0x09, 3, 3, 2u);
+        auto memory = make_memory({beq, delay_one, 0u, 0u}, base);
+        R5900BlockDispatcher dispatcher(memory);
+
+        R5900IrExecutionState first_state{};
+        first_state.gpr[1].low64 = 6u;
+        first_state.gpr[2].low64 = 6u;
+        const auto first = dispatcher.run(base, first_state, 1u);
+        expect(first.cache_misses == 1u && first_state.gpr[3].low64 == 1u,
+               "original BEQ delay must compile and execute");
+
+        expect(memory.write_u32(base + 4u, delay_two),
+               "BEQ delay mutation must succeed");
+        R5900IrExecutionState second_state{};
+        second_state.gpr[1].low64 = 6u;
+        second_state.gpr[2].low64 = 6u;
+        const auto second = dispatcher.run(base, second_state, 1u);
+        expect(second.recompilations == 1u && second.cache_hits == 0u &&
+                   second_state.gpr[3].low64 == 2u,
+               "changed delay word must invalidate and replace cached BEQ block");
+    }
+
+    {
+        const auto body = i_type(0x09, 5, 5, 1u);
+        const auto beq = i_type(0x04, 1, 2, 2u);
+        const auto good_delay = i_type(0x09, 3, 3, 1u);
+        const auto unsupported_delay = i_type(0x0e, 3, 3, 0x00ffu);
+        auto memory = make_memory({body, beq, good_delay, 0u, 0u}, base);
+        R5900BlockDispatcher dispatcher(memory);
+
+        auto warm_state = make_sentinel_state();
+        warm_state.gpr[1].low64 = 10u;
+        warm_state.gpr[2].low64 = 10u;
+        const auto warm = dispatcher.run(base, warm_state, 1u);
+        expect(warm.cache_misses == 1u && dispatcher.cache_size() == 1u,
+               "atomicity fixture must warm exactly one cached BEQ block");
+
+        expect(memory.write_u32(base + 8u, unsupported_delay),
+               "unsupported delay mutation must succeed");
+        auto state = make_sentinel_state();
+        state.gpr[1].low64 = 10u;
+        state.gpr[2].low64 = 10u;
+        const auto before = state;
+        const auto cache_size_before = dispatcher.cache_size();
+        const auto result = dispatcher.run(base, state, 1u);
+        expect(result.reason == R5900DispatchStopReason::LoweringFailure,
+               "unsupported BEQ delay must fail during lowering");
+        expect(result.next_pc == base + 8u && result.blocks_executed == 0u &&
+                   result.instructions_executed == 0u,
+               "delay lowering failure must commit zero guest progress");
+        expect(result.cache_hits == 0u && result.cache_misses == 0u &&
+                   result.recompilations == 0u,
+               "failed candidate must not commit cache accounting");
+        expect(dispatcher.cache_size() == cache_size_before,
+               "failed delay lowering must preserve prior cache entry");
+        expect_states_equal(before, state,
+                            "failed delay lowering must preserve full architectural state");
+
+        expect(memory.write_u32(base + 8u, good_delay),
+               "restoring supported delay must succeed");
+        auto restored_state = make_sentinel_state();
+        restored_state.gpr[1].low64 = 10u;
+        restored_state.gpr[2].low64 = 10u;
+        const auto restored = dispatcher.run(base, restored_state, 1u);
+        expect(restored.cache_hits == 1u && restored.recompilations == 0u,
+               "restored original guest words must reuse preserved cached block");
+    }
+
+    {
         R5900BlockDispatcherOptions options{};
         options.block_options.max_instructions = 1u;
         const auto addiu_one = i_type(0x09, 0, 1, 1u);
@@ -458,7 +644,7 @@ int main() {
                    result.blocks_executed == 1u && result.instructions_executed == words.size(),
                "differential block must execute exactly once");
         expect_states_equal(expected, actual,
-                            "dispatcher native state must match reference executor for all GPR halves");
+                            "dispatcher native state must match reference executor for full state");
     }
 
     {
