@@ -12,6 +12,13 @@ R5900IrOperand gpr(std::uint8_t index) {
     return operand;
 }
 
+R5900IrOperand fpr(std::uint8_t index) {
+    R5900IrOperand operand{};
+    operand.kind = R5900IrOperandKind::Fpr;
+    operand.gpr_index = index;
+    return operand;
+}
+
 R5900IrOperand immediate(std::int64_t value) {
     R5900IrOperand operand{};
     operand.kind = R5900IrOperandKind::Immediate;
@@ -33,6 +40,18 @@ R5900IrLoweringResult discarded_gpr_zero_write(const R5900DecodedInstruction& de
                                                 std::uint32_t guest_pc) {
     R5900IrLoweringResult result{};
     result.instructions.push_back(base_instruction(decoded, guest_pc, R5900IrOpcode::Nop));
+    return result;
+}
+
+R5900IrLoweringResult unsupported_lowering(const R5900DecodedInstruction& decoded,
+                                           std::string detail = {}) {
+    R5900IrLoweringResult result{};
+    result.error = R5900IrLoweringError::UnsupportedInstruction;
+    result.message = std::string("unsupported R5900 IR lowering: ") +
+                     r5900_instruction_name(decoded.instruction);
+    if (!detail.empty()) {
+        result.message += " (" + detail + ")";
+    }
     return result;
 }
 
@@ -182,10 +201,37 @@ lower_r5900_instruction(const R5900DecodedInstruction& decoded, std::uint32_t gu
         return result;
     }
 
-    default:
-        result.error = R5900IrLoweringError::UnsupportedInstruction;
-        result.message = std::string("unsupported R5900 IR lowering: ") + r5900_instruction_name(decoded.instruction);
+    case R5900Instruction::Mtc1: {
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::MoveBits32);
+        set_destination(ir, R5900IrDestinationKind::Fpr, decoded.rd);
+        ir.inputs.push_back(gpr(decoded.rt));
+        result.instructions.push_back(ir);
         return result;
+    }
+
+    case R5900Instruction::Ctc1: {
+        if (decoded.rd != 31u) {
+            return unsupported_lowering(decoded, "only FCR31 is supported by startup execution v0");
+        }
+
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::MoveBits32);
+        set_destination(ir, R5900IrDestinationKind::Fcr31);
+        ir.inputs.push_back(gpr(decoded.rt));
+        result.instructions.push_back(ir);
+        return result;
+    }
+
+    case R5900Instruction::AddaS: {
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::AddF32ToAccumulator);
+        set_destination(ir, R5900IrDestinationKind::FpAccumulator);
+        ir.inputs.push_back(fpr(decoded.rd));
+        ir.inputs.push_back(fpr(decoded.rt));
+        result.instructions.push_back(ir);
+        return result;
+    }
+
+    default:
+        return unsupported_lowering(decoded);
     }
 }
 
