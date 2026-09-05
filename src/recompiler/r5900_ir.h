@@ -81,6 +81,26 @@ struct R5900IrInstruction {
     std::vector<R5900IrOperand> inputs{};
 };
 
+enum class R5900IrTerminatorKind {
+    Fallthrough = 0,
+    BranchEqual64,
+};
+
+struct R5900IrTerminator {
+    std::uint32_t guest_pc{};
+    std::uint32_t guest_raw{};
+    R5900IrTerminatorKind kind{R5900IrTerminatorKind::Fallthrough};
+    std::vector<R5900IrOperand> inputs{};
+    std::uint32_t taken_pc{};
+    std::uint32_t fallthrough_pc{};
+    std::vector<R5900IrInstruction> delay_slot{};
+};
+
+struct R5900IrBlock {
+    std::vector<R5900IrInstruction> body{};
+    R5900IrTerminator terminator{};
+};
+
 enum class R5900IrLoweringError {
     None = 0,
     UnsupportedInstruction,
