@@ -339,6 +339,22 @@ execute_r5900_ir_block(const R5900IrBlock& block,
                 block.terminator.target_pc};
     }
 
+    case R5900IrTerminatorKind::IndirectJump:
+    case R5900IrTerminatorKind::IndirectCall: {
+        // Capture the guest address after the body, before either the link or
+        // delay can overwrite the source (including JALR rd == rs).
+        const auto target = static_cast<std::uint32_t>(
+            state.gpr[block.terminator.inputs.front().gpr_index].low64);
+        if (block.terminator.kind == R5900IrTerminatorKind::IndirectCall &&
+            *block.terminator.link_gpr != 0u) {
+            state.gpr[*block.terminator.link_gpr].low64 = block.terminator.link_pc;
+        }
+        normalize_zero(state);
+        const auto delay_result = execute_ir_sequence(block.terminator.delay_slot, context);
+        if (!delay_result.ok()) return map_block_execution_failure(delay_result);
+        return {R5900IrExecutionError::None, {}, target};
+    }
+
     default:
         return {R5900IrExecutionError::UnsupportedOpcode,
                 "unsupported R5900 block terminator",

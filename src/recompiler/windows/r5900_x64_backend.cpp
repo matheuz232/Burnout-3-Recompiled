@@ -873,6 +873,35 @@ PendingX64Code compile_direct_transfer_code(const R5900IrBlock& block) {
     return publish_code(bytes);
 }
 
+PendingX64Code compile_indirect_transfer_code(const R5900IrBlock& block) {
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(192u + block.body.size() * 128u);
+    // Reuse the aligned Win64 helper frame. The target local at +0x30 is
+    // outside shadow space and the saved state/context pointers.
+    emit_helper_frame_prologue(bytes);
+    emit_zero_gpr0(bytes);
+    const auto body = emit_ir_sequence(bytes, block.body, 0u, true);
+    if (!body.ok()) return pending_failure(body.error, body.message);
+
+    emit_load_eax_from_state(bytes,
+        gpr_low64_offset(block.terminator.inputs.front().gpr_index));
+    bytes.insert(bytes.end(), {0x89u, 0x44u, 0x24u, 0x30u}); // mov [rsp+0x30], eax
+    if (block.terminator.kind == R5900IrTerminatorKind::IndirectCall &&
+        *block.terminator.link_gpr != 0u) {
+        emit_mov_eax_imm32(bytes, block.terminator.link_pc);
+        emit_store_rax_to_state(bytes, gpr_low64_offset(*block.terminator.link_gpr));
+    }
+    emit_zero_gpr0(bytes);
+    const auto delay = emit_ir_sequence(bytes, block.terminator.delay_slot,
+                                        block.body.size() + 1u, true);
+    if (!delay.ok()) return pending_failure(delay.error, delay.message);
+    emit_zero_gpr0(bytes);
+    bytes.insert(bytes.end(), {0x8bu, 0x44u, 0x24u, 0x30u}); // mov eax, [rsp+0x30]
+    emit_helper_frame_epilogue(bytes);
+    bytes.push_back(0xc3u);
+    return publish_code(bytes);
+}
+
 } // namespace
 
 R5900X64CompiledBlock::R5900X64CompiledBlock(void* code,
@@ -981,6 +1010,10 @@ R5900X64CompileResult compile_r5900_ir_x64(const R5900IrBlock& block) {
     case R5900IrTerminatorKind::DirectJump:
     case R5900IrTerminatorKind::DirectCall:
         pending = compile_direct_transfer_code(block);
+        break;
+    case R5900IrTerminatorKind::IndirectJump:
+    case R5900IrTerminatorKind::IndirectCall:
+        pending = compile_indirect_transfer_code(block);
         break;
     default:
         return failure(R5900X64CompileError::UnsupportedOpcode,

@@ -459,6 +459,12 @@ R5900IrValidationResult validate_r5900_ir_block(const R5900IrBlock& block) {
 
     const auto& terminator = block.terminator;
     const auto terminator_index = block.body.size();
+    if (terminator.link_gpr.has_value() &&
+        terminator.kind != R5900IrTerminatorKind::IndirectCall) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       terminator_index, terminator.guest_pc,
+                       "only an indirect call may name a link GPR");
+    }
     if ((terminator.guest_pc & 0x3u) != 0u) {
         return failure(R5900IrValidationError::MalformedInstruction,
                        terminator_index,
@@ -530,6 +536,38 @@ R5900IrValidationResult validate_r5900_ir_block(const R5900IrBlock& block) {
                            "malformed direct-call terminator");
         }
         return validate_single_delay_slot(terminator, terminator_index);
+
+    case R5900IrTerminatorKind::IndirectJump:
+    case R5900IrTerminatorKind::IndirectCall: {
+        const bool is_call = terminator.kind == R5900IrTerminatorKind::IndirectCall;
+        if (terminator.inputs.size() != 1u ||
+            terminator.inputs.front().kind != R5900IrOperandKind::Gpr ||
+            terminator.taken_pc != 0u || terminator.fallthrough_pc != 0u ||
+            terminator.target_pc != 0u ||
+            (is_call ? (!terminator.link_gpr.has_value() ||
+                        terminator.link_pc != terminator.guest_pc + 8u)
+                     : terminator.link_pc != 0u)) {
+            return failure(R5900IrValidationError::MalformedInstruction,
+                           terminator_index, terminator.guest_pc,
+                           "malformed indirect-transfer terminator");
+        }
+        const auto source = validate_operand(terminator.inputs.front(),
+                                             terminator_index, terminator.guest_pc);
+        if (!source.ok()) return source;
+        if (is_call && *terminator.link_gpr >= 32u) {
+            return failure(R5900IrValidationError::InvalidRegister,
+                           terminator_index, terminator.guest_pc,
+                           "invalid indirect-call link GPR");
+        }
+        const auto delay = validate_single_delay_slot(terminator, terminator_index);
+        if (!delay.ok()) return delay;
+        if (terminator.delay_slot.front().opcode == R5900IrOpcode::Store128) {
+            return failure(R5900IrValidationError::UnsupportedOpcode,
+                           terminator_index, terminator.delay_slot.front().guest_pc,
+                           "SQ in an indirect-transfer delay slot is outside v0 scope");
+        }
+        return {};
+    }
 
     default:
         return failure(R5900IrValidationError::UnsupportedOpcode,

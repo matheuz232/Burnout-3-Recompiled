@@ -302,18 +302,19 @@ int main() {
             auto memory = make_memory({prefix, terminator, delay}, base);
             R5900BlockDispatcher dispatcher(memory);
             R5900IrExecutionState state{};
+            state.gpr[31].low64 = base + 0x20u;
 
             const auto result = dispatcher.run(base, state, 1u);
-            expect(result.reason == R5900DispatchStopReason::ControlFlow,
-                   "supported prefix must stop before unsupported indirect control-flow terminator");
-            expect(result.next_pc == base + 4u,
-                   "control-flow boundary PC must be exact");
-            expect(result.blocks_executed == 1u && result.instructions_executed == 1u,
-                   "only straight-line prefix must execute");
+            expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+                   "supported prefix and indirect transfer must execute");
+            expect(result.next_pc == base + 0x20u,
+                   "indirect next PC must be exact");
+            expect(result.blocks_executed == 1u && result.instructions_executed == 3u,
+                   "body, transfer and delay must be counted");
             expect(state.gpr[1].low64 == 7u,
-                   "straight-line prefix must execute before control-flow stop");
-            expect(state.gpr[2].low64 == 0u,
-                   "unsupported control-flow delay slot must not execute");
+                   "straight-line prefix must execute before indirect transfer");
+            expect(state.gpr[2].low64 == 9u,
+                   "indirect control-flow delay slot must execute");
         }
     }
 

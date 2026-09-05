@@ -87,6 +87,8 @@ enum class R5900IrTerminatorKind {
     BranchEqual64,
     DirectJump,
     DirectCall,
+    IndirectJump,
+    IndirectCall,
 };
 
 struct R5900IrTerminator {
@@ -99,6 +101,8 @@ struct R5900IrTerminator {
     std::uint32_t target_pc{};
     std::uint32_t link_pc{};
     std::vector<R5900IrInstruction> delay_slot{};
+    // Only IndirectCall names a link GPR; DirectCall retains its fixed r31.
+    std::optional<std::uint8_t> link_gpr{};
 };
 
 struct R5900IrBlock {
