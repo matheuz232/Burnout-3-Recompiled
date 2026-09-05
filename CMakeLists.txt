@@ -185,6 +185,10 @@ if(B3R_BUILD_TESTS)
   target_link_libraries(r5900_ir_tests PRIVATE b3r_recompiler)
   add_test(NAME r5900_ir_tests COMMAND r5900_ir_tests)
 
+  add_executable(r5900_ir_store128_tests tests/r5900_ir_store128_tests.cpp)
+  target_link_libraries(r5900_ir_store128_tests PRIVATE b3r_recompiler)
+  add_test(NAME r5900_ir_store128_tests COMMAND r5900_ir_store128_tests)
+
   add_executable(r5900_ir_executor_tests tests/r5900_ir_executor_tests.cpp)
   target_link_libraries(r5900_ir_executor_tests PRIVATE b3r_recompiler)
   add_test(NAME r5900_ir_executor_tests COMMAND r5900_ir_executor_tests)
