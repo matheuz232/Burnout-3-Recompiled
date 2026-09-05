@@ -339,6 +339,34 @@ execute_r5900_ir_block(const R5900IrBlock& block,
                 block.terminator.target_pc};
     }
 
+    case R5900IrTerminatorKind::IndirectJump: {
+        const auto target = static_cast<std::uint32_t>(
+            state.gpr[block.terminator.inputs[0].gpr_index].low64);
+        const auto delay_result =
+            execute_ir_sequence(block.terminator.delay_slot, context);
+        if (!delay_result.ok()) {
+            return map_block_execution_failure(delay_result);
+        }
+        return {R5900IrExecutionError::None, {}, target};
+    }
+
+    case R5900IrTerminatorKind::IndirectCall: {
+        const auto target = static_cast<std::uint32_t>(
+            state.gpr[block.terminator.inputs[0].gpr_index].low64);
+        const auto link_gpr = block.terminator.link_gpr;
+        if (link_gpr != 0u) {
+            state.gpr[link_gpr].low64 =
+                static_cast<std::uint64_t>(block.terminator.link_pc);
+        }
+        normalize_zero(state);
+        const auto delay_result =
+            execute_ir_sequence(block.terminator.delay_slot, context);
+        if (!delay_result.ok()) {
+            return map_block_execution_failure(delay_result);
+        }
+        return {R5900IrExecutionError::None, {}, target};
+    }
+
     default:
         return {R5900IrExecutionError::UnsupportedOpcode,
                 "unsupported R5900 block terminator",

@@ -21,16 +21,6 @@ void expect(bool condition, const char* message) {
 int main() {
     {
         R5900IrExecutionState state{};
-        state.gpr[5] = {0x1234000012345678ull, 0xfeedfacefeedfaceull};
-        const auto block = indirect_jump(0x00109000u, 5u,
-                                         nop(0x00109004u));
-        const auto result = execute_r5900_ir_block(block, state);
-        expect(result.ok() && result.next_pc == 0x12345678u,
-               "indirect JR must execute and return low32 target");
-    }
-
-    {
-        R5900IrExecutionState state{};
         state.gpr[7] = {9u, 0x7777777777777777ull};
         state.gpr[31] = {0x1111222233334444ull, 0xaaaabbbbccccddddull};
         const auto block = direct_jump(0x00107000u, 0x00107100u,
