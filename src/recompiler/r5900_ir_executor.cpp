@@ -1,6 +1,7 @@
 #include "recompiler/r5900_ir_executor.h"
 #include "recompiler/r5900_ir_validation.h"
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 
@@ -165,6 +166,24 @@ execute_r5900_ir(const std::vector<R5900IrInstruction>& instructions,
             if (ir.destination->index != 0u) {
                 state.gpr[ir.destination->index] = result;
             }
+            break;
+        }
+
+        case R5900IrOpcode::MoveBits32: {
+            const auto raw = static_cast<std::uint32_t>(
+                state.gpr[ir.inputs[0].gpr_index].low64);
+            if (ir.destination->kind == R5900IrDestinationKind::Fpr) {
+                state.fpr[ir.destination->index] = raw;
+            } else {
+                state.fcr31 = raw;
+            }
+            break;
+        }
+
+        case R5900IrOpcode::AddF32ToAccumulator: {
+            const auto lhs = std::bit_cast<float>(state.fpr[ir.inputs[0].gpr_index]);
+            const auto rhs = std::bit_cast<float>(state.fpr[ir.inputs[1].gpr_index]);
+            state.fp_acc = std::bit_cast<std::uint32_t>(lhs + rhs);
             break;
         }
 
