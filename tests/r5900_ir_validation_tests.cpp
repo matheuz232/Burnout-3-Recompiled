@@ -109,7 +109,6 @@ int main() {
         R5900IrOpcode::AddWordSignExtend, 8, gpr(9), gpr(10), 0x00102008u);
     expect(validate_r5900_ir_instruction(valid_add, 2).ok(), "valid AddWordSignExtend must validate");
 
-    // RED: structural contracts for the new non-COP1 startup IR.
     const auto valid_andi = make_ir(
         R5900IrOpcode::And64,
         {R5900IrDestinationKind::Gpr, 2u},
@@ -181,6 +180,111 @@ int main() {
         0x0010211cu);
     expect(validate_r5900_ir_instruction(valid_mtsah, 27).ok(),
            "valid MTSAH semantic IR must validate");
+
+    // RED: exact COP1 validation matrix.
+    const auto valid_mtc1 = make_ir(
+        R5900IrOpcode::MoveBits32,
+        {R5900IrDestinationKind::Fpr, 5u},
+        R5900IrGprWriteMode::None,
+        {gpr(3)},
+        0x00102200u);
+    expect(validate_r5900_ir_instruction(valid_mtc1, 40).ok(),
+           "valid MTC1 semantic IR must validate");
+
+    const auto valid_ctc1 = make_ir(
+        R5900IrOpcode::MoveBits32,
+        {R5900IrDestinationKind::Fcr31, 0u},
+        R5900IrGprWriteMode::None,
+        {gpr(4)},
+        0x00102204u);
+    expect(validate_r5900_ir_instruction(valid_ctc1, 41).ok(),
+           "valid CTC1/FCR31 semantic IR must validate");
+
+    const auto valid_addas = make_ir(
+        R5900IrOpcode::AddF32ToAccumulator,
+        {R5900IrDestinationKind::FpAccumulator, 0u},
+        R5900IrGprWriteMode::None,
+        {fpr(1), fpr(2)},
+        0x00102208u);
+    expect(validate_r5900_ir_instruction(valid_addas, 42).ok(),
+           "valid ADDA.S semantic IR must validate");
+
+    {
+        auto ir = valid_mtc1;
+        ir.destination = R5900IrDestination{R5900IrDestinationKind::Fpr, 32u};
+        expect(validate_r5900_ir_instruction(ir, 43).error == R5900IrValidationError::InvalidRegister,
+               "MTC1 FPR32 destination must be rejected");
+    }
+
+    {
+        auto ir = valid_mtc1;
+        ir.destination = R5900IrDestination{R5900IrDestinationKind::Gpr, 5u};
+        expect(validate_r5900_ir_instruction(ir, 44).error == R5900IrValidationError::MalformedInstruction,
+               "MoveBits32 must reject GPR destination");
+    }
+
+    {
+        auto ir = valid_mtc1;
+        ir.inputs[0] = immediate(1);
+        expect(validate_r5900_ir_instruction(ir, 45).error == R5900IrValidationError::MalformedInstruction,
+               "MoveBits32 must require a GPR source");
+    }
+
+    {
+        auto ir = valid_mtc1;
+        ir.inputs.push_back(gpr(4));
+        expect(validate_r5900_ir_instruction(ir, 46).error == R5900IrValidationError::MalformedInstruction,
+               "MoveBits32 must have exactly one source");
+    }
+
+    {
+        auto ir = valid_mtc1;
+        ir.write_mode = R5900IrGprWriteMode::Low64PreserveUpper64;
+        expect(validate_r5900_ir_instruction(ir, 47).error == R5900IrValidationError::MalformedInstruction,
+               "MoveBits32 must require write mode None");
+    }
+
+    {
+        auto ir = valid_ctc1;
+        ir.destination = R5900IrDestination{R5900IrDestinationKind::Fcr31, 1u};
+        expect(validate_r5900_ir_instruction(ir, 48).error == R5900IrValidationError::MalformedInstruction,
+               "FCR31 destination must be unindexed");
+    }
+
+    {
+        auto ir = valid_addas;
+        ir.destination = R5900IrDestination{R5900IrDestinationKind::FpAccumulator, 1u};
+        expect(validate_r5900_ir_instruction(ir, 49).error == R5900IrValidationError::MalformedInstruction,
+               "FP accumulator destination must be unindexed");
+    }
+
+    {
+        auto ir = valid_addas;
+        ir.inputs[0] = fpr(32);
+        expect(validate_r5900_ir_instruction(ir, 50).error == R5900IrValidationError::InvalidRegister,
+               "ADDA.S FPR32 source must be rejected");
+    }
+
+    {
+        auto ir = valid_addas;
+        ir.inputs[1] = immediate(0);
+        expect(validate_r5900_ir_instruction(ir, 51).error == R5900IrValidationError::MalformedInstruction,
+               "ADDA.S must require two FPR sources");
+    }
+
+    {
+        auto ir = valid_addas;
+        ir.inputs.pop_back();
+        expect(validate_r5900_ir_instruction(ir, 52).error == R5900IrValidationError::MalformedInstruction,
+               "ADDA.S must have exactly two sources");
+    }
+
+    {
+        auto ir = valid_addas;
+        ir.write_mode = R5900IrGprWriteMode::Full128;
+        expect(validate_r5900_ir_instruction(ir, 53).error == R5900IrValidationError::MalformedInstruction,
+               "ADDA.S must require write mode None");
+    }
 
     {
         auto ir = valid_andi;
