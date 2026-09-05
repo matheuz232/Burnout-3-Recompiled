@@ -260,8 +260,9 @@ void validate_synthetic_startup() {
     for (const auto raw : state.fpr) {
         expect(raw == 0u, "synthetic startup FPR must remain raw zero");
     }
-    expect(state.gpr[31].low64 == 0u && state.gpr[31].high64 == 0u,
-           "synthetic startup PADDUW must clear GPR31");
+    expect(state.gpr[31].low64 == 0x1122334455667788ull &&
+               state.gpr[31].high64 == 0x8877665544332211ull,
+           "synthetic startup sentinel GPR31 must remain unchanged");
 
     std::cout << "SYNTHETIC_STARTUP_BEQ_VALIDATED start=0x00100008 stop=0x00100138 instructions=76\n";
 }
