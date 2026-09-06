@@ -100,6 +100,7 @@ if(WIN32)
 
   add_library(b3r_recompiler_dispatcher_x64 STATIC
     src/recompiler/windows/r5900_block_dispatcher.cpp
+    src/recompiler/windows/r5900_host_syscall_service.cpp
   )
   target_include_directories(b3r_recompiler_dispatcher_x64 PUBLIC src)
   target_link_libraries(b3r_recompiler_dispatcher_x64 PUBLIC
@@ -413,6 +414,15 @@ if(B3R_BUILD_TESTS)
     )
     add_test(NAME r5900_block_dispatcher_bss_clear_windows_tests
       COMMAND r5900_block_dispatcher_bss_clear_windows_tests)
+
+    add_executable(r5900_host_syscall_service_windows_tests
+      tests/r5900_host_syscall_service_windows_tests.cpp
+    )
+    target_link_libraries(r5900_host_syscall_service_windows_tests PRIVATE
+      b3r_recompiler_dispatcher_x64
+    )
+    add_test(NAME r5900_host_syscall_service_windows_tests
+      COMMAND r5900_host_syscall_service_windows_tests)
 
     add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
     target_link_libraries(qpc_clock_windows_tests PRIVATE b3r_windows_runtime)
