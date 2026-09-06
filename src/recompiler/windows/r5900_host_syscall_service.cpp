@@ -87,6 +87,7 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
             root_func,
         };
         setup_thread_context_ = context;
+        setup_heap_context_.reset();
         state.gpr[2].low64 = static_cast<std::uint64_t>(context.stack_top);
         return {R5900HostSyscallStatus::Handled, {}};
     }
@@ -94,6 +95,7 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
     if (selector == kSetupHeapSelector) {
         const auto heap_start = ee_gpr_low32(state, 4u);
         const auto heap_size_raw = ee_gpr_low32(state, 5u);
+        const auto heap_size_signed = std::bit_cast<std::int32_t>(heap_size_raw);
 
         if (!setup_thread_context_.has_value()) {
             return {
@@ -102,18 +104,42 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
             };
         }
 
-        if (heap_size_raw != std::numeric_limits<std::uint32_t>::max()) {
+        if (heap_size_raw == std::numeric_limits<std::uint32_t>::max()) {
+            const auto heap_end = setup_thread_context_->stack_base;
+            if (heap_start >= heap_end) {
+                return {
+                    R5900HostSyscallStatus::Fault,
+                    "SetupHeap automatic-size heap_start must be below stack_base",
+                };
+            }
+
+            setup_heap_context_ = R5900SetupHeapContext{
+                heap_start,
+                heap_size_raw,
+                heap_end,
+            };
+            return {R5900HostSyscallStatus::Handled, {}};
+        }
+
+        if (heap_size_signed <= 0) {
             return {
                 R5900HostSyscallStatus::Fault,
-                "SetupHeap explicit-size mode is not implemented yet",
+                "SetupHeap explicit heap_size must be positive",
             };
         }
 
-        const auto heap_end = setup_thread_context_->stack_base;
-        if (heap_start >= heap_end) {
+        if (heap_start > std::numeric_limits<std::uint32_t>::max() - heap_size_raw) {
             return {
                 R5900HostSyscallStatus::Fault,
-                "SetupHeap automatic-size heap_start must be below stack_base",
+                "SetupHeap explicit heap end overflows 32-bit guest address space",
+            };
+        }
+
+        const auto heap_end = heap_start + heap_size_raw;
+        if (heap_end > setup_thread_context_->stack_base) {
+            return {
+                R5900HostSyscallStatus::Fault,
+                "SetupHeap explicit heap_end exceeds stack_base",
             };
         }
 
