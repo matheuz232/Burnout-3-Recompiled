@@ -22,7 +22,7 @@ void expect(bool condition, const char* message) {
 int main() {
     using namespace b3r::recompiler;
 
-    runtime::Ps2MemoryMap memory{};
+    b3r::runtime::Ps2MemoryMap memory{};
     R5900HostSyscallService service{};
 
     R5900IrExecutionState state{};
