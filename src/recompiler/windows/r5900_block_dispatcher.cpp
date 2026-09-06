@@ -51,6 +51,7 @@ bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
     case R5900Instruction::Addu:
     case R5900Instruction::Addiu:
     case R5900Instruction::Ori:
+    case R5900Instruction::Or:
     case R5900Instruction::Andi:
     case R5900Instruction::And:
     case R5900Instruction::Lui:
