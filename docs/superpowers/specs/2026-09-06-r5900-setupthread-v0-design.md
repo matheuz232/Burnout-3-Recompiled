@@ -69,7 +69,7 @@ The service therefore records only the validated `SetupThread` inputs/result nee
 
 ## Public service state
 
-Add a small value type, tentatively `R5900SetupThreadContext`, containing 32-bit guest-address/ABI fields:
+Add the value type `R5900SetupThreadContext` with these exact `std::uint32_t` fields:
 
 - `gp`
 - `stack_base`
@@ -78,7 +78,12 @@ Add a small value type, tentatively `R5900SetupThreadContext`, containing 32-bit
 - `args`
 - `root_func`
 
-`R5900HostSyscallService` stores the latest successfully handled context as an `std::optional<R5900SetupThreadContext>` and exposes a const inspection accessor for tests/diagnostics.
+`R5900HostSyscallService` stores the latest successfully handled context as `std::optional<R5900SetupThreadContext>` and exposes it through:
+
+```cpp
+[[nodiscard]] const std::optional<R5900SetupThreadContext>&
+setup_thread_context() const noexcept;
+```
 
 No dispatcher interface change is required. `IR5900HostSyscallService` remains unchanged.
 
@@ -107,7 +112,7 @@ When all conditions hold:
 1. compute `stack_top = stack + uint32(stack_size)`
 2. construct the complete candidate `R5900SetupThreadContext`
 3. only after all validation succeeds, commit the context to service state
-4. write `stack_top` to `state.gpr[2].low64`
+4. write `stack_top` to `state.gpr[2].low64` as a zero-extended 32-bit value
 5. preserve `state.gpr[2].high64`
 6. preserve every other R5900 architectural field
 7. perform no guest-memory writes
@@ -182,7 +187,7 @@ Implementation follows TDD.
 
 ### Unit RED/GREEN: production host service
 
-Add/extend Windows tests to prove:
+Extend `tests/r5900_host_syscall_service_windows_tests.cpp` to prove:
 
 1. selector `0x3c` starts RED because production currently returns `Unsupported`
 2. explicit Burnout-like inputs produce `Handled`
@@ -201,7 +206,7 @@ Add/extend Windows tests to prove:
 
 ### Dispatcher integration
 
-Extend syscall-dispatch tests with the real production `R5900HostSyscallService` to prove:
+Extend `tests/r5900_block_dispatcher_syscall_windows_tests.cpp` with the real production `R5900HostSyscallService` to prove:
 
 - native prefix commits before the host boundary
 - successful `SetupThread` increments `syscalls_handled` exactly once
@@ -212,7 +217,7 @@ Extend syscall-dispatch tests with the real production `R5900HostSyscallService`
 
 ### Startup-shaped integration
 
-Extend the BSS/OR/startup fixture so the flow reaches:
+Extend `tests/r5900_block_dispatcher_bss_clear_windows_tests.cpp` so the existing BSS/OR/host-syscall flow uses the production service for an explicit-stack `SetupThread` case:
 
 `BSS clear -> OR/setup arguments -> SYSCALL 0x3c -> resume`
 
@@ -227,11 +232,9 @@ The fixture must verify:
 
 ### External ELF harness
 
-The external-ELF path must remain optional and must not require proprietary data in CI.
+The existing external-ELF path remains optional and must not require proprietary data in CI.
 
-When a user-supplied lawful Burnout 3 executable is supplied locally, the harness should be capable of attaching `R5900HostSyscallService` and validating that execution crosses `0x001001c8` using the observed arguments and produces `GPR2 = 0x02000000`.
-
-CI success must not depend on the proprietary ELF.
+No external-ELF change is required for acceptance of this milestone. If a lawful user-supplied Burnout 3 executable is available locally during manual validation, it may be used as additional evidence, but synthetic/public-data tests remain authoritative for CI.
 
 ## CI and acceptance gates
 
@@ -239,7 +242,7 @@ The milestone is complete only when:
 
 - Visual Studio 2022 x64 Release build succeeds
 - complete CTest suite passes with zero failures
-- new SetupThread tests are included in CTest
+- SetupThread coverage above is included in existing Windows CTest targets
 - existing host-syscall null/Unsupported/Fault behavior remains green
 - frame-pacing telemetry remains green
 - 120 Hz pacing probe remains green
@@ -250,17 +253,17 @@ Do not claim the game boots from this milestone alone.
 
 ## Files expected to change
 
-Primary implementation/test surface:
+Required implementation/test/documentation surface:
 
 - `src/recompiler/windows/r5900_host_syscall_service.h`
 - `src/recompiler/windows/r5900_host_syscall_service.cpp`
 - `tests/r5900_host_syscall_service_windows_tests.cpp`
 - `tests/r5900_block_dispatcher_syscall_windows_tests.cpp`
-- optionally the existing startup/BSS integration test where it gives stronger coverage without duplicating fixtures
+- `tests/r5900_block_dispatcher_bss_clear_windows_tests.cpp`
 - `README.md`
 - `docs/PROGRESS.md`
 
-No change is expected to `r5900_block_dispatcher.h` or the generic `IR5900HostSyscallService` contract unless implementation discovers a concrete requirement that this design cannot satisfy. Such a discovery requires stopping and revising the design rather than silently widening scope.
+No change is expected to `r5900_block_dispatcher.h`, `r5900_block_dispatcher.cpp`, CMake target topology, or the generic `IR5900HostSyscallService` contract unless implementation discovers a concrete requirement that this design cannot satisfy. Such a discovery requires stopping and revising the design rather than silently widening scope.
 
 ## Follow-up milestone
 
