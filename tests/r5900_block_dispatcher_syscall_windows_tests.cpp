@@ -135,6 +135,7 @@ int main() {
         auto memory = make_memory({kSyscall, kUnsupportedXori}, base);
         FakeHostSyscallService service(R5900HostSyscallStatus::Handled);
         R5900BlockDispatcherOptions options{};
+        options.block_options.max_instructions = 1u;
         options.host_syscalls = &service;
         R5900BlockDispatcher dispatcher(memory, options);
         R5900IrExecutionState state{};
