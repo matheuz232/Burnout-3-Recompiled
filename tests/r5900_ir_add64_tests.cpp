@@ -1,10 +1,12 @@
 #include "recompiler/r5900_decoder.h"
 #include "recompiler/r5900_ir.h"
+#include "recompiler/r5900_ir_executor.h"
 #include "recompiler/r5900_ir_validation.h"
 
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -45,15 +47,41 @@ constexpr std::uint32_t r_type(std::uint8_t rs,
            funct;
 }
 
-R5900IrInstruction valid_add64() {
+R5900IrInstruction add64(std::uint8_t destination,
+                         std::uint8_t lhs,
+                         std::uint8_t rhs,
+                         std::uint32_t guest_pc = 0x00114edcu) {
     R5900IrInstruction ir{};
-    ir.guest_pc = 0x00114edcu;
-    ir.guest_raw = r_type(29u, 0u, 4u, 0x2du);
+    ir.guest_pc = guest_pc;
+    ir.guest_raw = r_type(lhs, rhs, destination, 0x2du);
     ir.opcode = R5900IrOpcode::Add64;
-    ir.destination = R5900IrDestination{4u};
+    ir.destination = R5900IrDestination{destination};
     ir.write_mode = R5900IrGprWriteMode::Low64PreserveUpper64;
-    ir.inputs = {gpr(29u), gpr(0u)};
+    ir.inputs = {gpr(lhs), gpr(rhs)};
     return ir;
+}
+
+R5900IrInstruction valid_add64() {
+    return add64(4u, 29u, 0u);
+}
+
+void expect_add(std::uint64_t lhs,
+                std::uint64_t rhs,
+                std::uint64_t expected,
+                const char* message) {
+    R5900IrExecutionState state{};
+    state.gpr[1].low64 = lhs;
+    state.gpr[2].low64 = rhs;
+    state.gpr[3].high64 = 0x1122334455667788ull;
+    state.hi = 0x8877665544332211ull;
+
+    const auto result = execute_r5900_ir({add64(3u, 1u, 2u)}, state);
+    expect(result.ok(), message);
+    expect(state.gpr[3].low64 == expected, message);
+    expect(state.gpr[3].high64 == 0x1122334455667788ull,
+           "Add64 must preserve destination high64");
+    expect(state.hi == 0x8877665544332211ull,
+           "Add64 must preserve unrelated architectural state");
 }
 
 } // namespace
@@ -141,6 +169,48 @@ int main() {
         expect(validate_r5900_ir_instruction(bad, 0u).error ==
                    R5900IrValidationError::InvalidRegister,
                "Add64 source register range must be validated");
+    }
+
+    expect_add(1u, 2u, 3u, "Add64 ordinary addition must execute");
+    expect_add(0x0000000100000000ull, 2u, 0x0000000100000002ull,
+               "Add64 must use all 64 source bits");
+    expect_add(std::numeric_limits<std::uint64_t>::max(), 1u, 0u,
+               "Add64 must wrap modulo 2^64");
+    expect_add(0x7fffffffffffffffull, 1u, 0x8000000000000000ull,
+               "Add64 must cross the signed boundary without trapping");
+
+    {
+        R5900IrExecutionState state{};
+        state.gpr[4] = {5u, 0xaaaaaaaa55555555ull};
+        state.gpr[5].low64 = 7u;
+        const auto result = execute_r5900_ir({add64(4u, 4u, 5u)}, state);
+        expect(result.ok() && state.gpr[4].low64 == 12u &&
+                   state.gpr[4].high64 == 0xaaaaaaaa55555555ull,
+               "Add64 must support rd==rs aliasing");
+    }
+    {
+        R5900IrExecutionState state{};
+        state.gpr[4] = {5u, 0xbbbbbbbb66666666ull};
+        state.gpr[5].low64 = 7u;
+        const auto result = execute_r5900_ir({add64(4u, 5u, 4u)}, state);
+        expect(result.ok() && state.gpr[4].low64 == 12u &&
+                   state.gpr[4].high64 == 0xbbbbbbbb66666666ull,
+               "Add64 must support rd==rt aliasing");
+    }
+    {
+        R5900IrExecutionState state{};
+        state.gpr[4] = {9u, 0xcccccccc77777777ull};
+        const auto result = execute_r5900_ir({add64(4u, 4u, 4u)}, state);
+        expect(result.ok() && state.gpr[4].low64 == 18u &&
+                   state.gpr[4].high64 == 0xcccccccc77777777ull,
+               "Add64 must support rd==rs==rt aliasing");
+    }
+    {
+        R5900IrExecutionState state{};
+        state.gpr[0] = {0xffffffffffffffffull, 0xffffffffffffffffull};
+        const auto result = execute_r5900_ir({add64(0u, 0u, 0u)}, state);
+        expect(result.ok() && state.gpr[0].low64 == 0u && state.gpr[0].high64 == 0u,
+               "GPR0 must remain architectural zero during Add64 execution");
     }
 
     std::cout << "r5900_ir_add64_tests: PASS\n";
