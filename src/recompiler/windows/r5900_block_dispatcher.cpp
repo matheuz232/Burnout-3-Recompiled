@@ -292,7 +292,7 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             block.end_kind == analysis::R5900BlockEndKind::IndirectCall &&
             !block.instructions.empty() &&
             block.instructions.back().decoded.instruction == R5900Instruction::Jalr;
-        const bool has_supported_transfer =
+        bool has_supported_transfer =
             has_supported_beq || has_supported_bne || has_supported_beql ||
             has_supported_bnel || has_supported_j || has_supported_jal ||
             has_supported_jr || has_supported_jalr;
@@ -336,6 +336,11 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             }
 
             body_sites.push_back(site);
+        }
+
+        if (boundary_reason.has_value() || syscall_site != nullptr) {
+            has_supported_transfer = false;
+            transfer_site = nullptr;
         }
 
         if (body_sites.empty() && !has_supported_transfer && syscall_site != nullptr) {
