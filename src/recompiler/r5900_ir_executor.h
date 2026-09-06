@@ -26,6 +26,10 @@ struct R5900IrExecutionState {
     std::uint32_t fp_acc{};
 };
 
+using R5900GuestWrite64Fn = bool (*)(void* user,
+                                     std::uint32_t address,
+                                     std::uint64_t value) noexcept;
+
 using R5900GuestWrite128Fn = bool (*)(void* user,
                                       std::uint32_t address,
                                       std::uint64_t low64,
@@ -33,6 +37,7 @@ using R5900GuestWrite128Fn = bool (*)(void* user,
 
 struct R5900GuestMemoryAccess {
     void* user{};
+    R5900GuestWrite64Fn write64{};
     R5900GuestWrite128Fn write128{};
 };
 
