@@ -12,35 +12,114 @@ This document is the current engineering snapshot. Older milestone-by-milestone 
 |---|---|---|
 | Repository / CMake bootstrap | DONE | C++20, CMake 3.25+, Visual Studio 2022 / Windows x64 workflow is established |
 | Win32 bootstrap/window | READY_FOR_INTERACTIVE_VALIDATION | CI creates and closes a real HWND; physical Windows 10/11 visual validation remains |
-| QPC / 120 Hz frame pacing | CI_VALIDATED | Current SD milestone CI passes 240-sample telemetry and a 120-frame/1-second probe; physical 60-second desktop capture remains required |
+| QPC / 120 Hz frame pacing | CI_VALIDATED | Current DADDU milestone CI passes 240-sample telemetry and a 120-frame/1-second probe; physical 60-second desktop capture remains required |
 | Crash handler / minidump | CI_VALIDATED | Controlled Windows CI crash path produces diagnostics/minidump |
 | PS2 ELF loader | CI_VALIDATED | ELF32 little-endian MIPS parsing and PT_LOAD metadata tests pass |
 | EE main RAM v0 | CI_VALIDATED | Runtime owns zero-filled 32 MiB `0x00000000..0x01ffffff`; ELF PT_LOAD bytes are copied into RAM while `regions()` remains ELF metadata only; reads/writes outside PT_LOAD but inside EE RAM are valid |
 | Typed guest memory | CI_VALIDATED | Little-endian u8/u16/u32/u64/u128 reads/writes; complete-range checks prevent partial wide writes |
-| R5900 decoder | CI_VALIDATED | Startup integer/MMI/COP1/control-flow/store subset includes `SQ` and `SD`; broader ISA remains incremental |
-| R5900 IR v0 | CI_VALIDATED | Provenance-carrying instruction IR plus typed control-transfer terminators; `SQ -> Store128`, `SD -> Store64` |
-| R5900 IR reference executor | CI_VALIDATED | Executes modeled EE state plus memory callbacks; `Store64` and `Store128` failure provenance is deterministic |
-| Windows x86-64 backend | CI_VALIDATED | Native code generation for current startup subset, control transfers, `Store64` and `Store128`; reference/native differential tests pass |
-| Native block dispatcher/cache | CI_VALIDATED | On-demand analysis/lowering/native compile, exact guest-word cache validation, fast replay, boundary-prefix protection, host-syscall boundaries and guest-memory store adapters |
+| R5900 decoder | CI_VALIDATED | Startup integer/MMI/COP1/control-flow/store subset includes `SQ`, `SD` and `DADDU`; broader ISA remains incremental |
+| R5900 IR v0 | CI_VALIDATED | Provenance-carrying instruction IR plus typed control-transfer terminators; `SQ -> Store128`, `SD -> Store64`, `DADDU -> Add64` |
+| R5900 IR reference executor | CI_VALIDATED | Executes modeled EE state plus memory callbacks; `Add64` is modulo-2^64 and preserves destination high64 |
+| Windows x86-64 backend | CI_VALIDATED | Native code generation for current startup subset including `Add64`, control transfers, `Store64` and `Store128`; reference/native differential tests pass |
+| Native block dispatcher/cache | CI_VALIDATED | On-demand analysis/lowering/native compile, exact guest-word cache validation, fast replay, boundary-prefix protection, host-syscall boundaries, guest-memory store adapters and DADDU eligibility |
 | `SQ / Store128` | CI_VALIDATED | Low32 base + signed imm16 with 32-bit wrap, existing v0 16-byte alignment-down behavior, full 128-bit source write |
 | `SD / Store64` | CI_VALIDATED | Low32 base + signed imm16 with 32-bit wrap; stores only source `low64`; requires 8-byte alignment; exact PC/address/width-8 failure reporting; no address rounding |
+| `DADDU / Add64` | CI_VALIDATED | Unsigned/modulo-2^64 low64 addition with no overflow trap; destination high64 is preserved; `rd==0` lowers to provenance `Nop`; native/cache differential coverage passes |
 | `BEQ` / `BNE` | CI_VALIDATED | Ordinary delay-slot branches execute native and preserve pre-slot predicate semantics |
 | `BEQL` / `BNEL` | CI_VALIDATED | Branch-likely annulment: delay executes only on taken path |
 | `J` / `JAL` | CI_VALIDATED | Direct transfers and PC+8 link semantics validated |
 | `JR` / `JALR` | CI_VALIDATED | Runtime target snapshot, arbitrary link GPR, `rd==rs`, `rd==0`, high64 preservation validated |
-| BSS clear startup loop | CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION | Synthetic/native fast-cache loop is validated; lawful external harness historically proves the real BSS clear through `SetupThread`, but newer HLE/SD extension is not yet externally Windows-native validated |
+| BSS clear startup loop | CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION | Synthetic/native fast-cache loop is validated; lawful external harness historically proves the real BSS clear through `SetupThread`, but newer HLE/SD/DADDU extension is not yet externally Windows-native validated |
 | Host syscall service | CI_VALIDATED | `SYSCALL` remains outside generated x64; null/handled/unsupported/fault outcomes have deterministic accounting |
 | `SetupThread` HLE `0x3c` | CI_VALIDATED | Explicit-stack mode records context and returns stack top in `v0`; automatic-stack remains unsupported |
 | `SetupHeap` HLE `0x3d` | CI_VALIDATED | Burnout `heap_size=-1` convention resolves heap end from thread stack base; success changes only host metadata |
-| Startup through `SD` | CI_VALIDATED | Synthetic/native path executes `SetupHeap -> JAL 0x00115108 -> ADDIU sp,-16 -> SD ra,0(sp) -> JAL 0x00114ed0` |
-| Lawful real-ELF next-boundary diagnosis | DIAGNOSTIC_VALIDATED | Local out-of-repository inspection/execution-model diagnosis identifies first unsupported current instruction at `0x00114edc`: raw `0x03a0202d`, `DADDU a0,sp,zero`; this is not `EXTERNALLY_VALIDATED` Windows-native execution |
-| Static/binary recompiler | IN_PROGRESS | Current concrete next ISA target is `DADDU`; subsequent real boundaries will be measured iteratively |
+| Startup through `DADDU` | CI_VALIDATED | Synthetic/native path executes the post-SetupHeap call chain through `SD`, enters `0x00114ed0`, executes `ADDIU/ADDIU/SD/DADDU`, then stops at the next synthetic boundary |
+| Lawful real-ELF next-boundary diagnosis | DIAGNOSTIC_VALIDATED | Fresh local out-of-repository diagnosis executes the established prefix through `DADDU @ 0x00114edc` and identifies the next current unsupported instruction as `SW @ 0x00114ee0`; this is not `EXTERNALLY_VALIDATED` Windows-native execution |
+| Static/binary recompiler | IN_PROGRESS | Current concrete next ISA target is `SW @ 0x00114ee0`; subsequent real boundaries will be measured iteratively |
 | Graphics | TODO | No game GS/rendering path yet |
 | Audio | TODO | No game IOP/SPU2 audio path yet |
 | Input | TODO | No game input path yet |
 | Game initialization | TODO | Startup execution has not reached full game initialization |
 | Menu/frontend | TODO | Blocked by game initialization / rendering |
 | Test race / gameplay | TODO | Game does not boot or reach gameplay yet |
+
+## R5900 DADDU / Add64 v0
+
+### Scope
+
+This milestone implements the minimum 64-bit integer addition required by the first real unsupported instruction after the SD startup milestone.
+
+`DADDU rd, rs, rt` is modeled as:
+
+```text
+result = (GPR[rs].low64 + GPR[rt].low64) mod 2^64
+```
+
+The instruction does not trap on overflow. A nonzero `rd` replaces only `GPR[rd].low64`; `GPR[rd].high64` is preserved. `rd==0` lowers to a provenance-carrying `Nop`, consistent with the existing zero-register policy.
+
+`Add64` validation is deliberately narrower than `AddWordSignExtend`: exactly one GPR destination, `Low64PreserveUpper64`, and exactly two GPR inputs. Immediate and FPR sources are rejected.
+
+### Synthetic/native startup acceptance
+
+The dispatcher regression uses only public ISA encodings and synthetic instruction words. It models the established state on entry to `0x00114ed0` and executes:
+
+```text
+0x00114ed0  ADDIU sp,sp,-0x50
+0x00114ed4  ADDIU v0,zero,1
+0x00114ed8  SD    ra,0x40(sp)
+0x00114edc  DADDU a0,sp,zero
+0x00114ee0  synthetic unsupported sentinel
+```
+
+Acceptance state:
+
+```text
+initial sp                  0x01fffff0
+initial ra                  0x00115118
+sp after frame allocation   0x01ffffa0
+v0.low64                    0x0000000000000001
+a0.low64                    0x0000000001ffffa0
+mem64[0x01ffffe0]           0x0000000000115118
+selected guest instructions 4
+next boundary               0x00114ee0
+```
+
+The same Windows test also executes a separate synthetic `DADDU + J + NOP` block twice. The first pass compiles/caches it; the second pass is a cache hit and fast-cache hit with no recompilation, while preserving the destination high64 half.
+
+### Current Windows CI evidence
+
+Implementation/test head before documentation:
+
+`709c7cb0caf981f09985831b5f570d0d9df6b5ad`
+
+Windows CI:
+
+```text
+run   34067189210 (#721)
+host  Windows Server 2022
+CTest 60/60 PASS
+```
+
+The run passed the complete suite plus frame pacing telemetry, pacing-probe smoke, analyzer package validation and pacing-probe package validation.
+
+### TDD / branch evidence
+
+The milestone is implemented on isolated branch `design/r5900-daddu-v0`.
+
+Representative RED/GREEN commits include:
+
+```text
+f1534b2b76074ff91ddd8bbeb7bc6e1bed410b6c  test: specify R5900 Add64 lowering
+caddfe8ee0445a0a173afb33146e44429e5585b9  feat: lower R5900 DADDU to Add64
+a9701cc19681d2cda15b408b66d227af905c474d  test: specify R5900 Add64 execution
+b7c361291f25303a754f9275ae11e941f0f13521  feat: execute Add64 in R5900 IR
+f95bfcf7528280008a4819541d96ecfbdd51f905  test: specify native R5900 Add64 execution
+7c92bf404e9553fab7ce04988a083f379c6f5a99  feat: emit R5900 Add64 on x64
+2e4758b1ecf69be331111dcc5cb4b14a19cee057  test: specify R5900 DADDU dispatcher startup
+709c7cb0caf981f09985831b5f570d0d9df6b5ad  feat: execute R5900 DADDU through dispatcher
+```
+
+No proprietary Burnout 3 data was added to tests or production code.
 
 ## R5900 SD / Store64 + EE Main RAM v0
 
@@ -151,9 +230,7 @@ Hosted-runner timing is smoke evidence, not physical-desktop performance certifi
 
 ### TDD / branch evidence
 
-The milestone was implemented on isolated branch `design/r5900-sd-v0`, based on:
-
-`feature/r5900-or-v0 @ 37ce055ab1d2fbbad73aa3f3fd39b356f981af0e`
+The SD milestone was implemented on isolated branch `design/r5900-sd-v0`.
 
 Representative task commits include:
 
@@ -167,41 +244,36 @@ a20ca61a1e45d8baa3e9ff9ca07b94378d565415  feat: execute R5900 SD through dispatc
 
 The complete branch history retains the intermediate RED/GREEN CI gates. No proprietary ELF bytes/assets are present in the branch delta.
 
-## Lawful real-ELF diagnostic after SD
+## Lawful real-ELF diagnostic after DADDU
 
-The user's legally supplied Burnout 3 ELF remains outside the repository. Diagnostic inspection establishes the real code at the second call target:
+The user's legally supplied Burnout 3 ELF remains outside the repository. A fresh throwaway local diagnostic, using the already established state on entry to `0x00114ed0`, advances the current modeled prefix through `DADDU` without copying game instruction words into the repository.
 
-```text
-0x00114ed0  27bdffb0  ADDIU sp,sp,-0x50
-0x00114ed4  24020001  ADDIU v0,zero,1
-0x00114ed8  ffbf0040  SD    ra,0x40(sp)
-0x00114edc  03a0202d  DADDU a0,sp,zero
-```
-
-Entering `0x00114ed0` after the already modeled second JAL:
+Established incoming state:
 
 ```text
 sp = 0x01fffff0
 ra = 0x00115118
 ```
 
-The supported prefix therefore has the modeled result:
+Result after the currently supported prefix:
 
 ```text
 sp                  = 0x01ffffa0
 v0.low64            = 0x0000000000000001
+a0.low64            = 0x0000000001ffffa0
 mem64[0x01ffffe0]   = 0x0000000000115118
 ```
 
-The first current unsupported instruction is:
+The first current unsupported instruction after that prefix is:
 
 ```text
-PC   0x00114edc
-raw  0x03a0202d
-ISA  DADDU a0,sp,zero
+PC   0x00114ee0
+ISA  SW v0,0x28(sp)
 ```
 
-This is the next implementation target. It is lawful external diagnostic evidence only. The project does **not** claim that the expanded `SetupThread -> SetupHeap -> SD` path has been executed end-to-end by the external Windows-native harness yet.
+The project decoder already recognizes `SW` as a 32-bit store. The current IR/executor/x64/dispatcher execution subset does not implement it yet, so `SW` is the next concrete ISA milestone.
+
+This is lawful external diagnostic evidence only. It is **not** a claim that the expanded `SetupThread -> SetupHeap -> SD -> DADDU` path has been executed end-to-end by the external Windows-native harness.
 
 ## Existing startup evidence
 
@@ -214,14 +286,14 @@ The legally supplied ELF has entry point `0x00100008`. Existing project evidence
 - Burnout heap arguments `heap_start=0x01ecea00`, `heap_size=0xffffffff`;
 - production SetupHeap context resolves `heap_end=0x01ff0000`.
 
-The older optional external Windows harness validates the real BSS-clear path through `SetupThread`. Extending and executing that harness through SetupHeap/SD remains a separate external-validation gate.
+The older optional external Windows harness validates the real BSS-clear path through `SetupThread`. Extending and executing that harness through SetupHeap/SD/DADDU remains a separate external-validation gate.
 
 ## Test Build 0.1 gates
 
 Test Build 0.1 is **not complete**. Remaining high-level gates include:
 
-1. implement the next empirically observed R5900 boundary, currently `DADDU @ 0x00114edc`, then repeat the legal-ELF diagnostic cycle;
-2. extend the external Windows-native startup harness through the newer SetupHeap/SD path without committing game data;
+1. implement the next empirically observed R5900 boundary, currently `SW @ 0x00114ee0`, then repeat the legal-ELF diagnostic cycle;
+2. extend the external Windows-native startup harness through the newer SetupHeap/SD/DADDU path without committing game data;
 3. visually validate the Win32 executable on a physical Windows 10/11 desktop;
 4. run `Burnout3PacingProbe --seconds 60 --output <report>` (or longer) on a normal physical desktop;
 5. continue kernel/HLE and EE instruction coverage only as required by the real executable;
@@ -231,6 +303,6 @@ Test Build 0.1 is **not complete**. Remaining high-level gates include:
 
 - `main` must not be changed implicitly.
 - PR #22 must not be merged implicitly.
-- Integration of `design/r5900-sd-v0` into `feature/r5900-or-v0` requires explicit user authorization after final branch verification.
+- Integration of `design/r5900-daddu-v0` into `feature/r5900-or-v0` requires explicit user authorization after final branch verification.
 - Never commit proprietary Burnout 3 data.
 - Never claim boot/playability without direct evidence.
