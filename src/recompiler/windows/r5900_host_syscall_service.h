@@ -4,6 +4,7 @@
 #include "runtime/ps2_memory_map.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace b3r::recompiler {
@@ -24,6 +25,15 @@ struct R5900HostSyscallResult {
     std::string message{};
 };
 
+struct R5900SetupThreadContext {
+    std::uint32_t gp{};
+    std::uint32_t stack_base{};
+    std::uint32_t stack_size{};
+    std::uint32_t stack_top{};
+    std::uint32_t args{};
+    std::uint32_t root_func{};
+};
+
 class IR5900HostSyscallService {
 public:
     virtual ~IR5900HostSyscallService() = default;
@@ -40,6 +50,14 @@ public:
         const R5900HostSyscallRequest& request,
         R5900IrExecutionState& state,
         runtime::Ps2MemoryMap& memory) override;
+
+    [[nodiscard]] const std::optional<R5900SetupThreadContext>&
+    setup_thread_context() const noexcept {
+        return setup_thread_context_;
+    }
+
+private:
+    std::optional<R5900SetupThreadContext> setup_thread_context_{};
 };
 
 } // namespace b3r::recompiler
