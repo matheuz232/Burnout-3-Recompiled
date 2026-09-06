@@ -80,6 +80,21 @@ constexpr std::uint32_t j_type(std::uint8_t op, std::uint32_t target) {
            ((target >> 2u) & 0x03ffffffu);
 }
 
+class HandledHostSyscalls final : public b3r::recompiler::IR5900HostSyscallService {
+public:
+    b3r::recompiler::R5900HostSyscallResult handle(
+        const b3r::recompiler::R5900HostSyscallRequest& request,
+        b3r::recompiler::R5900IrExecutionState&,
+        b3r::runtime::Ps2MemoryMap&) override {
+        ++calls;
+        last_request = request;
+        return {b3r::recompiler::R5900HostSyscallStatus::Handled, {}};
+    }
+
+    std::size_t calls{};
+    b3r::recompiler::R5900HostSyscallRequest last_request{};
+};
+
 b3r::runtime::Ps2MemoryMap make_memory(std::uint32_t code_base,
                                        std::uint32_t data_base) {
     constexpr std::uint32_t kProgramHeaderOffset = 52u;
@@ -98,6 +113,8 @@ b3r::runtime::Ps2MemoryMap make_memory(std::uint32_t code_base,
         r_type(4u, 5u, 6u, 0u, 0x25u),   // OR r6,r4,r5
         0u,
         0x0000000cu,                      // SYSCALL
+        i_type(0x0eu, 1u, 1u, 1u),       // XORI: deliberate unsupported boundary
+        0x0000000cu,                      // analyzer guard; must never be handled
     };
     const auto code_size = static_cast<std::uint32_t>(words.size() * 4u);
 
@@ -148,6 +165,7 @@ int main() {
     constexpr std::uint32_t kClearBegin = kDataBase + 0x10u;
     constexpr std::uint32_t kClearEnd = kDataBase + 0x50u;
     constexpr std::uint32_t kSyscallPc = kCodeBase + 0x20u;
+    constexpr std::uint32_t kPostSyscallPc = kSyscallPc + 4u;
 
     auto memory = make_memory(kCodeBase, kDataBase);
     R5900BlockDispatcher dispatcher(memory);
@@ -166,6 +184,8 @@ int main() {
            "BSS-clear loop plus register OR must reach the exact syscall PC");
     expect(result.blocks_executed == 10u && result.instructions_executed == 28u,
            "post-loop OR block must extend selected-word accounting by one block and two instructions");
+    expect(result.syscalls_handled == 0u,
+           "null host service must not count the trapped syscall as handled");
     expect(result.cache_misses == 3u && result.cache_hits == 7u &&
                result.recompilations == 0u,
            "post-loop OR block must add one compiled cache entry without changing loop reuse");
@@ -188,6 +208,40 @@ int main() {
     }
     expect(memory.read_u8(kClearEnd) == 0xa5u,
            "BSS-clear must preserve byte immediately after range");
+
+    auto handled_memory = make_memory(kCodeBase, kDataBase);
+    HandledHostSyscalls host{};
+    R5900BlockDispatcherOptions options{};
+    options.host_syscalls = &host;
+    R5900BlockDispatcher handled_dispatcher(handled_memory, options);
+
+    R5900IrExecutionState handled_state{};
+    handled_state.gpr[2].low64 = kClearBegin;
+    handled_state.gpr[3].low64 = kClearEnd;
+    handled_state.gpr[4] = {0x00ff00000000ff00ull, 0x1111111111111111ull};
+    handled_state.gpr[5] = {0x0f000f000f00000full, 0x2222222222222222ull};
+    handled_state.gpr[6] = {0u, 0xaaaaaaaaaaaaaaaaull};
+
+    const auto handled = handled_dispatcher.run(kCodeBase, handled_state, 16u);
+
+    expect(handled.reason == R5900DispatchStopReason::UnsupportedInstruction,
+           "handled syscall must continue to deliberate XORI boundary");
+    expect(handled.next_pc == kPostSyscallPc,
+           "handled syscall continuation must land at PC+4");
+    expect(handled.blocks_executed == 10u && handled.instructions_executed == 28u,
+           "host syscall must not change native BSS/OR accounting");
+    expect(handled.syscalls_handled == 1u && host.calls == 1u,
+           "exactly one syscall must be handled after native prefix");
+    expect(host.last_request.guest_pc == kSyscallPc &&
+               host.last_request.raw_instruction == 0x0000000cu,
+           "host service must receive exact syscall provenance");
+    expect(handled_state.gpr[2].low64 == kClearEnd,
+           "BSS pointer must commit before host handling");
+    expect(handled_state.gpr[6].low64 == 0x0fff0f000f00ff0full &&
+               handled_state.gpr[6].high64 == 0xaaaaaaaaaaaaaaaaull,
+           "post-loop OR state must commit before host handling");
+    expect(handled_dispatcher.cache_size() == 3u,
+           "handled syscall must not create or compile a syscall cache entry");
 
     std::cout << "r5900_block_dispatcher_bss_clear_windows_tests: PASS\n";
     return EXIT_SUCCESS;
