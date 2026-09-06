@@ -70,6 +70,14 @@ bool same_context(
            lhs.root_func == rhs.root_func;
 }
 
+bool same_heap_context(
+    const b3r::recompiler::R5900SetupHeapContext& lhs,
+    const b3r::recompiler::R5900SetupHeapContext& rhs) {
+    return lhs.heap_start == rhs.heap_start &&
+           lhs.requested_heap_size == rhs.requested_heap_size &&
+           lhs.heap_end == rhs.heap_end;
+}
+
 } // namespace
 
 int main() {
@@ -157,6 +165,48 @@ int main() {
                context->root_func == 0x00100220u,
            "stored SetupThread context mismatch");
     const auto committed = *context;
+
+    R5900IrExecutionState heap_state{};
+    for (std::size_t index = 0; index < 32u; ++index) {
+        heap_state.gpr[index] = {
+            0x3000000000000000ull + static_cast<std::uint64_t>(index),
+            0x4000000000000000ull + static_cast<std::uint64_t>(index),
+        };
+    }
+    heap_state.gpr[2] = {0x1122334455667788ull, 0x8877665544332211ull};
+    heap_state.gpr[3].low64 = 0x3du;
+    heap_state.gpr[4].low64 = 0x01ecea00u;
+    heap_state.gpr[5].low64 = 0xffffffffu;
+    heap_state.hi = 0x0102030405060708ull;
+    heap_state.lo = 0x1112131415161718ull;
+    heap_state.hi1 = 0x2122232425262728ull;
+    heap_state.lo1 = 0x3132333435363738ull;
+    heap_state.sa = 23u;
+    heap_state.fpr[7] = 0x40400000u;
+    heap_state.fcr31 = 0x41424344u;
+    heap_state.fp_acc = 0x51525354u;
+    const auto heap_before = heap_state;
+    const auto heap_regions_before = memory.regions();
+
+    const auto heap_result = setup_service.handle(
+        R5900HostSyscallRequest{0x001001e4u, 0x0000000cu},
+        heap_state,
+        memory);
+
+    expect(heap_result.status == R5900HostSyscallStatus::Handled,
+           "Burnout automatic-size SetupHeap must be handled");
+    expect_states_equal(heap_before, heap_state,
+                        "SetupHeap must preserve all guest architectural state");
+    expect(memory.regions().size() == heap_regions_before.size(),
+           "SetupHeap must not alter memory-map regions");
+    const auto& heap_context = setup_service.setup_heap_context();
+    expect(heap_context.has_value(), "successful SetupHeap must record context");
+    expect(heap_context->heap_start == 0x01ecea00u &&
+               heap_context->requested_heap_size == 0xffffffffu &&
+               heap_context->heap_end == 0x01ff0000u,
+           "stored Burnout SetupHeap context mismatch");
+    expect(heap_context->heap_end - heap_context->heap_start == 0x00121600u,
+           "Burnout effective heap size mismatch");
 
     R5900IrExecutionState automatic{};
     automatic.gpr[2] = {0x1111222233334444ull, 0x5555666677778888ull};
