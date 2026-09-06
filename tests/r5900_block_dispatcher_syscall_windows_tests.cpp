@@ -136,7 +136,9 @@ int main() {
     constexpr std::uint32_t kUnsupportedXori =
         (0x0eu << 26u) | (1u << 21u) | (1u << 16u) | 1u;
     constexpr std::uint32_t kUnsupportedLd =
-        (0x3fu << 26u) | (29u << 21u) | (31u << 16u);
+        (0x37u << 26u) | (29u << 21u) | (31u << 16u);
+    expect(decode_r5900(kUnsupportedLd).instruction == R5900Instruction::Ld,
+           "unsupported-boundary fixture must encode LD");
 
     {
         auto memory = make_memory({kSyscall}, base);
