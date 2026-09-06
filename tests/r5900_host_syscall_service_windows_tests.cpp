@@ -78,6 +78,75 @@ bool same_heap_context(
            lhs.heap_end == rhs.heap_end;
 }
 
+void initialize_setup_thread(
+    b3r::recompiler::R5900HostSyscallService& service,
+    b3r::runtime::Ps2MemoryMap& memory,
+    std::uint32_t stack = 0x01ff0000u,
+    std::uint32_t stack_size = 0x00010000u) {
+    using namespace b3r::recompiler;
+    R5900IrExecutionState state{};
+    state.gpr[3].low64 = 0x3cu;
+    state.gpr[4].low64 = 0x004e8670u;
+    state.gpr[5].low64 = stack;
+    state.gpr[6].low64 = stack_size;
+    state.gpr[7].low64 = 0x01d9ce80u;
+    state.gpr[8].low64 = 0x00100220u;
+    const auto result = service.handle(
+        R5900HostSyscallRequest{0x001001c8u, 0x0000000cu},
+        state,
+        memory);
+    expect(result.status == R5900HostSyscallStatus::Handled,
+           "test SetupThread prerequisite must succeed");
+}
+
+void expect_setup_heap_fault(
+    b3r::recompiler::R5900HostSyscallService& service,
+    b3r::runtime::Ps2MemoryMap& memory,
+    std::uint32_t heap_start,
+    std::uint32_t heap_size,
+    const char* diagnostic_term,
+    const b3r::recompiler::R5900SetupHeapContext* expected_context) {
+    using namespace b3r::recompiler;
+    R5900IrExecutionState state{};
+    for (std::size_t index = 0; index < 32u; ++index) {
+        state.gpr[index] = {
+            0x5000000000000000ull + static_cast<std::uint64_t>(index),
+            0x6000000000000000ull + static_cast<std::uint64_t>(index),
+        };
+    }
+    state.gpr[3].low64 = 0x3du;
+    state.gpr[4].low64 = heap_start;
+    state.gpr[5].low64 = heap_size;
+    state.hi = 1u;
+    state.lo = 2u;
+    state.hi1 = 3u;
+    state.lo1 = 4u;
+    state.sa = 5u;
+    state.fpr[1] = 0x3f800000u;
+    state.fcr31 = 6u;
+    state.fp_acc = 7u;
+    const auto before = state;
+
+    const auto result = service.handle(
+        R5900HostSyscallRequest{0x001001e4u, 0x0000000cu},
+        state,
+        memory);
+    expect(result.status == R5900HostSyscallStatus::Fault,
+           "invalid SetupHeap request must fault");
+    expect(result.message.find(diagnostic_term) != std::string::npos,
+           "SetupHeap fault diagnostic term mismatch");
+    expect_states_equal(before, state,
+                        "SetupHeap Fault must preserve guest state");
+    if (expected_context == nullptr) {
+        expect(!service.setup_heap_context().has_value(),
+               "fault must not create SetupHeap context");
+    } else {
+        expect(service.setup_heap_context().has_value() &&
+                   same_heap_context(*service.setup_heap_context(), *expected_context),
+               "fault must preserve prior SetupHeap context");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -208,6 +277,118 @@ int main() {
     expect(heap_context->heap_end - heap_context->heap_start == 0x00121600u,
            "Burnout effective heap size mismatch");
 
+    const auto committed_heap = *setup_service.setup_heap_context();
+
+    R5900HostSyscallService no_thread_service{};
+    expect_setup_heap_fault(no_thread_service, memory,
+                            0x00100000u, 0xffffffffu,
+                            "SetupThread", nullptr);
+
+    R5900HostSyscallService explicit_service{};
+    initialize_setup_thread(explicit_service, memory);
+    R5900IrExecutionState explicit_heap{};
+    explicit_heap.gpr[2] = {0xabcdef0123456789ull, 0x9876543210fedcbaull};
+    explicit_heap.gpr[3].low64 = 0x3du;
+    explicit_heap.gpr[4].low64 = 0x01f00000u;
+    explicit_heap.gpr[5].low64 = 0x000f0000u;
+    const auto explicit_before = explicit_heap;
+    const auto explicit_result = explicit_service.handle(
+        R5900HostSyscallRequest{0x001001e4u, 0x0000000cu},
+        explicit_heap,
+        memory);
+    expect(explicit_result.status == R5900HostSyscallStatus::Handled,
+           "positive SetupHeap ending at stack_base must be handled");
+    expect_states_equal(explicit_before, explicit_heap,
+                        "explicit SetupHeap must preserve guest state");
+    expect(explicit_service.setup_heap_context().has_value() &&
+               explicit_service.setup_heap_context()->heap_start == 0x01f00000u &&
+               explicit_service.setup_heap_context()->requested_heap_size == 0x000f0000u &&
+               explicit_service.setup_heap_context()->heap_end == 0x01ff0000u,
+           "explicit SetupHeap context mismatch");
+    const auto explicit_committed = *explicit_service.setup_heap_context();
+
+    expect_setup_heap_fault(explicit_service, memory,
+                            0x01ecea00u, 0x00000000u,
+                            "positive", &explicit_committed);
+    expect_setup_heap_fault(explicit_service, memory,
+                            0x01ecea00u, 0xfffffffeu,
+                            "positive", &explicit_committed);
+    expect_setup_heap_fault(explicit_service, memory,
+                            0xfffffff0u, 0x00000020u,
+                            "overflows", &explicit_committed);
+    expect_setup_heap_fault(explicit_service, memory,
+                            0x01ff0000u, 0xffffffffu,
+                            "below stack_base", &explicit_committed);
+    expect_setup_heap_fault(explicit_service, memory,
+                            0x01fe0000u, 0x00020000u,
+                            "exceeds stack_base", &explicit_committed);
+
+    R5900IrExecutionState replacement{};
+    replacement.gpr[3].low64 = 0x3du;
+    replacement.gpr[4].low64 = 0x01f80000u;
+    replacement.gpr[5].low64 = 0x00070000u;
+    const auto replacement_before = replacement;
+    const auto replacement_result = explicit_service.handle(
+        R5900HostSyscallRequest{0x001001e4u, 0x0000000cu},
+        replacement,
+        memory);
+    expect(replacement_result.status == R5900HostSyscallStatus::Handled,
+           "later valid SetupHeap must replace context");
+    expect_states_equal(replacement_before, replacement,
+                        "replacement SetupHeap must preserve guest state");
+    expect(explicit_service.setup_heap_context().has_value() &&
+               explicit_service.setup_heap_context()->heap_start == 0x01f80000u &&
+               explicit_service.setup_heap_context()->requested_heap_size == 0x00070000u &&
+               explicit_service.setup_heap_context()->heap_end == 0x01ff0000u,
+           "replacement SetupHeap context mismatch");
+
+    R5900HostSyscallService lifecycle_service{};
+    initialize_setup_thread(lifecycle_service, memory);
+    R5900IrExecutionState lifecycle_heap{};
+    lifecycle_heap.gpr[3].low64 = 0x3du;
+    lifecycle_heap.gpr[4].low64 = 0x01ecea00u;
+    lifecycle_heap.gpr[5].low64 = 0xffffffffu;
+    const auto lifecycle_heap_result = lifecycle_service.handle(
+        R5900HostSyscallRequest{0x001001e4u, 0x0000000cu},
+        lifecycle_heap,
+        memory);
+    expect(lifecycle_heap_result.status == R5900HostSyscallStatus::Handled &&
+               lifecycle_service.setup_heap_context().has_value(),
+           "lifecycle SetupHeap prerequisite must succeed");
+    const auto lifecycle_committed = *lifecycle_service.setup_heap_context();
+
+    R5900IrExecutionState unsupported_thread{};
+    unsupported_thread.gpr[3].low64 = 0x3cu;
+    unsupported_thread.gpr[5].low64 = 0xffffffffu;
+    unsupported_thread.gpr[6].low64 = 0x1000u;
+    const auto unsupported_thread_result = lifecycle_service.handle(
+        R5900HostSyscallRequest{0x001001c8u, 0x0000000cu},
+        unsupported_thread,
+        memory);
+    expect(unsupported_thread_result.status == R5900HostSyscallStatus::Unsupported,
+           "automatic-stack SetupThread lifecycle probe must remain unsupported");
+    expect(lifecycle_service.setup_heap_context().has_value() &&
+               same_heap_context(*lifecycle_service.setup_heap_context(), lifecycle_committed),
+           "unsupported SetupThread must preserve heap context");
+
+    R5900IrExecutionState failed_thread{};
+    failed_thread.gpr[3].low64 = 0x3cu;
+    failed_thread.gpr[5].low64 = 0x00100000u;
+    failed_thread.gpr[6].low64 = 0u;
+    const auto failed_thread_result = lifecycle_service.handle(
+        R5900HostSyscallRequest{0x001001c8u, 0x0000000cu},
+        failed_thread,
+        memory);
+    expect(failed_thread_result.status == R5900HostSyscallStatus::Fault,
+           "invalid SetupThread lifecycle probe must fault");
+    expect(lifecycle_service.setup_heap_context().has_value() &&
+               same_heap_context(*lifecycle_service.setup_heap_context(), lifecycle_committed),
+           "failed SetupThread must preserve heap context");
+
+    initialize_setup_thread(lifecycle_service, memory, 0x01fe0000u, 0x00010000u);
+    expect(!lifecycle_service.setup_heap_context().has_value(),
+           "successful replacement SetupThread must invalidate stale heap context");
+
     R5900IrExecutionState automatic{};
     automatic.gpr[2] = {0x1111222233334444ull, 0x5555666677778888ull};
     automatic.gpr[3].low64 = 0x3cu;
@@ -227,6 +408,9 @@ int main() {
     expect(setup_service.setup_thread_context().has_value() &&
                same_context(*setup_service.setup_thread_context(), committed),
            "automatic-stack Unsupported must preserve committed context");
+    expect(setup_service.setup_heap_context().has_value() &&
+               same_heap_context(*setup_service.setup_heap_context(), committed_heap),
+           "automatic-stack Unsupported must preserve committed heap context");
 
     R5900IrExecutionState zero_size{};
     zero_size.gpr[2] = {0x2222333344445555ull, 0x6666777788889999ull};
@@ -247,6 +431,9 @@ int main() {
     expect(setup_service.setup_thread_context().has_value() &&
                same_context(*setup_service.setup_thread_context(), committed),
            "zero-size Fault must preserve committed context");
+    expect(setup_service.setup_heap_context().has_value() &&
+               same_heap_context(*setup_service.setup_heap_context(), committed_heap),
+           "zero-size SetupThread Fault must preserve committed heap context");
 
     R5900IrExecutionState negative_size{};
     negative_size.gpr[2] = {0x3333444455556666ull, 0x777788889999aaaaull};
@@ -265,6 +452,9 @@ int main() {
     expect(setup_service.setup_thread_context().has_value() &&
                same_context(*setup_service.setup_thread_context(), committed),
            "negative-size Fault must preserve committed context");
+    expect(setup_service.setup_heap_context().has_value() &&
+               same_heap_context(*setup_service.setup_heap_context(), committed_heap),
+           "negative SetupThread Fault must preserve committed heap context");
 
     R5900IrExecutionState overflow{};
     overflow.gpr[2] = {0x4444555566667777ull, 0x88889999aaaabbbbull};
@@ -285,6 +475,9 @@ int main() {
     expect(setup_service.setup_thread_context().has_value() &&
                same_context(*setup_service.setup_thread_context(), committed),
            "overflow Fault must preserve committed context");
+    expect(setup_service.setup_heap_context().has_value() &&
+               same_heap_context(*setup_service.setup_heap_context(), committed_heap),
+           "overflow SetupThread Fault must preserve committed heap context");
 
     std::cout << "r5900_host_syscall_service_windows_tests: PASS\n";
     return EXIT_SUCCESS;
