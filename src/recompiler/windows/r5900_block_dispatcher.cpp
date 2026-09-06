@@ -56,6 +56,7 @@ bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
     switch (instruction) {
     case R5900Instruction::Nop:
     case R5900Instruction::Addu:
+    case R5900Instruction::Daddu:
     case R5900Instruction::Addiu:
     case R5900Instruction::Ori:
     case R5900Instruction::Or:
