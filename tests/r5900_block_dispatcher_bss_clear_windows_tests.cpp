@@ -80,21 +80,6 @@ constexpr std::uint32_t j_type(std::uint8_t op, std::uint32_t target) {
            ((target >> 2u) & 0x03ffffffu);
 }
 
-class HandledHostSyscalls final : public b3r::recompiler::IR5900HostSyscallService {
-public:
-    b3r::recompiler::R5900HostSyscallResult handle(
-        const b3r::recompiler::R5900HostSyscallRequest& request,
-        b3r::recompiler::R5900IrExecutionState&,
-        b3r::runtime::Ps2MemoryMap&) override {
-        ++calls;
-        last_request = request;
-        return {b3r::recompiler::R5900HostSyscallStatus::Handled, {}};
-    }
-
-    std::size_t calls{};
-    b3r::recompiler::R5900HostSyscallRequest last_request{};
-};
-
 b3r::runtime::Ps2MemoryMap make_memory(std::uint32_t code_base,
                                        std::uint32_t data_base) {
     constexpr std::uint32_t kProgramHeaderOffset = 52u;
@@ -110,8 +95,8 @@ b3r::runtime::Ps2MemoryMap make_memory(std::uint32_t code_base,
         i_type(0x09u, 2u, 2u, 0x10u),    // ADDIU r2,r2,16
         j_type(0x02u, code_base),         // J loop
         0u,                               // delay
-        r_type(4u, 5u, 6u, 0u, 0x25u),   // OR r6,r4,r5
-        0u,
+        r_type(4u, 5u, 9u, 0u, 0x25u),   // OR r9,r4,r5
+        i_type(0x09u, 0u, 3u, 0x003cu),  // ADDIU v1,r0,0x3c (SetupThread)
         0x0000000cu,                      // SYSCALL
         i_type(0x0eu, 1u, 1u, 1u),       // XORI: deliberate unsupported boundary
         0x0000000cu,                      // analyzer guard; must never be handled
@@ -162,6 +147,7 @@ int main() {
 
     constexpr std::uint32_t kCodeBase = 0x00100000u;
     constexpr std::uint32_t kDataBase = 0x00200000u;
+    constexpr std::uint32_t kDataSize = 0x80u;
     constexpr std::uint32_t kClearBegin = kDataBase + 0x10u;
     constexpr std::uint32_t kClearEnd = kDataBase + 0x50u;
     constexpr std::uint32_t kSyscallPc = kCodeBase + 0x20u;
@@ -172,33 +158,37 @@ int main() {
     R5900IrExecutionState state{};
     state.gpr[2].low64 = kClearBegin;
     state.gpr[3].low64 = kClearEnd;
-    state.gpr[4] = {0x00ff00000000ff00ull, 0x1111111111111111ull};
-    state.gpr[5] = {0x0f000f000f00000full, 0x2222222222222222ull};
-    state.gpr[6] = {0u, 0xaaaaaaaaaaaaaaaaull};
+    state.gpr[4] = {0x004e8670u, 0x1111111111111111ull};
+    state.gpr[5] = {0x01ff0000u, 0x2222222222222222ull};
+    state.gpr[6] = {0x00010000u, 0x3333333333333333ull};
+    state.gpr[7] = {0x01d9ce80u, 0x4444444444444444ull};
+    state.gpr[8] = {0x00100220u, 0x5555555555555555ull};
+    state.gpr[9] = {0u, 0xaaaaaaaaaaaaaaaaull};
 
     const auto result = dispatcher.run(kCodeBase, state, 16u);
 
     expect(result.reason == R5900DispatchStopReason::Trap,
-           "BSS-clear loop plus register OR must stop at the syscall boundary");
+           "BSS-clear loop plus SetupThread setup must stop at the syscall boundary");
     expect(result.next_pc == kSyscallPc,
-           "BSS-clear loop plus register OR must reach the exact syscall PC");
+           "BSS-clear loop plus SetupThread setup must reach the exact syscall PC");
     expect(result.blocks_executed == 10u && result.instructions_executed == 28u,
-           "post-loop OR block must extend selected-word accounting by one block and two instructions");
+           "post-loop setup block must preserve historical native accounting");
     expect(result.syscalls_handled == 0u,
            "null host service must not count the trapped syscall as handled");
     expect(result.cache_misses == 3u && result.cache_hits == 7u &&
                result.recompilations == 0u,
-           "post-loop OR block must add one compiled cache entry without changing loop reuse");
+           "post-loop setup must preserve cache miss/hit/recompile accounting");
     expect(result.fast_cache_hits == 7u,
-           "all repeated loop transfers must bypass analyzer/lowering through fast cache replay");
+           "all repeated loop transfers must use fast cache replay");
     expect(dispatcher.cache_size() == 3u,
-           "BSS-clear loop plus OR continuation must retain three native cache entries");
+           "BSS-clear plus SetupThread setup must retain three native cache entries");
     expect(state.gpr[2].low64 == kClearEnd,
-           "BSS-clear pointer must finish exactly at end address");
-    expect(state.gpr[6].low64 == 0x0fff0f000f00ff0full,
-           "post-loop register OR must execute through native dispatcher");
-    expect(state.gpr[6].high64 == 0xaaaaaaaaaaaaaaaaull,
-           "post-loop register OR must preserve destination high64");
+           "BSS pointer must finish at end before trapped SetupThread");
+    expect(state.gpr[3].low64 == 0x3cu,
+           "post-loop setup must select SetupThread");
+    expect(state.gpr[9].low64 == 0x01ff8670u &&
+               state.gpr[9].high64 == 0xaaaaaaaaaaaaaaaaull,
+           "post-loop OR must commit without corrupting SetupThread ABI registers");
 
     expect(memory.read_u8(kClearBegin - 1u) == 0xa5u,
            "BSS-clear must preserve byte immediately before range");
@@ -210,7 +200,7 @@ int main() {
            "BSS-clear must preserve byte immediately after range");
 
     auto handled_memory = make_memory(kCodeBase, kDataBase);
-    HandledHostSyscalls host{};
+    R5900HostSyscallService host{};
     R5900BlockDispatcherOptions options{};
     options.host_syscalls = &host;
     R5900BlockDispatcher handled_dispatcher(handled_memory, options);
@@ -218,30 +208,54 @@ int main() {
     R5900IrExecutionState handled_state{};
     handled_state.gpr[2].low64 = kClearBegin;
     handled_state.gpr[3].low64 = kClearEnd;
-    handled_state.gpr[4] = {0x00ff00000000ff00ull, 0x1111111111111111ull};
-    handled_state.gpr[5] = {0x0f000f000f00000full, 0x2222222222222222ull};
-    handled_state.gpr[6] = {0u, 0xaaaaaaaaaaaaaaaaull};
+    handled_state.gpr[4] = {0x004e8670u, 0x1111111111111111ull};
+    handled_state.gpr[5] = {0x01ff0000u, 0x2222222222222222ull};
+    handled_state.gpr[6] = {0x00010000u, 0x3333333333333333ull};
+    handled_state.gpr[7] = {0x01d9ce80u, 0x4444444444444444ull};
+    handled_state.gpr[8] = {0x00100220u, 0x5555555555555555ull};
+    handled_state.gpr[9] = {0u, 0xaaaaaaaaaaaaaaaaull};
 
     const auto handled = handled_dispatcher.run(kCodeBase, handled_state, 16u);
 
     expect(handled.reason == R5900DispatchStopReason::UnsupportedInstruction,
-           "handled syscall must continue to deliberate XORI boundary");
+           "production SetupThread must continue to deliberate XORI boundary");
     expect(handled.next_pc == kPostSyscallPc,
-           "handled syscall continuation must land at PC+4");
+           "production SetupThread continuation must land at PC+4");
     expect(handled.blocks_executed == 10u && handled.instructions_executed == 28u,
-           "host syscall must not change native BSS/OR accounting");
-    expect(handled.syscalls_handled == 1u && host.calls == 1u,
-           "exactly one syscall must be handled after native prefix");
-    expect(host.last_request.guest_pc == kSyscallPc &&
-               host.last_request.raw_instruction == 0x0000000cu,
-           "host service must receive exact syscall provenance");
-    expect(handled_state.gpr[2].low64 == kClearEnd,
-           "BSS pointer must commit before host handling");
-    expect(handled_state.gpr[6].low64 == 0x0fff0f000f00ff0full &&
-               handled_state.gpr[6].high64 == 0xaaaaaaaaaaaaaaaaull,
+           "SetupThread host handling must not change native BSS/setup accounting");
+    expect(handled.syscalls_handled == 1u,
+           "exactly one production SetupThread must be handled");
+    expect(handled.cache_misses == 3u && handled.cache_hits == 7u &&
+               handled.fast_cache_hits == 7u && handled.recompilations == 0u,
+           "SetupThread host handling must preserve native cache accounting");
+    expect(handled_state.gpr[2].low64 == 0x02000000u,
+           "SetupThread must replace prior BSS pointer in v0 with stack top");
+    expect(handled_state.gpr[3].low64 == 0x3cu,
+           "SetupThread selector setup must commit before host handling");
+    expect(handled_state.gpr[9].low64 == 0x01ff8670u &&
+               handled_state.gpr[9].high64 == 0xaaaaaaaaaaaaaaaaull,
            "post-loop OR state must commit before host handling");
+    expect(host.setup_thread_context().has_value(),
+           "production SetupThread must record a context");
+    expect(host.setup_thread_context()->gp == 0x004e8670u &&
+               host.setup_thread_context()->stack_base == 0x01ff0000u &&
+               host.setup_thread_context()->stack_size == 0x00010000u &&
+               host.setup_thread_context()->stack_top == 0x02000000u &&
+               host.setup_thread_context()->args == 0x01d9ce80u &&
+               host.setup_thread_context()->root_func == 0x00100220u,
+           "startup-shaped SetupThread context mismatch");
     expect(handled_dispatcher.cache_size() == 3u,
            "handled syscall must not create or compile a syscall cache entry");
+
+    for (std::uint32_t offset = 0u; offset < kDataSize; ++offset) {
+        const auto address = kDataBase + offset;
+        const auto trapped_byte = memory.read_u8(address);
+        const auto handled_byte = handled_memory.read_u8(address);
+        expect(trapped_byte.has_value() && handled_byte.has_value(),
+               "startup-shaped data region must stay mapped in both runs");
+        expect(*handled_byte == *trapped_byte,
+               "SetupThread HLE must not change guest memory beyond native BSS effects");
+    }
 
     std::cout << "r5900_block_dispatcher_bss_clear_windows_tests: PASS\n";
     return EXIT_SUCCESS;
