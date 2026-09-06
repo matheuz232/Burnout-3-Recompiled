@@ -34,6 +34,12 @@ struct R5900SetupThreadContext {
     std::uint32_t root_func{};
 };
 
+struct R5900SetupHeapContext {
+    std::uint32_t heap_start{};
+    std::uint32_t requested_heap_size{};
+    std::uint32_t heap_end{};
+};
+
 class IR5900HostSyscallService {
 public:
     virtual ~IR5900HostSyscallService() = default;
@@ -56,8 +62,14 @@ public:
         return setup_thread_context_;
     }
 
+    [[nodiscard]] const std::optional<R5900SetupHeapContext>&
+    setup_heap_context() const noexcept {
+        return setup_heap_context_;
+    }
+
 private:
     std::optional<R5900SetupThreadContext> setup_thread_context_{};
+    std::optional<R5900SetupHeapContext> setup_heap_context_{};
 };
 
 } // namespace b3r::recompiler
