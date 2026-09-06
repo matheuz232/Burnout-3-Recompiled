@@ -10,6 +10,7 @@ namespace b3r::runtime {
 namespace {
 
 constexpr std::uint64_t kGuestAddressSpaceSize = (std::uint64_t{1} << 32u);
+constexpr std::uint32_t kEeMainRamSize = 0x02000000u;
 
 Ps2MemoryMapBuildResult fail(Ps2MemoryMapBuildError error, const char* message) {
     Ps2MemoryMapBuildResult result{};
@@ -22,12 +23,6 @@ std::uint64_t region_end(const Ps2MemoryRegion& region) noexcept {
     return static_cast<std::uint64_t>(region.guest_base) + static_cast<std::uint64_t>(region.size);
 }
 
-bool access_range_fits(std::uint32_t address, std::size_t length) noexcept {
-    if (length > kGuestAddressSpaceSize) {
-        return false;
-    }
-    return static_cast<std::uint64_t>(address) + static_cast<std::uint64_t>(length) <= kGuestAddressSpaceSize;
-}
 
 } // namespace
 
@@ -51,6 +46,11 @@ Ps2MemoryMapBuildResult Ps2MemoryMap::from_elf(const recompiler::Ps2ElfImage& el
         if (end > kGuestAddressSpaceSize) {
             return fail(Ps2MemoryMapBuildError::AddressOverflow,
                         "ELF PT_LOAD guest range exceeds the 32-bit PS2 address space");
+        }
+
+        if (end > static_cast<std::uint64_t>(kEeMainRamSize)) {
+            return fail(Ps2MemoryMapBuildError::OutsideSupportedMainRam,
+                        "ELF PT_LOAD guest range exceeds supported 32 MiB EE main RAM");
         }
 
         const auto file_bytes = elf.segment_file_bytes(i);
@@ -77,25 +77,21 @@ Ps2MemoryMapBuildResult Ps2MemoryMap::from_elf(const recompiler::Ps2ElfImage& el
     }
 
     Ps2MemoryMap memory;
-    memory.regions_.reserve(pending.size());
-    memory.backing_regions_.reserve(pending.size());
-
     try {
+        memory.main_ram_.assign(static_cast<std::size_t>(kEeMainRamSize), 0u);
+        memory.regions_.reserve(pending.size());
         for (const auto& item : pending) {
-            BackingRegion backing{};
-            backing.metadata = item.metadata;
-            backing.bytes.resize(static_cast<std::size_t>(item.metadata.size), 0u);
-            std::copy(item.file_bytes.begin(), item.file_bytes.end(), backing.bytes.begin());
-
             memory.regions_.push_back(item.metadata);
-            memory.backing_regions_.push_back(std::move(backing));
+            std::copy(item.file_bytes.begin(), item.file_bytes.end(),
+                      memory.main_ram_.begin() +
+                          static_cast<std::ptrdiff_t>(item.metadata.guest_base));
         }
     } catch (const std::bad_alloc&) {
         return fail(Ps2MemoryMapBuildError::AllocationFailed,
-                    "Unable to allocate native backing storage for ELF PT_LOAD regions");
+                    "Unable to allocate 32 MiB EE main RAM backing storage");
     } catch (const std::length_error&) {
         return fail(Ps2MemoryMapBuildError::AllocationFailed,
-                    "ELF PT_LOAD backing size exceeds native container limits");
+                    "EE main RAM backing size exceeds native container limits");
     }
 
     Ps2MemoryMapBuildResult result{};
@@ -109,38 +105,21 @@ const std::vector<Ps2MemoryRegion>& Ps2MemoryMap::regions() const noexcept {
 
 std::optional<std::span<std::uint8_t>>
 Ps2MemoryMap::translate(std::uint32_t address, std::size_t length) noexcept {
-    if (!access_range_fits(address, length)) {
+    // Check the owned backing too: a default-constructed map has no RAM.
+    if (length > main_ram_.size() ||
+        static_cast<std::uint64_t>(address) + length > main_ram_.size()) {
         return std::nullopt;
     }
-
-    const std::uint64_t access_end = static_cast<std::uint64_t>(address) + static_cast<std::uint64_t>(length);
-    for (auto& region : backing_regions_) {
-        const std::uint64_t base = region.metadata.guest_base;
-        const std::uint64_t end = region_end(region.metadata);
-        if (static_cast<std::uint64_t>(address) >= base && access_end <= end) {
-            const auto offset = static_cast<std::size_t>(static_cast<std::uint64_t>(address) - base);
-            return std::span<std::uint8_t>(region.bytes).subspan(offset, length);
-        }
-    }
-    return std::nullopt;
+    return std::span<std::uint8_t>(main_ram_).subspan(address, length);
 }
 
 std::optional<std::span<const std::uint8_t>>
 Ps2MemoryMap::translate(std::uint32_t address, std::size_t length) const noexcept {
-    if (!access_range_fits(address, length)) {
+    if (length > main_ram_.size() ||
+        static_cast<std::uint64_t>(address) + length > main_ram_.size()) {
         return std::nullopt;
     }
-
-    const std::uint64_t access_end = static_cast<std::uint64_t>(address) + static_cast<std::uint64_t>(length);
-    for (const auto& region : backing_regions_) {
-        const std::uint64_t base = region.metadata.guest_base;
-        const std::uint64_t end = region_end(region.metadata);
-        if (static_cast<std::uint64_t>(address) >= base && access_end <= end) {
-            const auto offset = static_cast<std::size_t>(static_cast<std::uint64_t>(address) - base);
-            return std::span<const std::uint8_t>(region.bytes).subspan(offset, length);
-        }
-    }
-    return std::nullopt;
+    return std::span<const std::uint8_t>(main_ram_).subspan(address, length);
 }
 
 std::optional<std::uint8_t> Ps2MemoryMap::read_u8(std::uint32_t address) const noexcept {
