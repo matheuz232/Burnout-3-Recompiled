@@ -113,6 +113,34 @@ R5900IrValidationResult validate_existing_integer_write(const R5900IrInstruction
     return {};
 }
 
+R5900IrValidationResult validate_add64(const R5900IrInstruction& ir,
+                                       std::size_t index) {
+    const auto destination = validate_gpr_destination(
+        ir, index, R5900IrGprWriteMode::Low64PreserveUpper64);
+    if (!destination.ok()) {
+        return destination;
+    }
+    if (ir.inputs.size() != 2u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "Add64 expects exactly two GPR inputs");
+    }
+    for (const auto& operand : ir.inputs) {
+        const auto validation = validate_operand(operand, index, ir.guest_pc);
+        if (!validation.ok()) {
+            return validation;
+        }
+        if (operand.kind != R5900IrOperandKind::Gpr) {
+            return failure(R5900IrValidationError::MalformedInstruction,
+                           index,
+                           ir.guest_pc,
+                           "Add64 expects exactly two GPR inputs");
+        }
+    }
+    return {};
+}
+
 R5900IrValidationResult validate_and64(const R5900IrInstruction& ir,
                                        std::size_t index) {
     const auto destination = validate_gpr_destination(
@@ -450,6 +478,9 @@ R5900IrValidationResult validate_r5900_ir_instruction(
     case R5900IrOpcode::AddWordSignExtend:
     case R5900IrOpcode::Or64:
         return validate_existing_integer_write(instruction, instruction_index);
+
+    case R5900IrOpcode::Add64:
+        return validate_add64(instruction, instruction_index);
 
     case R5900IrOpcode::And64:
         return validate_and64(instruction, instruction_index);

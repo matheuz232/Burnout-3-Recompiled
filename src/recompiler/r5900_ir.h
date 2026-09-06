@@ -12,6 +12,7 @@ namespace b3r::recompiler {
 enum class R5900IrOpcode {
     Nop = 0,
     AddWordSignExtend,
+    Add64,
     Or64,
     And64,
     LoadUpperImmediateSignExtend,
