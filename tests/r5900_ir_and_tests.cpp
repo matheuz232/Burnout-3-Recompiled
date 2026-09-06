@@ -85,8 +85,9 @@ int main() {
            "discarded AND write must retain guest word provenance");
 
     const auto or_word = r_type(6u, 7u, 8u, 0u, 0x25u); // OR r8,r6,r7
-    const auto or_lowered = lower_r5900_instruction(decode_r5900(or_word), 0x001001bcu);
-    expect(or_lowered.ok(), "OR must lower before the SetupThread syscall boundary");
+    constexpr std::uint32_t or_test_pc = 0x00001000u;
+    const auto or_lowered = lower_r5900_instruction(decode_r5900(or_word), or_test_pc);
+    expect(or_lowered.ok(), "register OR must lower");
     expect(or_lowered.instructions.size() == 1u, "OR must lower to one IR instruction");
 
     const auto& or_ir = or_lowered.instructions.front();
@@ -103,7 +104,7 @@ int main() {
                or_ir.inputs[1].kind == R5900IrOperandKind::Gpr &&
                or_ir.inputs[1].gpr_index == 7u,
            "OR sources must be rs and rt GPRs");
-    expect(or_ir.guest_pc == 0x001001bcu && or_ir.guest_raw == or_word,
+    expect(or_ir.guest_pc == or_test_pc && or_ir.guest_raw == or_word,
            "OR must retain guest provenance");
     expect(validate_r5900_ir_instruction(or_ir, 0u).ok(),
            "Or64 GPR+GPR must validate");
@@ -121,7 +122,7 @@ int main() {
 
     const auto or_zero_word = r_type(6u, 7u, 0u, 0u, 0x25u); // OR r0,r6,r7
     const auto or_zero_lowered =
-        lower_r5900_instruction(decode_r5900(or_zero_word), 0x001001c0u);
+        lower_r5900_instruction(decode_r5900(or_zero_word), or_test_pc + 4u);
     expect(or_zero_lowered.ok() && or_zero_lowered.instructions.size() == 1u,
            "OR writing r0 must lower deterministically");
     expect(or_zero_lowered.instructions.front().opcode == R5900IrOpcode::Nop,
