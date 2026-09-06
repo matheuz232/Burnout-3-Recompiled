@@ -48,6 +48,11 @@ constexpr std::uint32_t i_type(
            imm;
 }
 
+constexpr std::uint32_t j_type(std::uint8_t op, std::uint32_t target) {
+    return (static_cast<std::uint32_t>(op) << 26u) |
+           ((target >> 2u) & 0x03ffffffu);
+}
+
 b3r::runtime::Ps2MemoryMap make_memory(
     const std::vector<std::uint32_t>& words,
     std::uint32_t base) {
@@ -130,6 +135,8 @@ int main() {
     constexpr std::uint32_t kSyscall = 0x0000000cu;
     constexpr std::uint32_t kUnsupportedXori =
         (0x0eu << 26u) | (1u << 21u) | (1u << 16u) | 1u;
+    constexpr std::uint32_t kUnsupportedSd =
+        (0x3fu << 26u) | (29u << 21u) | (31u << 16u);
 
     {
         auto memory = make_memory({kSyscall}, base);
@@ -271,6 +278,61 @@ int main() {
                    service.setup_heap_context()->requested_heap_size == 0xffffffffu &&
                    service.setup_heap_context()->heap_end == 0x01ff0000u,
                "two-syscall dispatcher path must record Burnout SetupHeap context");
+    }
+
+    {
+        const auto jal = j_type(0x03u, base + 0x20u);
+        auto memory = make_memory(
+            {
+                i_type(0x09u, 29u, 29u, 0xfff0u), // ADDIU sp,sp,-16
+                kUnsupportedSd,                    // SD ra,0(sp)
+                jal,                               // must remain unexecuted
+                0u,                                // JAL delay slot
+            },
+            base);
+        R5900BlockDispatcher dispatcher(memory);
+        R5900IrExecutionState state{};
+        state.gpr[29] = {0x02000000u, 0x2929292929292929ull};
+        state.gpr[31] = {0x001001f0u, 0x3131313131313131ull};
+
+        const auto result = dispatcher.run(base, state, 2u);
+        expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
+               "unsupported SD before JAL must stop as unsupported instruction");
+        expect(result.next_pc == base + 4u,
+               "unsupported SD before JAL must report exact first unexecuted PC");
+        expect(result.blocks_executed == 1u && result.instructions_executed == 1u,
+               "dispatcher must execute only supported prefix before SD boundary");
+        expect(state.gpr[29].low64 == 0x01fffff0u &&
+                   state.gpr[29].high64 == 0x2929292929292929ull,
+               "supported ADDIU prefix must commit before SD boundary");
+        expect(state.gpr[31].low64 == 0x001001f0u &&
+                   state.gpr[31].high64 == 0x3131313131313131ull,
+               "JAL after unsupported SD must not mutate return address");
+    }
+
+    {
+        const auto jal = j_type(0x03u, base + 0x20u);
+        auto memory = make_memory(
+            {
+                kUnsupportedSd, // boundary at entry
+                jal,            // must remain unexecuted
+                0u,             // JAL delay slot
+            },
+            base);
+        R5900BlockDispatcher dispatcher(memory);
+        R5900IrExecutionState state{};
+        state.gpr[31] = {0x001001f0u, 0x3131313131313131ull};
+
+        const auto result = dispatcher.run(base, state, 1u);
+        expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
+               "unsupported SD at entry must stop as unsupported instruction");
+        expect(result.next_pc == base,
+               "unsupported SD at entry must retain exact boundary PC");
+        expect(result.blocks_executed == 0u && result.instructions_executed == 0u,
+               "unsupported SD at entry must execute no later transfer");
+        expect(state.gpr[31].low64 == 0x001001f0u &&
+                   state.gpr[31].high64 == 0x3131313131313131ull,
+               "JAL after entry SD boundary must not mutate return address");
     }
 
     {
