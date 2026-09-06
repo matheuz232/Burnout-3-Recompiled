@@ -340,6 +340,19 @@ void emit_add_word_sign_extend(std::vector<std::uint8_t>& bytes,
     }
 }
 
+void emit_add64(std::vector<std::uint8_t>& bytes,
+                const R5900IrInstruction& instruction) {
+    emit_operand64_to_rax(bytes, instruction.inputs[0]);
+    emit_operand64_to_rdx(bytes, instruction.inputs[1]);
+    bytes.push_back(0x48u);
+    bytes.push_back(0x01u);
+    bytes.push_back(0xd0u);
+    if (instruction.destination->index != 0u) {
+        emit_store_rax_to_state(bytes,
+                                gpr_low64_offset(instruction.destination->index));
+    }
+}
+
 void emit_or64(std::vector<std::uint8_t>& bytes,
                const R5900IrInstruction& instruction) {
     emit_operand64_to_rax(bytes, instruction.inputs[0]);
@@ -682,6 +695,9 @@ EmitResult emit_ir_instruction(std::vector<std::uint8_t>& bytes,
         return {};
     case R5900IrOpcode::AddWordSignExtend:
         emit_add_word_sign_extend(bytes, instruction);
+        return {};
+    case R5900IrOpcode::Add64:
+        emit_add64(bytes, instruction);
         return {};
     case R5900IrOpcode::Or64:
         emit_or64(bytes, instruction);
