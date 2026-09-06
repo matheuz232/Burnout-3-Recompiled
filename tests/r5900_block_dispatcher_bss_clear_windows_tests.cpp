@@ -53,6 +53,18 @@ void put_program_header(Bytes& bytes,
     put_u32(bytes, offset + 28u, 0x1000u);
 }
 
+constexpr std::uint32_t r_type(std::uint8_t rs,
+                               std::uint8_t rt,
+                               std::uint8_t rd,
+                               std::uint8_t sa,
+                               std::uint8_t funct) {
+    return (static_cast<std::uint32_t>(rs) << 21u) |
+           (static_cast<std::uint32_t>(rt) << 16u) |
+           (static_cast<std::uint32_t>(rd) << 11u) |
+           (static_cast<std::uint32_t>(sa) << 6u) |
+           funct;
+}
+
 constexpr std::uint32_t i_type(std::uint8_t op,
                                std::uint8_t rs,
                                std::uint8_t rt,
@@ -77,13 +89,13 @@ b3r::runtime::Ps2MemoryMap make_memory(std::uint32_t code_base,
     constexpr std::uint32_t kDataSize = 0x80u;
 
     const std::vector<std::uint32_t> words = {
-        i_type(0x04u, 2u, 3u, 7u),       // BEQ r2,r3,exit
+        i_type(0x04u, 2u, 3u, 5u),       // BEQ r2,r3,post_loop
         0u,                               // delay
         i_type(0x1fu, 2u, 0u, 0u),       // SQ r0,0(r2)
         i_type(0x09u, 2u, 2u, 0x10u),    // ADDIU r2,r2,16
         j_type(0x02u, code_base),         // J loop
         0u,                               // delay
-        0u,
+        r_type(4u, 5u, 6u, 0u, 0x25u),   // OR r6,r4,r5
         0u,
         0x0000000cu,                      // SYSCALL
     };
@@ -142,24 +154,31 @@ int main() {
     R5900IrExecutionState state{};
     state.gpr[2].low64 = kClearBegin;
     state.gpr[3].low64 = kClearEnd;
+    state.gpr[4] = {0x00ff00000000ff00ull, 0x1111111111111111ull};
+    state.gpr[5] = {0x0f000f000f00000full, 0x2222222222222222ull};
+    state.gpr[6] = {0u, 0xaaaaaaaaaaaaaaaaull};
 
     const auto result = dispatcher.run(kCodeBase, state, 16u);
 
     expect(result.reason == R5900DispatchStopReason::Trap,
-           "BSS-clear loop must stop at the syscall boundary");
+           "BSS-clear loop plus register OR must stop at the syscall boundary");
     expect(result.next_pc == kSyscallPc,
-           "BSS-clear loop must reach the exact syscall PC");
-    expect(result.blocks_executed == 9u && result.instructions_executed == 26u,
-           "four-quadword loop must preserve selected-word accounting");
-    expect(result.cache_misses == 2u && result.cache_hits == 7u &&
+           "BSS-clear loop plus register OR must reach the exact syscall PC");
+    expect(result.blocks_executed == 10u && result.instructions_executed == 28u,
+           "post-loop OR block must extend selected-word accounting by one block and two instructions");
+    expect(result.cache_misses == 3u && result.cache_hits == 7u &&
                result.recompilations == 0u,
-           "BSS-clear loop must compile two blocks and reuse them seven times");
+           "post-loop OR block must add one compiled cache entry without changing loop reuse");
     expect(result.fast_cache_hits == 7u,
            "all repeated loop transfers must bypass analyzer/lowering through fast cache replay");
-    expect(dispatcher.cache_size() == 2u,
-           "BSS-clear loop must retain exactly two native cache entries");
+    expect(dispatcher.cache_size() == 3u,
+           "BSS-clear loop plus OR continuation must retain three native cache entries");
     expect(state.gpr[2].low64 == kClearEnd,
            "BSS-clear pointer must finish exactly at end address");
+    expect(state.gpr[6].low64 == 0x0fff0f000f00ff0full,
+           "post-loop register OR must execute through native dispatcher");
+    expect(state.gpr[6].high64 == 0xaaaaaaaaaaaaaaaaull,
+           "post-loop register OR must preserve destination high64");
 
     expect(memory.read_u8(kClearBegin - 1u) == 0xa5u,
            "BSS-clear must preserve byte immediately before range");
