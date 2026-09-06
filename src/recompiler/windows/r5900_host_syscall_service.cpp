@@ -2,6 +2,7 @@
 
 #include "recompiler/r5900_decoder.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <iomanip>
 #include <sstream>
@@ -9,9 +10,17 @@
 namespace b3r::recompiler {
 namespace {
 
+constexpr std::int32_t kSetupThreadSelector = 0x3c;
+
 std::int32_t ee_syscall_selector(const R5900IrExecutionState& state) noexcept {
     return static_cast<std::int32_t>(
         static_cast<std::uint32_t>(state.gpr[3].low64));
+}
+
+std::uint32_t ee_gpr_low32(
+    const R5900IrExecutionState& state,
+    std::size_t index) noexcept {
+    return static_cast<std::uint32_t>(state.gpr[index].low64);
 }
 
 std::string format_pc(std::uint32_t pc) {
@@ -37,6 +46,26 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
     }
 
     const auto selector = ee_syscall_selector(state);
+    if (selector == kSetupThreadSelector) {
+        const auto gp = ee_gpr_low32(state, 4u);
+        const auto stack = ee_gpr_low32(state, 5u);
+        const auto stack_size = ee_gpr_low32(state, 6u);
+        const auto args = ee_gpr_low32(state, 7u);
+        const auto root_func = ee_gpr_low32(state, 8u);
+
+        const R5900SetupThreadContext context{
+            gp,
+            stack,
+            stack_size,
+            stack + stack_size,
+            args,
+            root_func,
+        };
+        setup_thread_context_ = context;
+        state.gpr[2].low64 = static_cast<std::uint64_t>(context.stack_top);
+        return {R5900HostSyscallStatus::Handled, {}};
+    }
+
     std::ostringstream out;
     out << "host syscall at guest PC " << format_pc(request.guest_pc)
         << ": unsupported EE syscall selector " << std::dec << selector
