@@ -207,6 +207,72 @@ int main() {
     }
 
     {
+        constexpr std::uint32_t kPostSetupHeapPc = base + 32u;
+        auto memory = make_memory(
+            {
+                i_type(0x09u, 0u, 9u, 0x0055u),     // native prefix
+                kSyscall,                            // SetupThread
+                i_type(0x09u, 2u, 29u, 0x0000u),   // guest move sp,v0
+                i_type(0x0fu, 0u, 4u, 0x01ecu),    // LUI a0,0x01ec
+                i_type(0x0du, 4u, 4u, 0xea00u),    // ORI a0,a0,0xea00
+                i_type(0x09u, 0u, 5u, 0xffffu),    // ADDIU a1,r0,-1
+                i_type(0x09u, 0u, 3u, 0x003du),    // ADDIU v1,r0,0x3d
+                kSyscall,                            // SetupHeap
+                kUnsupportedXori,                    // deliberate boundary
+            },
+            base);
+
+        R5900HostSyscallService service{};
+        R5900BlockDispatcherOptions options{};
+        options.block_options.max_instructions = 16u;
+        options.host_syscalls = &service;
+        R5900BlockDispatcher dispatcher(memory, options);
+
+        R5900IrExecutionState state{};
+        state.gpr[2].high64 = 0xa5a5a5a5a5a5a5a5ull;
+        state.gpr[29].high64 = 0x2929292929292929ull;
+        state.gpr[3].low64 = 0x3cu;
+        state.gpr[4].low64 = 0x004e8670u;
+        state.gpr[5].low64 = 0x01ff0000u;
+        state.gpr[6].low64 = 0x00010000u;
+        state.gpr[7].low64 = 0x01d9ce80u;
+        state.gpr[8].low64 = 0x00100220u;
+
+        const auto result = dispatcher.run(base, state, 3u);
+        expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
+               "SetupThread/SetupHeap path must reach deliberate boundary");
+        expect(result.next_pc == kPostSetupHeapPc,
+               "SetupHeap must resume at its syscall PC+4");
+        expect(result.blocks_executed == 2u && result.instructions_executed == 6u,
+               "two-syscall path must count only the two native prefixes");
+        expect(result.syscalls_handled == 2u,
+               "SetupThread/SetupHeap path must handle exactly two syscalls");
+        expect(dispatcher.cache_size() == 2u,
+               "neither syscall may create a native cache entry");
+        expect(state.gpr[9].low64 == 0x55u,
+               "native prefix must commit before first syscall");
+        expect(state.gpr[29].low64 == 0x02000000u &&
+                   state.gpr[29].high64 == 0x2929292929292929ull,
+               "guest instruction must copy SetupThread v0 into sp");
+        expect(state.gpr[2].low64 == 0x02000000u &&
+                   state.gpr[2].high64 == 0xa5a5a5a5a5a5a5a5ull,
+               "SetupHeap must preserve SetupThread v0 result");
+        expect(state.gpr[3].low64 == 0x3du &&
+                   state.gpr[4].low64 == 0x01ecea00u &&
+                   static_cast<std::uint32_t>(state.gpr[5].low64) == 0xffffffffu,
+               "guest SetupHeap argument preparation must commit before syscall");
+        expect(service.setup_thread_context().has_value() &&
+                   service.setup_thread_context()->stack_base == 0x01ff0000u &&
+                   service.setup_thread_context()->stack_top == 0x02000000u,
+               "two-syscall dispatcher path must retain SetupThread context");
+        expect(service.setup_heap_context().has_value() &&
+                   service.setup_heap_context()->heap_start == 0x01ecea00u &&
+                   service.setup_heap_context()->requested_heap_size == 0xffffffffu &&
+                   service.setup_heap_context()->heap_end == 0x01ff0000u,
+               "two-syscall dispatcher path must record Burnout SetupHeap context");
+    }
+
+    {
         auto memory = make_memory({kSyscall}, base);
         FakeHostSyscallService service(R5900HostSyscallStatus::Unsupported);
         R5900BlockDispatcherOptions options{};
