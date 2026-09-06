@@ -4,98 +4,128 @@ Experimental native Windows x86-64 recompilation/port project for **Burnout 3: T
 
 ## Current milestone
 
-`Burnout 3 Recompiled - Test Build 0.1` bootstrap, static-analysis, and native R5900 startup-execution infrastructure through the BSS-clear path plus validated HLE for the first two EE startup syscalls: explicit-stack `SetupThread` (`v1=0x3c`) and main-thread `SetupHeap` (`v1=0x3d`). The current path includes `SQ` guest-memory writes, ordinary `BEQ`/`BNE`, branch-likely `BEQL`/`BNEL`, direct `J`/`JAL`, indirect `JR`/`JALR`, transfer-block fast cache replay, and host syscalls kept outside generated x64.
+`Burnout 3 Recompiled - Test Build 0.1` now has native R5900 startup execution through the first real post-`SetupHeap` stack prologue store. The modeled path includes the real startup-shaped sequence:
 
-The current source tree contains:
+```text
+SetupThread @ 0x001001c8
+SetupHeap   @ 0x001001e4
+JAL         0x00115108
+ADDIU       sp,sp,-16
+SD          ra,0(sp)
+JAL         0x00114ed0
+```
 
-- C++20/CMake project structure;
-- native Win32 window bootstrap;
-- structured logging and Windows minidump plumbing;
-- QueryPerformanceCounter clock and 120 Hz Windows frame pacer;
-- validated PS2 ELF32/MIPS structural loading;
-- PT_LOAD-backed guest memory mapping with little-endian typed 8/16/32/64/128-bit access and atomic full-range 128-bit writes;
-- an R5900 decoder with the narrow EE/MMI/COP1 startup subset required by the Burnout 3 entry path, including `SYNC`, `MTSAH`, `MTHI1`, `MTLO1`, `PADDUW`, `MTC1`, `CTC1`, `ADDA.S`, ordinary `BEQ`/`BNE`, scalar `AND`, and `SQ`;
-- provenance-carrying R5900 IR with lowering for the startup execution subset, including NOP/ADDU/ADDIU/ORI/ANDI/LUI/AND, special HI/LO/SA writes, PADDUW, COP1 moves/accumulator add, SYNC semantics, and `Store128` lowering for `SQ`;
-- block-level R5900 IR with typed `BranchEqual64`, `BranchEqualLikely64`, `BranchNotEqualLikely64`, `DirectJump`, `DirectCall`, `IndirectJump`, and `IndirectCall` terminators plus one explicit architectural delay slot; indirect calls carry an explicit link GPR;
-- deterministic R5900 IR reference execution over all 32 128-bit EE GPRs plus HI/LO/HI1/LO1, SA, 32 raw FPRs, FCR31, FP accumulator state, and an opaque guest-memory callback bridge for `Store128`;
-- a Windows x86-64 machine-code backend for the startup subset, with executable-page ownership and W^X allocation/protection;
-- native x86-64 control-transfer emission for ordinary `BEQ`/`BNE`, branch-likely `BEQL`/`BNEL`, direct `J`/`JAL`, and indirect `JR`/`JALR`; `BEQL`/`BNEL` evaluate the low64 predicate before the slot, execute the delay exactly once only when taken, and branch around the complete emitted delay path when not taken; `BNE` reuses the equality terminator with swapped runtime destinations; indirect transfers snapshot the low 32-bit target before link/delay execution, `JALR` writes zero-extended `PC+8` to the decoded link GPR while preserving its high64 half, and the `rd == rs` / `rd == 0` cases are explicitly supported;
-- native x86-64 `Store128` emission that uses a Win64 ABI-safe helper call, 32-bit EE effective-address wrap, 16-byte alignment-down semantics, and complete low/high 64-bit source forwarding;
-- a Windows R5900 native block dispatcher that analyzes guest blocks, lowers/compiles them on demand, executes them through the x86-64 backend, consumes the JIT-returned `next_pc`, supports ordinary `BEQ`/`BNE`, branch-likely `BEQL`/`BNEL`, direct `J`/`JAL`, and indirect `JR`/`JALR`, applies a block budget, caches native blocks by guest PC, rejects stale cache entries after guest-code changes, bridges mutable guest memory for body `SQ` operations, and fast-replays unchanged cached transfer blocks after direct guest-word verification without repeating analysis/lowering;
-- an injectable `IR5900HostSyscallService` boundary: `SYSCALL` is never compiled into an x64 block, a null service preserves deterministic `Trap`, `Handled` resumes at exactly guest `PC+4`, and host calls are counted separately from native blocks/instructions;
-- dedicated `UnsupportedSyscall` and `HostSyscallFailure` dispatcher outcomes that stop at the exact syscall PC and preserve the service diagnostic instead of silently skipping a kernel call;
-- a production `R5900HostSyscallService` that validates the raw `SYSCALL`, extracts the EE selector from `GPR3/v1`, implements explicit-stack `SetupThread` (`0x3c`), records the validated `gp/stack/stack_size/stack_top/args/root_func` context, and returns `stack + stack_size` in `GPR2/v0`; it also implements main-thread `SetupHeap` (`0x3d`), records `heap_start/requested_heap_size/heap_end`, supports Burnout's `heap_size == -1` convention by using the committed stack base as `heap_end`, supports validated positive explicit sizes, and preserves all guest architectural state and guest memory because the public API is `void SetupHeap(void*, s32)`; automatic-stack `SetupThread` remains unsupported;
-- deterministic runtime `MemoryAccessFailure` propagation for guest stores, with completed-prefix accounting and cache retention when execution fails because the runtime address is unmapped;
-- cache fingerprints that cover straight-line body words plus supported `BEQ`/`BNE`/`BEQL`/`BNEL`/`J`/`JAL`/`JR`/`JALR` terminator and delay-slot words; runtime branch predicates and indirect target values are deliberately excluded from the key so cached conditional/indirect blocks can change runtime outcomes without recompilation;
-- differential Windows tests comparing reference and native x86-64 execution for integer/MMI/COP1 state, ordinary `BEQ`, branch-likely `BEQL`/`BNEL`, direct `J`/`JAL`, indirect `JR`/`JALR`, likely-branch annulment, target-snapshot/link-before-delay ordering, `rd == rs`, `rd == 0`, link high64 preservation, source-mutating delay slots, and `Store128` success/failure semantics; dispatcher tests additionally cover likely taken/not-taken behavior, cache reuse across runtime predicate changes, branch/delay-word invalidation, selected-guest-word accounting, `SQ` delay rejection, and host-syscall handled/unsupported/fault outcomes;
-- a dedicated BSS-clear regression in which the native loop and post-loop register setup execute first, production `SetupThread` returns `0x02000000` in `v0`, the guest instruction copies that result into `sp`, production `SetupHeap` records Burnout-shaped heap bounds `0x01ecea00..0x01ff0000` without changing `v0` or guest memory, and execution reaches a deliberate unsupported boundary after the second syscall; the handled path proves **11 native blocks / 33 selected guest words / 4 cache misses / 7 fast-cache hits / 2 handled syscalls**, while the null-service path still traps at `SetupThread` and both paths leave every mapped data byte identical after the same native BSS effects;
-- a synthetic startup-shaped dispatcher test that completes **7 native guest blocks / 96 guest instructions**, covers one taken and one not-taken `BEQ`, executes `SQ` at `0x00100160`, direct `J`/`JAL`, `JR` with its delay slot, aliasing `JALR r5,r5` with link-visible delay semantics, reaches the indirect target at `0x001001c0`, executes not-taken `BNE r0,r0` at `0x001001c4` plus its NOP delay, and then stops at deterministic analysis failure `0x001001cc` because the synthetic executable fixture ends;
-- an optional external-ELF validation mode for the startup dispatcher test, allowing a legally supplied `SLUS_210.50` to execute the full real BSS-clear loop locally and prove the exact `SetupThread` syscall boundary without committing or uploading game data;
-- conservative basic-block and reachable-CFG analysis;
-- deterministic analysis reports;
-- `Burnout3Analyze`, a console tool for analyzing an externally supplied PS2 ELF without executing guest code;
-- portable/unit tests plus Windows-specific integration tests;
-- Windows CI pinned to Visual Studio 2022.
+The project still does **not** boot the game. The next real unsupported guest instruction identified from the legally supplied ELF is `DADDU a0,sp,zero` at `0x00114edc` (raw `0x03a0202d`). That boundary is diagnostic evidence from the external lawful ELF, not a claim that the expanded path has been externally native-validated on Windows.
 
-Validated native control transfers: `BEQ`, `BNE`, `BEQL`, `BNEL`, `J`, `JAL`, `JR`, `JALR`. `BEQL`/`BNEL` implement architectural branch-likely annulment: their delay slot executes only on the taken path. `BLEZL`/`BGTZL` and REGIMM likely/link-likely variants remain unsupported. External legal-ELF validation of the expanded host-syscall path is pending. The game does not boot yet.
+## Current runtime/recompiler capabilities
 
-The startup execution state models all 32 EE GPRs as 128-bit values split into low/high 64-bit halves and additionally models HI/LO/HI1/LO1, SA, raw 32-bit FPR values, FCR31, and the floating-point accumulator. Current integer write semantics preserve the modeled upper halves where required and GPR zero is normalized explicitly.
+- C++20 / CMake / Visual Studio 2022 Windows x64 project;
+- native Win32 bootstrap, logging, crash/minidump support and 120 Hz QPC-based frame pacing;
+- PS2 ELF32 little-endian MIPS loading and conservative control-flow analysis;
+- **32 MiB EE main RAM backing** for `0x00000000..0x01ffffff`, zero-filled outside loaded data;
+- `Ps2MemoryMap::regions()` remains ELF `PT_LOAD` metadata only, while `translate()` represents physical EE RAM availability;
+- little-endian typed 8/16/32/64/128-bit reads/writes;
+- R5900 decoder and startup IR for the currently required EE/MMI/COP1 subset;
+- `SQ` lowered as `Store128` and `SD` lowered as `Store64`;
+- interpreted `Store64` with exact low64 source semantics, 32-bit effective-address wrap, required 8-byte alignment and deterministic width-8 memory-fault provenance;
+- Windows x86-64 native `Store64` and `Store128` helper paths using the shared execution context;
+- ordinary `BEQ`/`BNE`, branch-likely `BEQL`/`BNEL`, direct `J`/`JAL`, indirect `JR`/`JALR` and architectural delay slots;
+- cached native blocks with byte-exact guest-word verification and fast replay;
+- a boundary-prefix rule that prevents supported transfers after an unsupported instruction from executing prematurely;
+- an injectable host-syscall boundary outside generated x64;
+- production explicit-stack `SetupThread` (`0x3c`) and main-thread `SetupHeap` (`0x3d`) HLE;
+- deterministic runtime `MemoryAccessFailure` propagation with exact guest-PC/address/width accounting.
 
-The Windows x86-64 backend emits callable native machine code for the current startup subset and is differentially checked against the reference executor. PADDUW uses alias-safe source capture and four-lane unsigned saturating addition; COP1 `MTC1`/`CTC1` preserve raw 32-bit payloads and the current `ADDA.S` implementation operates on the modeled raw single-precision values under the explicit v0 floating-point contract. `Store128` is emitted through a narrow C++ helper rather than embedding `Ps2MemoryMap` internals in generated code. The helper path uses a Win64-compliant call frame/shadow space and reports memory faults through the shared execution context. Executable memory is allocated writable, populated, changed to execute/read, and instruction-cache-flushed before execution.
+### `SD / Store64` contract
 
-`R5900BlockDispatcher` supports ordinary `BEQ`/`BNE`, branch-likely `BEQL`/`BNEL`, direct `J`/`JAL`, and indirect `JR`/`JALR` as native block terminators plus `SQ` in straight-line block bodies. The block body, supported terminator, and architectural delay slot form one cache candidate. `BEQ` and `BNE` evaluate their low64 GPR predicates before the slot and always execute one architectural delay instruction; `BNE` reuses `BranchEqual64` with the equality and inequality destinations swapped. `BEQL` and `BNEL` also decide the low64 predicate before the slot, but implement architectural branch-likely annulment: the taken path executes the delay exactly once while the not-taken path bypasses all delay code and returns `PC+8`. `J` returns its fixed direct target; `JAL` writes `PC+8` to `GPR31.low64` before the slot while preserving the upper 64 bits. `JR`/`JALR` snapshot the low 32-bit runtime target before the slot, and `JALR` writes its decoded link GPR before the delay slot without disturbing that register's high64 half; `rd == rs` therefore jumps using the old target, while `rd == 0` suppresses the link write. `SQ` uses the low 32 bits of the base GPR plus the signed 16-bit immediate with 32-bit wrap, then silently aligns the address down to 16 bytes before writing the full 128-bit source GPR. `SQ` in dispatcher-managed `BEQ`/`BNE`/`BEQL`/`BNEL`, `J`/`JAL`, or `JR`/`JALR` delay slots remains deliberately outside v0. `BLEZL`, `BGTZL`, REGIMM likely/link-likely variants, guest loads, other guest stores, and other unsupported control flow still stop conservatively.
+For `SD rt, imm(rs)`:
 
-`R5900HostSyscallService` is deliberately outside the generated-code path. The dispatcher detects a decoded `SYSCALL`, commits any supported native prefix first, and invokes the configured host service with exact guest-PC/raw-instruction provenance plus current R5900 state and `Ps2MemoryMap`. Selector `0x3c` handles the explicit-stack `SetupThread` ABI: low 32-bit `GPR4..GPR8` provide `gp`, `stack`, signed `stack_size`, `args`, and `root_func`; a positive non-overflowing explicit stack returns zero-extended `stack + stack_size` in `GPR2.low64` and records a lightweight `R5900SetupThreadContext`. The handler preserves `GPR2.high64`, all other architectural state, and guest memory, and deliberately does **not** perform `move $sp,$v0`; guest startup code owns that instruction. `stack == 0xffffffff` remains `Unsupported`; non-positive size or 32-bit stack-top overflow returns `Fault` transactionally.
+```text
+address = uint32(low32(GPR[rs].low64) + sign_extend16(imm))
+value   = GPR[rt].low64
+```
 
-Selector `0x3d` handles `SetupHeap`. Low 32-bit `GPR4/a0` is `heap_start` and low 32-bit `GPR5/a1` is the raw signed heap-size argument. A prior successful `SetupThread` is required. Burnout's `0xffffffff` size derives `heap_end` from `setup_thread_context.stack_base`; with the observed startup values this records `heap_start=0x01ecea00`, `requested_heap_size=0xffffffff`, `heap_end=0x01ff0000`, an effective heap size of `0x00121600` bytes. Positive explicit sizes are accepted only if addition cannot overflow and the result does not cross `stack_base`. Zero, other negative sizes, overflow, a missing thread context, or stack overlap return transactional `Fault`. A successful `SetupHeap` changes only host-side metadata: **all guest GPRs including `v0`, special registers, floating-point state, and guest memory are preserved**. A later successful `SetupThread` invalidates stale heap metadata only after the new thread context validates successfully. `EndOfHeap` (`0x3e`) remains unimplemented.
+The address must be 8-byte aligned. Unlike the existing `SQ` v0 path, `SD` is **not** rounded down. A failed store stops before later guest instructions and reports width `8` at the exact guest PC/address.
 
-The SetupHeap implementation/test head `c47400aa86ed9f13058f96f0453a1f59eda447ef` passed Windows CI run `34051878908`, job `101536839679`, with the complete Windows test, pacing, probe, and package-validation gates green. Earlier explicit RED/GREEN evidence is recorded in `docs/PROGRESS.md`.
+The startup-shaped native dispatcher regression proves:
 
-A legally supplied Burnout 3 ELF was inspected out-of-repository. Its entry point is `0x00100008`. Static inspection identifies the original 74-instruction startup body before the first `BEQ` at `0x00100130`; the first branch is taken to `0x0010014C` with a NOP delay slot. The continuation reaches `SQ` at `0x00100160` and enters the real BSS-clear loop, advancing `r2` by 16 bytes from `0x004e2680` to `0x01ecea00`. That is 1,698,872 `SQ` iterations. After the loop, startup prepares the EE kernel call arguments and reaches `SYSCALL` at `0x001001c8` with `v1=0x3c` (`SetupThread`); the next startup syscall observed statically is `v1=0x3d` (`SetupHeap`) at `0x001001e4`, with observed `heap_start=0x01ecea00` and `heap_size=0xffffffff`. This real-file inspection is **not** claimed as native external execution: the Windows external-ELF dispatcher path is compiled and CI-tested without game data, but the supplied ELF has not yet been run through the expanded two-syscall Windows path in this environment.
+```text
+initial sp                  0x02000000
+first JAL return address    0x001001f0
+sp after ADDIU              0x01fffff0
+mem64[0x01fffff0]           0x00000000001001f0
+final RA after second JAL   0x00115118
+next_pc                     0x00114ed0
+```
 
-The game still does **not** boot. The production host service and synthetic startup-shaped integration now cross both `SetupThread` and `SetupHeap`, but the externally supplied real ELF has not been executed through this expanded Windows path here. The next gate is to continue the real startup after `0x001001e4` and identify the first unsupported instruction/syscall required by the executable. `EndOfHeap` (`0x3e`), broader guest-memory loads/stores, additional control flow including `BLEZL`/`BGTZL` and REGIMM likely/link-likely variants, other named syscall/HLE handlers, graphics, audio, input, menus, and gameplay remain unimplemented.
+It also verifies that the adjacent eight stack bytes remain unchanged and that a second execution fast-replays both compiled blocks without recompilation.
 
-## Legal data policy
+## Validation status
 
-No proprietary Burnout 3 executable, assets, audio, textures, symbols, dumps, or game data are included in this repository. Game-data analysis and external execution validation use files supplied externally by the owner from a legally obtained copy. Do not commit those files.
+Current SD/EE-RAM implementation head before documentation: `35235fedf14dc1f0f1997500bcf575b16f9130b8`.
+
+Windows CI run `34061027697`, job `101561461996`, on Windows Server 2022 / MSVC 19.44 completed successfully with:
+
+- **59/59 CTest passed**;
+- `r5900_ir_store64_tests` passed;
+- `r5900_ir_store64_executor_tests` passed;
+- `r5900_x64_store64_windows_tests` passed;
+- `r5900_block_dispatcher_store64_windows_tests` passed;
+- `r5900_block_dispatcher_sd_startup_windows_tests` passed;
+- frame-pacing telemetry passed: 240 samples, 8.333 ms mean, 0 samples above 9/10/12 ms;
+- one-second pacing probe passed: 120/120 frames at 120 Hz, 8.333 ms mean;
+- analyzer and pacing-probe package validation passed.
+
+Hosted CI timing is smoke evidence only; physical Windows desktop pacing validation remains required.
+
+## Lawful external ELF evidence
+
+No proprietary Burnout 3 executable or assets are committed to this repository. Out-of-repository inspection of the user-supplied legal ELF confirms the startup path through `SetupThread`, `SetupHeap`, the two calls above, and the stack stores.
+
+At the second call target, the real code begins:
+
+```text
+0x00114ed0  ADDIU sp,sp,-0x50
+0x00114ed4  ADDIU v0,zero,1
+0x00114ed8  SD    ra,0x40(sp)
+0x00114edc  DADDU a0,sp,zero   <- next unsupported boundary
+```
+
+Entering `0x00114ed0` with `sp=0x01fffff0` and `ra=0x00115118`, the currently modeled prefix would produce:
+
+```text
+sp                  0x01ffffa0
+v0                  0x0000000000000001
+mem64[0x01ffffe0]   0x0000000000115118
+```
+
+This establishes the **next implementation target: R5900 `DADDU`**. It does not upgrade the expanded startup path to `EXTERNALLY_VALIDATED`; the existing Windows external-ELF harness still requires extension and execution through the newer HLE/SD path.
+
+## External startup validation harness
+
+The Windows startup dispatcher test can optionally consume a user-supplied ELF locally:
+
+```powershell
+.\build\Release\r5900_block_dispatcher_startup_windows_tests.exe "D:\Games\Burnout3\SLUS_210.50"
+```
+
+Its existing external mode validates the full real BSS clear through the `SetupThread` boundary and does not commit or upload the supplied game file. The newer `SetupHeap`/`SD` path is currently covered by synthetic/native CI plus the lawful local diagnostic described above, not by a completed external Windows-native run.
 
 ## Analyze an external PS2 ELF
 
 After a Release build:
 
 ```powershell
-Burnout3Analyze.exe --elf "D:\\Games\\Burnout3\\SLUS_210.50" --output "burnout3-analysis.txt"
+Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --output "burnout3-analysis.txt"
 ```
 
-To write the report directly to the console:
+Console output:
 
 ```powershell
-Burnout3Analyze.exe --elf "D:\\Games\\Burnout3\\SLUS_210.50"
+Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50"
 ```
 
-The reachable-CFG worklist is bounded. The default is 4096 blocks and can be overridden explicitly:
-
-```powershell
-Burnout3Analyze.exe --elf "D:\\Games\\Burnout3\\SLUS_210.50" --max-blocks 8192
-```
-
-This tool performs static analysis only. It does not execute PS2 instructions, emulate a PS2, infer register-indirect targets, or invoke the native x86-64 recompilation backend. See `docs/ANALYSIS_TOOL.md` for the output contract and current limitations.
-
-## Validate startup and the BSS clear loop against an external ELF
-
-The Windows startup dispatcher test can optionally consume a user-supplied ELF. The file is read locally at runtime and is never required by CI:
-
-```powershell
-.\build\Release\r5900_block_dispatcher_startup_windows_tests.exe "D:\\Games\\Burnout3\\SLUS_210.50"
-```
-
-A successful real-file run must print a line of this form:
-
-```text
-REAL_ELF_BSS_CLEAR_VALIDATED begin=0x004e2680 end=0x01ecea00 stop=0x001001c8 iterations=1698872 blocks=3397748 instructions=13591071 fast_cache_hits=3397742
-```
-
-The external harness currently validates the exact real startup path through the BSS clear: 1,698,872 aligned 16-byte `SQ` iterations over `0x004e2680..0x01ecea00`, 3,397,748 native blocks, 13,591,071 selected guest words, and 3,397,742 fast-cache replays before the dispatcher stops at `SetupThread` (`v1=0x3c`) at `0x001001c8`. The synthetic production-service tests separately validate continuation through `SetupHeap`. Until the external command itself is extended and executed successfully through `0x001001e4` on Windows x64, the two-syscall path remains **CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION**, not externally native-validated.
+The analyzer performs static analysis only. It does not emulate a PS2 or execute the game.
 
 ## Build on Windows 10/11 x64
 
@@ -105,7 +135,7 @@ Requirements:
 - CMake 3.25+;
 - Windows 10/11 SDK.
 
-From a Developer PowerShell:
+Debug:
 
 ```powershell
 cmake --preset vs2022-debug
@@ -119,13 +149,6 @@ Release:
 cmake --preset vs2022-release
 cmake --build --preset vs2022-release
 ctest --preset vs2022-release
-```
-
-The Visual Studio multi-config executables are normally under the selected configuration directory, including:
-
-```text
-Burnout3Recompiled_Test.exe
-Burnout3Analyze.exe
 ```
 
 ## Runtime bootstrap options
@@ -143,12 +166,14 @@ Burnout3Analyze.exe
 --frame-stats
 ```
 
-Some flags are accepted before their corresponding subsystem exists. Missing functionality remains documented rather than silently simulated.
+Some flags are accepted before their corresponding subsystem exists. Missing functionality is documented rather than silently simulated.
 
 ## 120 FPS policy
 
-The target presentation cadence is exactly **120.000 FPS**, corresponding to **8.333333 ms** per frame. The current bootstrap validates schedule math independently from the Windows waiting mechanism. The Windows backend uses QPC, a waitable timer, and a short spin phase to avoid relying exclusively on `Sleep()`.
+The target presentation cadence is exactly **120.000 FPS** (`8.333333 ms` per frame). The current bootstrap validates schedule/pacing infrastructure only. The original game's simulation rate is not assumed; simulation timing will be chosen from runtime evidence.
 
-This is only the presentation/frame-pacing foundation. The original game's simulation rate is **not assumed** to be 30 or 60 Hz; simulation timing will be chosen only after binary/runtime evidence.
+## Legal data policy
 
-See `docs/PROGRESS.md` for the authoritative status.
+No proprietary Burnout 3 executable, assets, audio, textures, symbols, dumps, or game data are included in this repository. Game-data analysis and external validation use files supplied externally by the owner from a legally obtained copy. Do not commit those files.
+
+See `docs/PROGRESS.md` for the authoritative current engineering status and evidence.
