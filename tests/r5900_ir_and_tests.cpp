@@ -84,6 +84,51 @@ int main() {
     expect(zero_lowered.instructions.front().guest_raw == zero_word,
            "discarded AND write must retain guest word provenance");
 
+    const auto or_word = r_type(6u, 7u, 8u, 0u, 0x25u); // OR r8,r6,r7
+    const auto or_lowered = lower_r5900_instruction(decode_r5900(or_word), 0x001001bcu);
+    expect(or_lowered.ok(), "OR must lower before the SetupThread syscall boundary");
+    expect(or_lowered.instructions.size() == 1u, "OR must lower to one IR instruction");
+
+    const auto& or_ir = or_lowered.instructions.front();
+    expect(or_ir.opcode == R5900IrOpcode::Or64, "OR must lower to Or64");
+    expect(or_ir.destination.has_value() &&
+               or_ir.destination->kind == R5900IrDestinationKind::Gpr &&
+               or_ir.destination->index == 8u,
+           "OR destination must be rd");
+    expect(or_ir.write_mode == R5900IrGprWriteMode::Low64PreserveUpper64,
+           "OR must preserve GPR high64");
+    expect(or_ir.inputs.size() == 2u &&
+               or_ir.inputs[0].kind == R5900IrOperandKind::Gpr &&
+               or_ir.inputs[0].gpr_index == 6u &&
+               or_ir.inputs[1].kind == R5900IrOperandKind::Gpr &&
+               or_ir.inputs[1].gpr_index == 7u,
+           "OR sources must be rs and rt GPRs");
+    expect(or_ir.guest_pc == 0x001001bcu && or_ir.guest_raw == or_word,
+           "OR must retain guest provenance");
+    expect(validate_r5900_ir_instruction(or_ir, 0u).ok(),
+           "Or64 GPR+GPR must validate");
+
+    R5900IrExecutionState or_state{};
+    or_state.gpr[6] = {0x00ff00000000ff00ull, 0x1111111111111111ull};
+    or_state.gpr[7] = {0x0f000f000f00000full, 0x2222222222222222ull};
+    or_state.gpr[8] = {0u, 0xbbbbbbbbbbbbbbbbull};
+    expect(execute_r5900_ir(or_lowered.instructions, or_state).ok(),
+           "reference executor must accept register OR IR");
+    expect(or_state.gpr[8].low64 == 0x0fff0f000f00ff0full,
+           "register OR must combine both GPR low64 operands");
+    expect(or_state.gpr[8].high64 == 0xbbbbbbbbbbbbbbbbull,
+           "register OR must preserve destination high64");
+
+    const auto or_zero_word = r_type(6u, 7u, 0u, 0u, 0x25u); // OR r0,r6,r7
+    const auto or_zero_lowered =
+        lower_r5900_instruction(decode_r5900(or_zero_word), 0x001001c0u);
+    expect(or_zero_lowered.ok() && or_zero_lowered.instructions.size() == 1u,
+           "OR writing r0 must lower deterministically");
+    expect(or_zero_lowered.instructions.front().opcode == R5900IrOpcode::Nop,
+           "OR writing r0 must become provenance-preserving Nop");
+    expect(or_zero_lowered.instructions.front().guest_raw == or_zero_word,
+           "discarded OR write must retain guest word provenance");
+
     std::cout << "r5900_ir_and_tests: PASS\n";
     return EXIT_SUCCESS;
 }
