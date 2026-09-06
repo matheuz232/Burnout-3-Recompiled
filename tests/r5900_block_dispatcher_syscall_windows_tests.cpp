@@ -37,6 +37,17 @@ void put_u32(Bytes& bytes, std::size_t offset, std::uint32_t value) {
     bytes[offset + 3u] = static_cast<std::uint8_t>((value >> 24u) & 0xffu);
 }
 
+constexpr std::uint32_t i_type(
+    std::uint8_t op,
+    std::uint8_t rs,
+    std::uint8_t rt,
+    std::uint16_t imm) {
+    return (static_cast<std::uint32_t>(op) << 26u) |
+           (static_cast<std::uint32_t>(rs) << 21u) |
+           (static_cast<std::uint32_t>(rt) << 16u) |
+           imm;
+}
+
 b3r::runtime::Ps2MemoryMap make_memory(
     const std::vector<std::uint32_t>& words,
     std::uint32_t base) {
@@ -153,6 +164,46 @@ int main() {
                "dispatcher must forward exact syscall provenance");
         expect(state.gpr[2].low64 == 0x12345678u,
                "host state mutation must survive resume");
+    }
+
+    {
+        constexpr std::uint32_t kPostSetupPc = base + 8u;
+        auto memory = make_memory(
+            {i_type(0x09u, 0u, 9u, 0x0055u), kSyscall, kUnsupportedXori},
+            base);
+
+        R5900HostSyscallService service{};
+        R5900BlockDispatcherOptions options{};
+        options.block_options.max_instructions = 1u;
+        options.host_syscalls = &service;
+        R5900BlockDispatcher dispatcher(memory, options);
+
+        R5900IrExecutionState state{};
+        state.gpr[2].high64 = 0xa5a5a5a5a5a5a5a5ull;
+        state.gpr[3].low64 = 0x3cu;
+        state.gpr[4].low64 = 0x004e8670u;
+        state.gpr[5].low64 = 0x01ff0000u;
+        state.gpr[6].low64 = 0x00010000u;
+        state.gpr[7].low64 = 0x01d9ce80u;
+        state.gpr[8].low64 = 0x00100220u;
+
+        const auto result = dispatcher.run(base, state, 2u);
+        expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
+               "production SetupThread must resume to deliberate unsupported instruction");
+        expect(result.next_pc == kPostSetupPc,
+               "production SetupThread must resume at syscall PC+4");
+        expect(result.blocks_executed == 1u && result.instructions_executed == 1u,
+               "only native prefix must count before production SetupThread");
+        expect(result.syscalls_handled == 1u,
+               "production SetupThread must increment host counter exactly once");
+        expect(state.gpr[9].low64 == 0x55u,
+               "native prefix must commit before SetupThread host handling");
+        expect(state.gpr[2].low64 == 0x02000000u &&
+                   state.gpr[2].high64 == 0xa5a5a5a5a5a5a5a5ull,
+               "SetupThread v0 result must survive dispatcher resume");
+        expect(service.setup_thread_context().has_value() &&
+                   service.setup_thread_context()->stack_top == 0x02000000u,
+               "dispatcher path must commit production SetupThread context");
     }
 
     {
