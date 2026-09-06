@@ -2,9 +2,11 @@
 
 #include "recompiler/r5900_decoder.h"
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 
 namespace b3r::recompiler {
@@ -49,15 +51,37 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
     if (selector == kSetupThreadSelector) {
         const auto gp = ee_gpr_low32(state, 4u);
         const auto stack = ee_gpr_low32(state, 5u);
-        const auto stack_size = ee_gpr_low32(state, 6u);
+        const auto stack_size_raw = ee_gpr_low32(state, 6u);
+        const auto stack_size_signed = std::bit_cast<std::int32_t>(stack_size_raw);
         const auto args = ee_gpr_low32(state, 7u);
         const auto root_func = ee_gpr_low32(state, 8u);
+
+        if (stack == std::numeric_limits<std::uint32_t>::max()) {
+            return {
+                R5900HostSyscallStatus::Unsupported,
+                "SetupThread automatic-stack mode is unsupported in v0",
+            };
+        }
+
+        if (stack_size_signed <= 0) {
+            return {
+                R5900HostSyscallStatus::Fault,
+                "SetupThread explicit stack_size must be positive",
+            };
+        }
+
+        if (stack > std::numeric_limits<std::uint32_t>::max() - stack_size_raw) {
+            return {
+                R5900HostSyscallStatus::Fault,
+                "SetupThread explicit stack top overflows 32-bit guest address space",
+            };
+        }
 
         const R5900SetupThreadContext context{
             gp,
             stack,
-            stack_size,
-            stack + stack_size,
+            stack_size_raw,
+            stack + stack_size_raw,
             args,
             root_func,
         };
