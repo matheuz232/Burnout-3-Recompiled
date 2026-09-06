@@ -219,6 +219,7 @@ int main() {
                 i_type(0x09u, 0u, 3u, 0x003du),    // ADDIU v1,r0,0x3d
                 kSyscall,                            // SetupHeap
                 kUnsupportedXori,                    // deliberate boundary
+                kSyscall,                            // analyzer guard; must never be handled
             },
             base);
 
