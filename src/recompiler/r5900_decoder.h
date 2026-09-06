@@ -33,6 +33,7 @@ enum class R5900Instruction {
     Divu,
     Add,
     Addu,
+    Daddu,
     Sub,
     Subu,
     And,
