@@ -19,6 +19,24 @@ void expect(bool condition, const char* message) {
     }
 }
 
+void expect_states_equal(
+    const b3r::recompiler::R5900IrExecutionState& before,
+    const b3r::recompiler::R5900IrExecutionState& after,
+    const char* message) {
+    for (std::size_t index = 0; index < 32u; ++index) {
+        if (after.gpr[index].low64 != before.gpr[index].low64 ||
+            after.gpr[index].high64 != before.gpr[index].high64) {
+            fail(message);
+        }
+    }
+    if (after.hi != before.hi || after.lo != before.lo ||
+        after.hi1 != before.hi1 || after.lo1 != before.lo1 ||
+        after.sa != before.sa || after.fcr31 != before.fcr31 ||
+        after.fp_acc != before.fp_acc || after.fpr != before.fpr) {
+        fail(message);
+    }
+}
+
 void expect_only_v0_low_changed(
     const b3r::recompiler::R5900IrExecutionState& before,
     const b3r::recompiler::R5900IrExecutionState& after,
@@ -39,6 +57,17 @@ void expect_only_v0_low_changed(
         expect(after.fpr[index] == before.fpr[index],
                "SetupThread changed unexpected FPR state");
     }
+}
+
+bool same_context(
+    const b3r::recompiler::R5900SetupThreadContext& lhs,
+    const b3r::recompiler::R5900SetupThreadContext& rhs) {
+    return lhs.gp == rhs.gp &&
+           lhs.stack_base == rhs.stack_base &&
+           lhs.stack_size == rhs.stack_size &&
+           lhs.stack_top == rhs.stack_top &&
+           lhs.args == rhs.args &&
+           lhs.root_func == rhs.root_func;
 }
 
 } // namespace
@@ -127,6 +156,85 @@ int main() {
                context->args == 0x01d9ce80u &&
                context->root_func == 0x00100220u,
            "stored SetupThread context mismatch");
+    const auto committed = *context;
+
+    R5900IrExecutionState automatic{};
+    automatic.gpr[2] = {0x1111222233334444ull, 0x5555666677778888ull};
+    automatic.gpr[3].low64 = 0x3cu;
+    automatic.gpr[5].low64 = 0xffffffffu;
+    automatic.gpr[6].low64 = 0x1000u;
+    const auto automatic_before = automatic;
+    const auto automatic_result = setup_service.handle(
+        R5900HostSyscallRequest{0x001001c8u, 0x0000000cu},
+        automatic,
+        memory);
+    expect(automatic_result.status == R5900HostSyscallStatus::Unsupported,
+           "automatic-stack SetupThread must remain unsupported");
+    expect(automatic_result.message.find("automatic-stack") != std::string::npos,
+           "automatic-stack diagnostic must identify unsupported mode");
+    expect_states_equal(automatic_before, automatic,
+                        "automatic-stack Unsupported must not mutate guest state");
+    expect(setup_service.setup_thread_context().has_value() &&
+               same_context(*setup_service.setup_thread_context(), committed),
+           "automatic-stack Unsupported must preserve committed context");
+
+    R5900IrExecutionState zero_size{};
+    zero_size.gpr[2] = {0x2222333344445555ull, 0x6666777788889999ull};
+    zero_size.gpr[3].low64 = 0x3cu;
+    zero_size.gpr[5].low64 = 0x00100000u;
+    zero_size.gpr[6].low64 = 0u;
+    const auto zero_before = zero_size;
+    const auto zero_result = setup_service.handle(
+        R5900HostSyscallRequest{0x001001c8u, 0x0000000cu},
+        zero_size,
+        memory);
+    expect(zero_result.status == R5900HostSyscallStatus::Fault,
+           "zero SetupThread stack size must fault");
+    expect(zero_result.message.find("stack_size") != std::string::npos,
+           "zero-size diagnostic must identify stack_size");
+    expect_states_equal(zero_before, zero_size,
+                        "zero-size Fault must not mutate guest state");
+    expect(setup_service.setup_thread_context().has_value() &&
+               same_context(*setup_service.setup_thread_context(), committed),
+           "zero-size Fault must preserve committed context");
+
+    R5900IrExecutionState negative_size{};
+    negative_size.gpr[2] = {0x3333444455556666ull, 0x777788889999aaaaull};
+    negative_size.gpr[3].low64 = 0x3cu;
+    negative_size.gpr[5].low64 = 0x00100000u;
+    negative_size.gpr[6].low64 = 0xffffffffu;
+    const auto negative_before = negative_size;
+    const auto negative_result = setup_service.handle(
+        R5900HostSyscallRequest{0x001001c8u, 0x0000000cu},
+        negative_size,
+        memory);
+    expect(negative_result.status == R5900HostSyscallStatus::Fault,
+           "negative SetupThread stack size must fault");
+    expect_states_equal(negative_before, negative_size,
+                        "negative-size Fault must not mutate guest state");
+    expect(setup_service.setup_thread_context().has_value() &&
+               same_context(*setup_service.setup_thread_context(), committed),
+           "negative-size Fault must preserve committed context");
+
+    R5900IrExecutionState overflow{};
+    overflow.gpr[2] = {0x4444555566667777ull, 0x88889999aaaabbbbull};
+    overflow.gpr[3].low64 = 0x3cu;
+    overflow.gpr[5].low64 = 0xfffff000u;
+    overflow.gpr[6].low64 = 0x00002000u;
+    const auto overflow_before = overflow;
+    const auto overflow_result = setup_service.handle(
+        R5900HostSyscallRequest{0x001001c8u, 0x0000000cu},
+        overflow,
+        memory);
+    expect(overflow_result.status == R5900HostSyscallStatus::Fault,
+           "overflowing SetupThread stack top must fault");
+    expect(overflow_result.message.find("overflows") != std::string::npos,
+           "overflow diagnostic must identify guest-address overflow");
+    expect_states_equal(overflow_before, overflow,
+                        "overflow Fault must not mutate guest state");
+    expect(setup_service.setup_thread_context().has_value() &&
+               same_context(*setup_service.setup_thread_context(), committed),
+           "overflow Fault must preserve committed context");
 
     std::cout << "r5900_host_syscall_service_windows_tests: PASS\n";
     return EXIT_SUCCESS;
