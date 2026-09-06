@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <initializer_list>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -59,6 +60,18 @@ R5900IrInstruction addiu(std::uint8_t rt,
         {R5900IrDestinationKind::Gpr, rt},
         R5900IrGprWriteMode::Low64PreserveUpper64,
         {gpr(rs), immediate(imm)},
+        pc);
+}
+
+R5900IrInstruction add64(std::uint8_t rd,
+                         std::uint8_t rs,
+                         std::uint8_t rt,
+                         std::uint32_t pc) {
+    return make_ir(
+        R5900IrOpcode::Add64,
+        {R5900IrDestinationKind::Gpr, rd},
+        R5900IrGprWriteMode::Low64PreserveUpper64,
+        {gpr(rs), gpr(rt)},
         pc);
 }
 
@@ -152,6 +165,9 @@ int main() {
     initial.gpr[8].low64 = 5u;
     initial.gpr[9] = packed_u32(0xffffffffu, 1u, 0xfffffffeu, 0x80000000u);
     initial.gpr[10] = packed_u32(1u, 2u, 2u, 0x80000000u);
+    initial.gpr[13].low64 = std::numeric_limits<std::uint64_t>::max();
+    initial.gpr[14].low64 = 1u;
+    initial.gpr[16].low64 = 0x0000000100000000ull;
     initial.hi = 0x100u;
     initial.lo = 0x200u;
     initial.hi1 = 0x300u;
@@ -207,6 +223,10 @@ int main() {
                 R5900IrGprWriteMode::Low64PreserveUpper64,
                 {gpr(4), gpr(5)},
                 0x00104020u),
+        add64(15u, 13u, 14u, 0x00104024u), // wrap, preserves r15.high64
+        add64(13u, 13u, 14u, 0x00104028u), // rd == rs
+        add64(14u, 14u, 14u, 0x0010402cu), // rd == rs == rt
+        add64(17u, 16u, 14u, 0x00104030u), // upper 32 source bits matter
     };
 
     auto expected = initial;
