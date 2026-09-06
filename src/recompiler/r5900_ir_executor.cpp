@@ -121,6 +121,16 @@ R5900IrExecutionResult execute_ir_sequence(
             break;
         }
 
+        case R5900IrOpcode::Add64: {
+            const std::uint64_t lhs = read_operand_value(ir.inputs[0], state);
+            const std::uint64_t rhs = read_operand_value(ir.inputs[1], state);
+            const std::uint64_t value = lhs + rhs;
+            if (ir.destination->index != 0u) {
+                state.gpr[ir.destination->index].low64 = value;
+            }
+            break;
+        }
+
         case R5900IrOpcode::Or64: {
             const auto value = read_operand_value(ir.inputs[0], state) |
                                read_operand_value(ir.inputs[1], state);
