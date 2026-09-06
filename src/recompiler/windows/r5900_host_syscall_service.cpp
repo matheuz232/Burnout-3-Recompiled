@@ -13,6 +13,7 @@ namespace b3r::recompiler {
 namespace {
 
 constexpr std::int32_t kSetupThreadSelector = 0x3c;
+constexpr std::int32_t kSetupHeapSelector = 0x3d;
 
 std::int32_t ee_syscall_selector(const R5900IrExecutionState& state) noexcept {
     return static_cast<std::int32_t>(
@@ -87,6 +88,40 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
         };
         setup_thread_context_ = context;
         state.gpr[2].low64 = static_cast<std::uint64_t>(context.stack_top);
+        return {R5900HostSyscallStatus::Handled, {}};
+    }
+
+    if (selector == kSetupHeapSelector) {
+        const auto heap_start = ee_gpr_low32(state, 4u);
+        const auto heap_size_raw = ee_gpr_low32(state, 5u);
+
+        if (!setup_thread_context_.has_value()) {
+            return {
+                R5900HostSyscallStatus::Fault,
+                "SetupHeap requires a successful SetupThread context",
+            };
+        }
+
+        if (heap_size_raw != std::numeric_limits<std::uint32_t>::max()) {
+            return {
+                R5900HostSyscallStatus::Fault,
+                "SetupHeap explicit-size mode is not implemented yet",
+            };
+        }
+
+        const auto heap_end = setup_thread_context_->stack_base;
+        if (heap_start >= heap_end) {
+            return {
+                R5900HostSyscallStatus::Fault,
+                "SetupHeap automatic-size heap_start must be below stack_base",
+            };
+        }
+
+        setup_heap_context_ = R5900SetupHeapContext{
+            heap_start,
+            heap_size_raw,
+            heap_end,
+        };
         return {R5900HostSyscallStatus::Handled, {}};
     }
 
