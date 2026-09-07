@@ -159,7 +159,32 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
                 "CreateSema descriptor is outside available EE memory",
             };
         }
-        state.gpr[2].low64 = 1u;
+
+        const auto max_count_raw = memory.read_u32(descriptor_address + 4u);
+        const auto init_count_raw = memory.read_u32(descriptor_address + 8u);
+        if (!max_count_raw.has_value() || !init_count_raw.has_value()) {
+            return {
+                R5900HostSyscallStatus::Fault,
+                "CreateSema descriptor count fields are unreadable",
+            };
+        }
+        const auto max_count = std::bit_cast<std::int32_t>(*max_count_raw);
+        const auto init_count = std::bit_cast<std::int32_t>(*init_count_raw);
+        if (max_count <= 0) {
+            return {
+                R5900HostSyscallStatus::Fault,
+                "CreateSema max_count must be positive",
+            };
+        }
+        if (init_count < 0 || init_count > max_count) {
+            return {
+                R5900HostSyscallStatus::Fault,
+                "CreateSema init_count must be between zero and max_count",
+            };
+        }
+
+        const auto id = next_sema_id_++;
+        state.gpr[2].low64 = static_cast<std::uint64_t>(static_cast<std::uint32_t>(id));
         return {R5900HostSyscallStatus::Handled, {}};
     }
 
