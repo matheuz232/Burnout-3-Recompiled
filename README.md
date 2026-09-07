@@ -4,7 +4,9 @@ Experimental native Windows x86-64 recompilation/port project for **Burnout 3: T
 
 ## Current milestone
 
-`Burnout 3 Recompiled - Test Build 0.1` now has native R5900 startup execution through the first real post-`SetupHeap` stack prologue store. The modeled path includes the real startup-shaped sequence:
+`Burnout 3 Recompiled - Test Build 0.1` now has native R5900 startup execution through the first real post-`SetupHeap` 32-bit stack stores.
+
+The modeled startup path includes:
 
 ```text
 SetupThread @ 0x001001c8
@@ -13,103 +15,156 @@ JAL         0x00115108
 ADDIU       sp,sp,-16
 SD          ra,0(sp)
 JAL         0x00114ed0
+ADDIU       sp,sp,-0x50
+ADDIU       v0,zero,1
+SD          ra,0x40(sp)
+DADDU       a0,sp,zero
+SW          v0,0x28(sp)
 ```
 
-The project still does **not** boot the game. The next real unsupported guest instruction identified from the legally supplied ELF is `DADDU a0,sp,zero` at `0x00114edc` (raw `0x03a0202d`). That boundary is diagnostic evidence from the external lawful ELF, not a claim that the expanded path has been externally native-validated on Windows.
+The project still does **not** boot the game.
+
+A lawful out-of-repository diagnostic of the user-supplied ELF shows that real execution continues through additional supported `SW` stores and a `JAL`, then reaches the next current host boundary:
+
+```text
+0x0010be24  SYSCALL   selector 0x40 in v1
+```
+
+That observation is **DIAGNOSTIC_VALIDATED** only. It is not a claim that this expanded path has been executed end-to-end by the external Windows-native ELF harness.
 
 ## Current runtime/recompiler capabilities
 
 - C++20 / CMake / Visual Studio 2022 Windows x64 project;
-- native Win32 bootstrap, logging, crash/minidump support and 120 Hz QPC-based frame pacing;
+- native Win32 bootstrap, logging, crash/minidump support and QPC-based 120 Hz pacing infrastructure;
 - PS2 ELF32 little-endian MIPS loading and conservative control-flow analysis;
-- **32 MiB EE main RAM backing** for `0x00000000..0x01ffffff`, zero-filled outside loaded data;
-- `Ps2MemoryMap::regions()` remains ELF `PT_LOAD` metadata only, while `translate()` represents physical EE RAM availability;
-- little-endian typed 8/16/32/64/128-bit reads/writes;
-- R5900 decoder and startup IR for the currently required EE/MMI/COP1 subset;
-- `SQ` lowered as `Store128` and `SD` lowered as `Store64`;
-- interpreted `Store64` with exact low64 source semantics, 32-bit effective-address wrap, required 8-byte alignment and deterministic width-8 memory-fault provenance;
-- Windows x86-64 native `Store64` and `Store128` helper paths using the shared execution context;
-- ordinary `BEQ`/`BNE`, branch-likely `BEQL`/`BNEL`, direct `J`/`JAL`, indirect `JR`/`JALR` and architectural delay slots;
-- cached native blocks with byte-exact guest-word verification and fast replay;
-- a boundary-prefix rule that prevents supported transfers after an unsupported instruction from executing prematurely;
-- an injectable host-syscall boundary outside generated x64;
-- production explicit-stack `SetupThread` (`0x3c`) and main-thread `SetupHeap` (`0x3d`) HLE;
-- deterministic runtime `MemoryAccessFailure` propagation with exact guest-PC/address/width accounting.
+- 32 MiB EE main RAM backing for `0x00000000..0x01ffffff`;
+- typed little-endian 8/16/32/64/128-bit guest-memory access;
+- incremental R5900 decoder/IR/reference-executor/x64 backend for the startup subset;
+- `SQ -> Store128`, `SD -> Store64`, `SW -> Store32`;
+- native/control-flow support for the currently required `BEQ/BNE`, `BEQL/BNEL`, `J/JAL`, `JR/JALR` and architectural delay slots;
+- cached native blocks with exact guest-word validation and fast replay;
+- boundary-prefix protection so a later transfer cannot execute past an earlier unsupported/faulting instruction;
+- injectable host-syscall boundary outside generated x64;
+- `SetupThread` (`0x3c`) and `SetupHeap` (`0x3d`) HLE;
+- exact guest-PC/address/width memory-fault provenance.
 
-### `SD / Store64` contract
+## `SW / Store32` contract
 
-For `SD rt, imm(rs)`:
+For `SW rt, imm(rs)`:
 
 ```text
-address = uint32(low32(GPR[rs].low64) + sign_extend16(imm))
-value   = GPR[rt].low64
+base32  = low32(GPR[rs].low64)
+offset  = sign_extend16(imm)
+address = uint32(base32 + offset)
+value   = low32(GPR[rt].low64)
 ```
 
-The address must be 8-byte aligned. Unlike the existing `SQ` v0 path, `SD` is **not** rounded down. A failed store stops before later guest instructions and reports width `8` at the exact guest PC/address.
+Properties:
 
-The startup-shaped native dispatcher regression proves:
+- address arithmetic wraps modulo 2^32;
+- the address must be **4-byte aligned**;
+- there is no alignment-down;
+- exactly the source low32 is written;
+- source high bits are ignored;
+- CPU register state is not modified by the store;
+- failed stores stop later guest instructions;
+- failure reports the exact guest PC/effective address with width `4`.
 
-```text
-initial sp                  0x02000000
-first JAL return address    0x001001f0
-sp after ADDIU              0x01fffff0
-mem64[0x01fffff0]           0x00000000001001f0
-final RA after second JAL   0x00115118
-next_pc                     0x00114ed0
-```
+The dispatcher wires `write32` in both cold/exact-cache and fast-cache execution contexts. Faulting native code remains cacheable/reusable; changing guest register state from a bad address to a good one does not force recompilation.
 
-It also verifies that the adjacent eight stack bytes remain unchanged and that a second execution fast-replays both compiled blocks without recompilation.
+## Startup-shaped SW acceptance
 
-## Validation status
-
-Current SD/EE-RAM implementation head before documentation: `35235fedf14dc1f0f1997500bcf575b16f9130b8`.
-
-Windows CI run `34061027697`, job `101561461996`, on Windows Server 2022 / MSVC 19.44 completed successfully with:
-
-- **59/59 CTest passed**;
-- `r5900_ir_store64_tests` passed;
-- `r5900_ir_store64_executor_tests` passed;
-- `r5900_x64_store64_windows_tests` passed;
-- `r5900_block_dispatcher_store64_windows_tests` passed;
-- `r5900_block_dispatcher_sd_startup_windows_tests` passed;
-- frame-pacing telemetry passed: 240 samples, 8.333 ms mean, 0 samples above 9/10/12 ms;
-- one-second pacing probe passed: 120/120 frames at 120 Hz, 8.333 ms mean;
-- analyzer and pacing-probe package validation passed.
-
-Hosted CI timing is smoke evidence only; physical Windows desktop pacing validation remains required.
-
-## Lawful external ELF evidence
-
-No proprietary Burnout 3 executable or assets are committed to this repository. Out-of-repository inspection of the user-supplied legal ELF confirms the startup path through `SetupThread`, `SetupHeap`, the two calls above, and the stack stores.
-
-At the second call target, the real code begins:
+Synthetic/native CI crosses the real first-SW PC using only public ISA encodings and synthetic data:
 
 ```text
 0x00114ed0  ADDIU sp,sp,-0x50
 0x00114ed4  ADDIU v0,zero,1
 0x00114ed8  SD    ra,0x40(sp)
-0x00114edc  DADDU a0,sp,zero   <- next unsupported boundary
+0x00114edc  DADDU a0,sp,zero
+0x00114ee0  SW    v0,0x28(sp)
 ```
 
-Entering `0x00114ed0` with `sp=0x01fffff0` and `ra=0x00115118`, the currently modeled prefix would produce:
+Acceptance state:
 
 ```text
-sp                  0x01ffffa0
-v0                  0x0000000000000001
-mem64[0x01ffffe0]   0x0000000000115118
+initial sp                0x01fffff0
+initial ra                0x00115118
+sp after frame allocation 0x01ffffa0
+v0.low64                  0x0000000000000001
+a0.low64                  0x0000000001ffffa0
+mem64[0x01ffffe0]         0x0000000000115118
+mem32[0x01ffffc8]         0x00000001
 ```
 
-This establishes the **next implementation target: R5900 `DADDU`**. It does not upgrade the expanded startup path to `EXTERNALLY_VALIDATED`; the existing Windows external-ELF harness still requires extension and execution through the newer HLE/SD path.
+The test also verifies adjacent 32-bit guards remain unchanged and separately proves a cached `SW + J + NOP` block fast-replays without recompilation.
+
+## Validation status
+
+Implementation/test head before this documentation update:
+
+```text
+491385fc6e12f7f7d1189948daafe5e89d0bfbb2
+```
+
+Windows CI run **#747** (`34073509755`) on Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 passed:
+
+- **65/65 CTest**;
+- `r5900_ir_store32_tests`;
+- `r5900_ir_store32_executor_tests`;
+- `r5900_x64_store32_windows_tests`;
+- `r5900_block_dispatcher_store32_windows_tests`;
+- `r5900_block_dispatcher_sw_startup_windows_tests`;
+- all Store64/Store128 and legacy regression gates;
+- 240-sample frame-pacing telemetry with 8.333 ms mean and no sample above 9/10/12 ms;
+- one-second pacing probe: 120/120 frames at 120 Hz, 8.333 ms mean;
+- analyzer package validation;
+- pacing-probe package validation.
+
+Hosted-runner timing is smoke evidence only; it is not physical-desktop 120 FPS certification.
+
+## Lawful external ELF evidence
+
+No proprietary Burnout 3 executable, raw instruction words, assets, audio, textures or game data are committed to this repository.
+
+The legal ELF remains outside the repository. Starting from the established state at `0x00114ed0`, the diagnostic confirms the supported model produces:
+
+```text
+sp.low64                0x01ffffa0
+v0.low64                0x0000000000000001
+a0.low64                0x0000000001ffffa0
+mem64[0x01ffffe0]       0x0000000000115118
+mem32[0x01ffffc8]       0x00000001
+```
+
+Real execution then continues through more `SW` stores and a direct call. At the next current host boundary:
+
+```text
+PC          0x0010be24
+instruction SYSCALL
+selector    0x40 in v1
+```
+
+Relevant derived state at that boundary includes:
+
+```text
+sp.low64  0x01ffffa0
+v0.low64  0x0000000000000001
+a0.low64  0x0000000001ffffa0
+ra.low64  0x0000000000114ef4
+v1.low64  0x0000000000000040
+```
+
+The current host syscall service implements selectors `0x3c` (`SetupThread`) and `0x3d` (`SetupHeap`); selector `0x40` is therefore the next concrete startup/HLE boundary to design. No semantics are assumed yet.
 
 ## External startup validation harness
 
-The Windows startup dispatcher test can optionally consume a user-supplied ELF locally:
+The optional Windows startup dispatcher test can consume a user-supplied ELF locally:
 
 ```powershell
 .\build\Release\r5900_block_dispatcher_startup_windows_tests.exe "D:\Games\Burnout3\SLUS_210.50"
 ```
 
-Its existing external mode validates the full real BSS clear through the `SetupThread` boundary and does not commit or upload the supplied game file. The newer `SetupHeap`/`SD` path is currently covered by synthetic/native CI plus the lawful local diagnostic described above, not by a completed external Windows-native run.
+Its historical external mode validates the real BSS-clear path through `SetupThread`. The newer `SetupHeap -> SD -> DADDU -> SW` path is currently covered by synthetic/native CI plus lawful local diagnosis, not by a completed external Windows-native run.
 
 ## Analyze an external PS2 ELF
 
@@ -117,12 +172,6 @@ After a Release build:
 
 ```powershell
 Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --output "burnout3-analysis.txt"
-```
-
-Console output:
-
-```powershell
-Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50"
 ```
 
 The analyzer performs static analysis only. It does not emulate a PS2 or execute the game.
@@ -135,15 +184,7 @@ Requirements:
 - CMake 3.25+;
 - Windows 10/11 SDK.
 
-Debug:
-
-```powershell
-cmake --preset vs2022-debug
-cmake --build --preset vs2022-debug
-ctest --preset vs2022-debug
-```
-
-Release:
+Release example:
 
 ```powershell
 cmake --preset vs2022-release
@@ -151,29 +192,12 @@ cmake --build --preset vs2022-release
 ctest --preset vs2022-release
 ```
 
-## Runtime bootstrap options
-
-`Burnout3Recompiled_Test.exe` currently accepts:
-
-```text
---debug
---verbose
---windowed
---fullscreen
---game-data <path>
---log-level <level>
---disable-audio
---frame-stats
-```
-
-Some flags are accepted before their corresponding subsystem exists. Missing functionality is documented rather than silently simulated.
-
 ## 120 FPS policy
 
-The target presentation cadence is exactly **120.000 FPS** (`8.333333 ms` per frame). The current bootstrap validates schedule/pacing infrastructure only. The original game's simulation rate is not assumed; simulation timing will be chosen from runtime evidence.
+The target presentation cadence is exactly **120.000 FPS** (`8.333333 ms` per frame). Current CI validates pacing infrastructure only. The original game's simulation rate is not assumed; simulation timing will be chosen from runtime evidence.
 
 ## Legal data policy
 
-No proprietary Burnout 3 executable, assets, audio, textures, symbols, dumps, or game data are included in this repository. Game-data analysis and external validation use files supplied externally by the owner from a legally obtained copy. Do not commit those files.
+Only public ISA encodings and synthetic fixtures belong in the repository. Game-data analysis and external validation use files supplied externally by the owner from a legally obtained copy. Do not commit those files.
 
-See `docs/PROGRESS.md` for the authoritative current engineering status and evidence.
+See `docs/PROGRESS.md` for the authoritative engineering snapshot.
