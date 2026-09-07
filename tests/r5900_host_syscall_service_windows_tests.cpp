@@ -479,6 +479,8 @@ int main() {
                same_heap_context(*setup_service.setup_heap_context(), committed_heap),
            "overflow SetupThread Fault must preserve committed heap context");
 
+#include "r5900_create_sema_test_cases.inc"
+
     std::cout << "r5900_host_syscall_service_windows_tests: PASS\n";
     return EXIT_SUCCESS;
 }
