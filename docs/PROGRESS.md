@@ -8,10 +8,10 @@ This file is the active engineering snapshot. Detailed history remains in Git an
 
 ## Current branch
 
-- Milestone branch: `feature/game-input-v0`
-- Implementation/test head before documentation: `9cb0f61bd8bf6eda27905a3ae7db6024bb795c47`
-- Latest validated Windows CI before documentation: run **#809** (`34159434149`)
-- CTest on #809: **69/69 PASS**
+- Milestone branch: `feature/ps2-pad-report-v0`
+- Implementation/test head before documentation: `37a73d1026452055ca3d9415f73636c56e7fadb0`
+- Latest validated Windows CI before documentation: run **#819** (`34162871241`)
+- CTest on #819: **70/70 PASS**
 - Game/runtime status: the project still does **not** boot Burnout 3, render the game, reach menus, or provide gameplay.
 
 ## Current engineering status
@@ -20,7 +20,7 @@ This file is the active engineering snapshot. Detailed history remains in Git an
 |---|---|---|
 | Repository / CMake bootstrap | DONE | C++20, CMake 3.25+, Visual Studio 2022 / Windows x64 workflow |
 | Win32 bootstrap/window | CI_VALIDATED | Client size, windowed/fullscreen styles, WM_CLOSE, Escape, recreation, WM_QUIT and stale-handle cleanup validated; physical visual check remains release certification |
-| QPC / 120 Hz frame pacing | CI_VALIDATED | #809 pacing telemetry and 120-frame probe passed; long physical-desktop capture remains |
+| QPC / 120 Hz frame pacing | CI_VALIDATED | #819 pacing telemetry and 120-frame probe passed; long physical-desktop capture remains |
 | Crash handler / minidump | CI_VALIDATED | Controlled Windows CI crash path |
 | PS2 ELF loader | CI_VALIDATED | ELF32 little-endian MIPS parsing and PT_LOAD validation |
 | EE main RAM v0 | CI_VALIDATED | Zero-filled 32 MiB `0x00000000..0x01ffffff`; PT_LOAD copied into RAM |
@@ -44,13 +44,14 @@ This file is the active engineering snapshot. Detailed history remains in Git an
 | Static/binary recompiler | IN_PROGRESS | Continue from the first boundary measured by the external probe |
 | Graphics / GS / VU | TODO | No game rendering path yet |
 | IOP / SPU2 / audio | TODO | No game audio path yet |
-| Game input | CI_VALIDATED | Keyboard + XInput host acquisition, deterministic deadzones/merge/reconnect; PS2 PAD adapter remains pending |
+| Game input | CI_VALIDATED | Keyboard + XInput host acquisition, deterministic deadzones/merge/reconnect |
+| PS2 PAD report adapter v0 | CI_VALIDATED | Portable active-low PS2 button report, DualShock-style stick bytes, explicit virtual connection; guest libpad/PADMAN/SIO2 bridge remains pending |
 | Game initialization | TODO | Not reached |
 | Menu / gameplay | TODO | Not reached |
 
 ## Game Input v0
 
-Host-side input acquisition is now available through a platform-neutral state plus a Windows backend:
+Host-side input acquisition is available through a platform-neutral state plus a Windows backend:
 
 - canonical digital buttons, two sticks, two triggers and `gamepad_connected` metadata;
 - keyboard fallback through `GetAsyncKeyState`;
@@ -62,21 +63,34 @@ Host-side input acquisition is now available through a platform-neutral state pl
 - injectable APIs so CI does not require physical controller/keyboard hardware;
 - exactly one `WindowsGameInput::poll()` sample per runtime frame before simulation.
 
-The sample is deliberately not guest-visible yet. Burnout 3 still requires a later PS2 PAD/SIO2/libpad adapter before it can consume host controls.
+This host state can now be converted into the portable PS2 PAD report described below. It is still not guest-visible: Burnout 3 requires a later libpad/PADMAN/SIO2 bridge before it can consume the report.
+
+Detailed evidence: `docs/validation/2026-09-07-game-input-v0.md`.
+
+## PS2 PAD Report Adapter v0
+
+The portable input layer now provides `GameInputState -> Ps2PadReport` without adding Win32, guest-memory, RPC, PADMAN or SIO2 dependencies:
+
+- exact 16-button PS2/libpad bit positions;
+- active-low button word with neutral `0xffff` and all-buttons-pressed `0x0000`;
+- four stick bytes ordered as right X/Y then left X/Y;
+- horizontal `-1.0 -> 0x00`, `0.0 -> 0x80`, `+1.0 -> 0xff`;
+- vertical sign inversion so canonical positive-Y/up maps toward `0x00`;
+- finite checking and clamping; NaN/Inf become neutral `0x80`;
+- explicit virtual-pad connection independent from XInput-only `gamepad_connected`, preserving keyboard-only input;
+- disconnected reports are fully neutral and cannot leak stale state;
+- L2/R2 use only their canonical digital button bits; trigger magnitudes/pressure bytes are not serialized.
 
 TDD evidence:
 
 ```text
-Canonical RED       19fd00c6505df6d30f65738994263e59b34f8573  CI #802 expected Configure failure
-Canonical GREEN     187590ed34e42f8ecc01242bbf6ee487830c96db  CI #803 68/68 PASS
-Windows map RED     6f8c942b7f1208c65c6987edf4a18f0fb45eb94c  CI #805 expected Configure failure
-Windows map GREEN   3d98ff2a0542ba1f402e032918bdb6e7285c4cd9  CI #806 69/69 PASS
-Reconnect RED       306ec80d37897a48c3a326eb0774ca6035450ecf  CI #807 68/69; only active-controller reuse failed
-Reconnect GREEN     8c8ef999c457047aa3222fa85f6af89d730ff25f  CI #808 69/69 PASS
-Runtime integration 9cb0f61bd8bf6eda27905a3ae7db6024bb795c47  CI #809 69/69 PASS
+Digital RED       587389abecc8ea6f41a484af5821b59666e4b113  CI #816 expected Configure failure: ps2_pad_report.cpp absent
+Digital GREEN     a6da1487354c2f6f2451f48b25540f21fac66ef0  CI #817 70/70 PASS
+Analog RED        cad461d5d240d67a451bb8651de19c7258c9a3e3  CI #818 69/70; only ps2_pad_report_tests failed at horizontal -1 endpoint
+Analog GREEN      37a73d1026452055ca3d9415f73636c56e7fadb0  CI #819 70/70 PASS
 ```
 
-Detailed evidence: `docs/validation/2026-09-07-game-input-v0.md`.
+Detailed evidence: `docs/validation/2026-09-07-ps2-pad-report-v0.md`.
 
 ## Startup boundary status
 
@@ -103,7 +117,7 @@ CI contains no game file and runs synthetic mode only.
 
 ## Windows CI evidence
 
-Windows CI #809 (`34159434149`) on implementation commit `9cb0f61bd8bf6eda27905a3ae7db6024bb795c47`:
+Windows CI #819 (`34162871241`) on implementation commit `37a73d1026452055ca3d9415f73636c56e7fadb0`:
 
 ```text
 Host                 Windows Server 2022
@@ -111,7 +125,8 @@ Generator            Visual Studio 17 2022 x64
 Compiler             MSVC 19.44
 Configure            PASS
 Build                PASS
-CTest                69/69 PASS
+CTest                70/70 PASS
+ps2_pad_report_tests PASS
 windows_game_input   PASS
 Frame telemetry      PASS
 120 Hz probe         PASS
@@ -119,7 +134,9 @@ Analyzer package     PASS
 Pacing package       PASS
 ```
 
-Pacing on #809 remained at a 120 Hz target: 240-sample telemetry mean 8.333 ms, P95 8.333 ms, P99 8.334 ms, zero samples above 9/10/12 ms; the 120-frame probe also averaged 8.333 ms with zero frames above those thresholds.
+Pacing on #819 remained at a 120 Hz target: 240-sample telemetry mean 8.333 ms, P95 8.333 ms, P99 8.333 ms, zero samples above 9/10/12 ms; the 120-frame probe also averaged 8.333 ms with zero frames above those thresholds.
+
+The documentation commit containing this snapshot is accepted as the final milestone head only after the same full Windows CI workflow succeeds on that exact commit.
 
 Hosted CI validates logic and timing behavior; a physical Windows desktop remains useful for visual/performance release certification.
 
@@ -127,15 +144,15 @@ Hosted CI validates logic and timing behavior; a physical Windows desktop remain
 
 1. Run the external next-boundary probe with a complete user-supplied lawful ELF and record the first new real boundary after `0x00114f08`.
 2. Continue R5900 instruction/kernel/HLE coverage from that measured boundary using the same RED -> GREEN process.
-3. Implement a guest-facing PS2 PAD/SIO2/libpad adapter so Burnout 3 can consume the now-validated host input state.
+3. Bridge the validated `Ps2PadReport` into the guest-facing PS2 controller path (libpad/PADMAN/SIO2 or the measured equivalent used by Burnout 3).
 4. Run a 60-second or longer physical-desktop 120 Hz pacing capture for release certification.
 5. Implement GS/VU rendering, IOP/SPU2/audio and remaining game-runtime services before any boot/playability claim.
 
 ## Guardrails
 
-- Milestone branch: `feature/game-input-v0`.
-- Base for this bounded milestone: validated Win32 window documentation head `cb9ec4a0685271dfa0fd32837cd137a9f496975f` plus the approved Game Input design/plan lineage.
+- Milestone branch: `feature/ps2-pad-report-v0`.
+- Base: validated Game Input documentation head `c07a855ac9ac1b5c01dc22f85fd9eb0973623c15` plus the approved PS2 PAD Report design/plan lineage.
 - No PCSX2 runtime dependency is introduced by this milestone.
-- No PS2 PAD/SIO2/libpad behavior is claimed by Game Input v0.
+- No guest-visible libpad/PADMAN/SIO2 behavior, pressure mode, rumble, or game-specific PAD hook is claimed by PS2 PAD Report Adapter v0.
 - Never commit proprietary Burnout 3 data.
 - Never claim boot, menu, rendering or gameplay without direct evidence.
