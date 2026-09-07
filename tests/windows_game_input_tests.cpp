@@ -18,6 +18,8 @@ struct FakeEnvironment {
     std::array<DWORD, XUSER_MAX_COUNT> status{};
     std::array<XINPUT_STATE, XUSER_MAX_COUNT> states{};
     std::array<unsigned, XUSER_MAX_COUNT> calls{};
+    std::array<DWORD, 32> call_trace{};
+    unsigned call_trace_size{};
     std::array<bool, 256> keys{};
 };
 
@@ -43,11 +45,30 @@ void reset_fake() {
     g_fake.status.fill(ERROR_DEVICE_NOT_CONNECTED);
 }
 
+void reset_call_observation() {
+    g_fake.calls.fill(0u);
+    g_fake.call_trace.fill(0u);
+    g_fake.call_trace_size = 0u;
+}
+
+void expect_trace(std::initializer_list<DWORD> expected, const std::string& context) {
+    expect(g_fake.call_trace_size == expected.size(), context + ": trace size mismatch");
+    std::size_t index = 0;
+    for (const DWORD value : expected) {
+        expect(g_fake.call_trace[index] == value,
+               context + ": trace mismatch at position " + std::to_string(index));
+        ++index;
+    }
+}
+
 DWORD WINAPI fake_xinput_get_state(DWORD index, XINPUT_STATE* state) {
     if (index >= XUSER_MAX_COUNT) {
         return ERROR_BAD_ARGUMENTS;
     }
     ++g_fake.calls[index];
+    if (g_fake.call_trace_size < g_fake.call_trace.size()) {
+        g_fake.call_trace[g_fake.call_trace_size++] = index;
+    }
     const DWORD result = g_fake.status[index];
     if (result == ERROR_SUCCESS && state != nullptr) {
         *state = g_fake.states[index];
@@ -272,6 +293,73 @@ void test_null_injected_apis_are_safe() {
     expect(state.buttons == 0u, "null APIs neutral buttons");
 }
 
+void test_controller_selection_and_active_reuse() {
+    reset_fake();
+    g_fake.status[2] = ERROR_SUCCESS;
+    g_fake.states[2].Gamepad.wButtons = XINPUT_GAMEPAD_A;
+    auto input = make_input();
+
+    auto state = input.poll();
+    expect(state.gamepad_connected, "controller 2 should connect");
+    expect(is_button_pressed(state, GameInputButton::Cross), "controller 2 state should be used");
+    expect_trace({0, 1, 2}, "initial controller 2 scan");
+    expect(g_fake.calls[3] == 0u, "controller 3 should not be polled after first success");
+
+    reset_call_observation();
+    state = input.poll();
+    expect(state.gamepad_connected, "active controller 2 should remain connected");
+    expect_trace({2}, "active controller reuse");
+}
+
+void test_disconnect_fallback_all_disconnected_and_reconnect() {
+    reset_fake();
+    g_fake.status[1] = ERROR_SUCCESS;
+    g_fake.states[1].Gamepad.wButtons = XINPUT_GAMEPAD_X;
+    g_fake.status[3] = ERROR_SUCCESS;
+    g_fake.states[3].Gamepad.wButtons = XINPUT_GAMEPAD_B;
+    auto input = make_input();
+
+    auto state = input.poll();
+    expect(state.gamepad_connected, "controller 1 should connect first");
+    expect(is_button_pressed(state, GameInputButton::Square), "controller 1 state should win initially");
+    expect_trace({0, 1}, "initial controller 1 scan");
+
+    reset_call_observation();
+    g_fake.status[1] = ERROR_DEVICE_NOT_CONNECTED;
+    state = input.poll();
+    expect(state.gamepad_connected, "controller 3 should become fallback");
+    expect(is_button_pressed(state, GameInputButton::Circle), "controller 3 fallback state");
+    expect_trace({1, 0, 2, 3}, "disconnect fallback scan order");
+    expect(g_fake.calls[1] == 1u, "failed active controller must not be polled twice in one frame");
+
+    reset_call_observation();
+    g_fake.status[3] = ERROR_DEVICE_NOT_CONNECTED;
+    state = input.poll();
+    expect(!state.gamepad_connected, "all disconnected should publish disconnected state");
+    expect_trace({3, 0, 1, 2}, "all-disconnected scan order");
+    expect(g_fake.calls[3] == 1u, "failed active controller 3 must be skipped during fallback scan");
+
+    reset_call_observation();
+    g_fake.status[0] = ERROR_SUCCESS;
+    g_fake.states[0].Gamepad.wButtons = XINPUT_GAMEPAD_Y;
+    state = input.poll();
+    expect(state.gamepad_connected, "controller 0 reconnect should be discovered");
+    expect(is_button_pressed(state, GameInputButton::Triangle), "reconnected controller 0 state");
+    expect_trace({0}, "reconnect scan");
+}
+
+void test_arbitrary_xinput_error_is_nonfatal() {
+    reset_fake();
+    g_fake.status[0] = ERROR_GEN_FAILURE;
+    g_fake.status[2] = ERROR_SUCCESS;
+    g_fake.states[2].Gamepad.wButtons = XINPUT_GAMEPAD_START;
+    auto input = make_input();
+    const auto state = input.poll();
+    expect(state.gamepad_connected, "later controller should survive arbitrary earlier error");
+    expect(is_button_pressed(state, GameInputButton::Start), "later controller state after arbitrary error");
+    expect_trace({0, 1, 2}, "arbitrary error scan");
+}
+
 } // namespace
 
 int main() {
@@ -283,6 +371,9 @@ int main() {
     test_keyboard_left_stick_and_opposites();
     test_keyboard_gamepad_merge();
     test_null_injected_apis_are_safe();
+    test_controller_selection_and_active_reuse();
+    test_disconnect_fallback_all_disconnected_and_reconnect();
+    test_arbitrary_xinput_error_is_nonfatal();
     std::cout << "windows_game_input_tests: PASS\n";
     return EXIT_SUCCESS;
 }
