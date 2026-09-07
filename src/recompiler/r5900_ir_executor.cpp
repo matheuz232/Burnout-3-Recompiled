@@ -221,6 +221,40 @@ R5900IrExecutionResult execute_ir_sequence(
             break;
         }
 
+        case R5900IrOpcode::Load64: {
+            const auto base = static_cast<std::uint32_t>(
+                state.gpr[ir.inputs[0].gpr_index].low64);
+            const auto offset = static_cast<std::uint32_t>(
+                static_cast<std::int32_t>(ir.inputs[1].immediate));
+            const auto address = static_cast<std::uint32_t>(base + offset);
+            std::uint64_t value{};
+
+            context.current_memory_guest_pc = ir.guest_pc;
+            const bool aligned = (address & 0x7u) == 0u;
+            const bool available = context.memory.user != nullptr &&
+                                   context.memory.read64 != nullptr;
+            const bool loaded = aligned && available &&
+                context.memory.read64(context.memory.user, address, &value);
+            if (!loaded) {
+                context.memory_fault = {
+                    true,
+                    R5900IrMemoryAccessKind::Load,
+                    ir.guest_pc,
+                    address,
+                    8u,
+                };
+                normalize_zero(state);
+                return {R5900IrExecutionError::MemoryAccessFailure,
+                        aligned
+                            ? "R5900 Load64 guest-memory read failed"
+                            : "R5900 Load64 effective address is not 8-byte aligned"};
+            }
+            if (ir.destination->index != 0u) {
+                state.gpr[ir.destination->index].low64 = value;
+            }
+            break;
+        }
+
         case R5900IrOpcode::Store32: {
             const auto base = static_cast<std::uint32_t>(
                 state.gpr[ir.inputs[0].gpr_index].low64);

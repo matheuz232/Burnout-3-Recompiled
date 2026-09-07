@@ -39,16 +39,22 @@ using R5900GuestWrite128Fn = bool (*)(void* user,
                                       std::uint64_t low64,
                                       std::uint64_t high64) noexcept;
 
+using R5900GuestRead64Fn = bool (*)(void* user,
+                                    std::uint32_t address,
+                                    std::uint64_t* value) noexcept;
+
 struct R5900GuestMemoryAccess {
     void* user{};
     R5900GuestWrite32Fn write32{};
     R5900GuestWrite64Fn write64{};
     R5900GuestWrite128Fn write128{};
+    R5900GuestRead64Fn read64{};
 };
 
 enum class R5900IrMemoryAccessKind {
     None = 0,
     Store,
+    Load,
 };
 
 struct R5900IrMemoryFault {
