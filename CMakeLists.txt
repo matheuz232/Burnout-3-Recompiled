@@ -520,3 +520,23 @@ if(B3R_BUILD_TESTS)
     set_tests_properties(crash_handler_windows_tests PROPERTIES TIMEOUT 30)
   endif()
 endif()
+
+if(B3R_BUILD_TESTS AND WIN32)
+  add_executable(r5900_block_dispatcher_store32_windows_tests
+    tests/r5900_block_dispatcher_store32_windows_tests.cpp
+  )
+  target_link_libraries(r5900_block_dispatcher_store32_windows_tests PRIVATE
+    b3r_recompiler_dispatcher_x64
+  )
+  add_test(NAME r5900_block_dispatcher_store32_windows_tests
+    COMMAND r5900_block_dispatcher_store32_windows_tests)
+
+  add_executable(r5900_block_dispatcher_sw_startup_windows_tests
+    tests/r5900_block_dispatcher_sw_startup_windows_tests.cpp
+  )
+  target_link_libraries(r5900_block_dispatcher_sw_startup_windows_tests PRIVATE
+    b3r_recompiler_dispatcher_x64
+  )
+  add_test(NAME r5900_block_dispatcher_sw_startup_windows_tests
+    COMMAND r5900_block_dispatcher_sw_startup_windows_tests)
+endif()
