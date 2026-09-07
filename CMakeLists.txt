@@ -501,6 +501,15 @@ if(B3R_BUILD_TESTS)
     add_test(NAME r5900_block_dispatcher_syscall_windows_tests
       COMMAND r5900_block_dispatcher_syscall_windows_tests)
 
+    add_executable(r5900_block_dispatcher_guest_call_windows_tests
+      tests/r5900_block_dispatcher_guest_call_windows_tests.cpp
+    )
+    target_link_libraries(r5900_block_dispatcher_guest_call_windows_tests PRIVATE
+      b3r_recompiler_dispatcher_x64
+    )
+    add_test(NAME r5900_block_dispatcher_guest_call_windows_tests
+      COMMAND r5900_block_dispatcher_guest_call_windows_tests)
+
     add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
     target_link_libraries(qpc_clock_windows_tests PRIVATE b3r_windows_runtime)
     add_test(NAME qpc_clock_windows_tests COMMAND qpc_clock_windows_tests)
