@@ -1,10 +1,58 @@
 #include "recompiler/windows/r5900_block_dispatcher.h"
 #include "r5900_createsema_test_support.h"
 
+#include <fstream>
+#include <iterator>
+
 using namespace b3r::recompiler;
 using namespace b3r::test_support::createsema;
 
-int main() {
+namespace {
+
+void validate_external_startup(const char* path) {
+    std::ifstream input(path, std::ios::binary);
+    expect(static_cast<bool>(input), "external ELF must open");
+    const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(input)), {});
+    expect(!input.bad(), "external ELF read must finish");
+    const auto parsed = parse_ps2_elf(bytes);
+    expect(parsed.ok(), "complete external ELF must pass the production loader");
+    expect(parsed.image->entry_point() == 0x00100008u, "unexpected external entry point");
+    auto built = b3r::runtime::Ps2MemoryMap::from_elf(*parsed.image);
+    expect(built.ok(), "external ELF must map into EE RAM");
+    R5900HostSyscallService service;
+    R5900BlockDispatcherOptions options;
+    options.host_syscalls = &service;
+    options.block_options.max_instructions = 256u;
+    R5900BlockDispatcher dispatcher(*built.memory, options);
+    R5900IrExecutionState state;
+    const auto result = dispatcher.run(parsed.image->entry_point(), state, 4000000u);
+    std::cout << "EXTERNAL_STARTUP next_pc=0x" << std::hex << result.next_pc << std::dec
+              << " blocks=" << result.blocks_executed
+              << " instructions=" << result.instructions_executed
+              << " syscalls=" << result.syscalls_handled
+              << " semaphores=" << service.semaphores().size()
+              << " diagnostic=" << result.message << '\n';
+    expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction &&
+               result.next_pc == 0x00114f08u,
+           "external startup must reach the observed post-CreateSema LD boundary");
+    expect(result.syscalls_handled == 4u && service.semaphores().size() == 2u &&
+               service.setup_thread_context().has_value() &&
+               service.setup_heap_context().has_value(),
+           "external startup must cross SetupThread, SetupHeap and two CreateSema calls");
+    for (const auto& semaphore : service.semaphores()) {
+        expect(semaphore.count == 1u && semaphore.max_count == 1u && semaphore.attr == 0u,
+               "external semaphore parameters must match the diagnosed startup");
+    }
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    if (argc == 2) {
+        validate_external_startup(argv[1]);
+        return EXIT_SUCCESS;
+    }
+    expect(argc == 1, "usage: r5900_block_dispatcher_createsema_windows_tests [external ELF]");
     // Public ISA encodings and synthetic data only; no game payload.
     constexpr std::uint32_t entry = 0x00114ed0u;
     constexpr std::uint32_t wrapper = 0x0010be20u;
@@ -42,6 +90,7 @@ int main() {
                "native call and return must preserve RA high64");
         expect(result.cache_misses == (id == 1u ? 4u : 0u) &&
                    result.cache_hits == (id == 1u ? 0u : 4u) &&
+                   result.fast_cache_hits == (id == 1u ? 0u : 2u) &&
                    result.recompilations == 0u,
                "cache replay must execute each syscall afresh");
     }

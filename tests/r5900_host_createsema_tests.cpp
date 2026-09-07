@@ -45,6 +45,17 @@ void expect_state(const R5900IrExecutionState& actual,
 int main() {
     auto memory = make_memory();
     R5900HostSyscallService service;
+    R5900IrExecutionState setup;
+    setup.gpr[3].low64 = 0x3cu;
+    setup.gpr[5].low64 = 0x01ff0000u;
+    setup.gpr[6].low64 = 0x10000u;
+    expect(service.handle(kRequest, setup, memory).status == R5900HostSyscallStatus::Handled,
+           "SetupThread prerequisite must work");
+    setup.gpr[3].low64 = 0x3du;
+    setup.gpr[4].low64 = 0x01ecea00u;
+    setup.gpr[5].low64 = 0xffffffffu;
+    expect(service.handle(kRequest, setup, memory).status == R5900HostSyscallStatus::Handled,
+           "SetupHeap prerequisite must work");
     descriptor(memory, kDescriptor);
     const auto all_ram = *memory.translate(0u, 0x02000000u);
     const std::vector<std::uint8_t> before_ram(all_ram.begin(), all_ram.end());
@@ -57,6 +68,17 @@ int main() {
     expect_state(state, expected);
     expect(std::equal(all_ram.begin(), all_ram.end(), before_ram.begin()),
            "CreateSema must preserve all guest RAM");
+    expect(service.semaphores().size() == 1u,
+           "successful creation must retain a host semaphore");
+    const auto first = service.semaphores().front();
+    expect(first.id == 1u && first.count == 1u && first.initial_count == 1u &&
+               first.max_count == 1u && first.wait_threads == 0u &&
+               first.attr == 0u && first.option == 0x12345678u,
+           "CreateSema must use init_count, ignore input status, and retain option");
+    expect(service.setup_thread_context()->stack_base == 0x01ff0000u &&
+               service.setup_heap_context()->heap_start == 0x01ecea00u &&
+               service.setup_heap_context()->heap_end == 0x01ff0000u,
+           "CreateSema must preserve prior startup HLE contexts");
 
     // A second call through the same pointer is a new object, not a memoized result.
     state = make_state();
@@ -93,6 +115,11 @@ int main() {
     expect(service.handle(kRequest, state, memory).status == R5900HostSyscallStatus::Handled &&
                state.gpr[2].low64 == 3u,
            "rejections must not consume IDs; zero initial count must be valid");
+    expect(service.semaphores().size() == 3u && service.semaphores()[0].count == 1u &&
+               service.semaphores()[0].max_count == 1u &&
+               service.semaphores()[2].count == 0u &&
+               service.semaphores()[2].max_count == 0x7fffffffu,
+           "objects must own copied parameters, independent of later guest writes");
 
     // Exact last-byte fit and unbacked memory are distinct cases.
     descriptor(memory, 0x01ffffe8u);
@@ -124,5 +151,10 @@ int main() {
     expect(fresh.handle(kRequest, state, memory).status == R5900HostSyscallStatus::Handled &&
                state.gpr[2].low64 == 1u,
            "semaphore IDs must be owned by the service instance");
+    setup.gpr[3].low64 = 0x3cu;
+    setup.gpr[5].low64 = 0x01ff0000u;
+    expect(fresh.handle(kRequest, setup, memory).status == R5900HostSyscallStatus::Handled &&
+               fresh.semaphores().size() == 1u,
+           "SetupThread must not discard existing semaphore objects");
     std::cout << "r5900_host_createsema_tests: PASS\n";
 }

@@ -14,6 +14,7 @@ namespace {
 
 constexpr std::int32_t kSetupThreadSelector = 0x3c;
 constexpr std::int32_t kSetupHeapSelector = 0x3d;
+constexpr std::int32_t kCreateSemaSelector = 0x40;
 
 std::int32_t ee_syscall_selector(const R5900IrExecutionState& state) noexcept {
     return static_cast<std::int32_t>(
@@ -38,8 +39,6 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
     const R5900HostSyscallRequest& request,
     R5900IrExecutionState& state,
     runtime::Ps2MemoryMap& memory) {
-    (void)memory;
-
     if (decode_r5900(request.raw_instruction).instruction != R5900Instruction::Syscall) {
         return {
             R5900HostSyscallStatus::Fault,
@@ -148,6 +147,48 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
             heap_size_raw,
             heap_end,
         };
+        return {R5900HostSyscallStatus::Handled, {}};
+    }
+
+    if (selector == kCreateSemaSelector) {
+        const auto address = ee_gpr_low32(state, 4u);
+        const auto reject = [&](R5900HostSyscallStatus status, const char* detail) {
+            return R5900HostSyscallResult{
+                status,
+                "CreateSema at guest PC " + format_pc(request.guest_pc) +
+                    ", descriptor " + format_pc(address) + ": " + detail,
+            };
+        };
+        if ((address & 3u) != 0u) {
+            return reject(R5900HostSyscallStatus::Fault,
+                          "descriptor must be four-byte aligned");
+        }
+        // Validate the complete EE ABI object before adding any field offsets.
+        if (address == 0u || !memory.translate(address, 24u).has_value()) {
+            return reject(R5900HostSyscallStatus::Fault,
+                          "descriptor must be non-null and fully backed by EE RAM");
+        }
+        const auto maximum = *memory.read_u32(address + 4u);
+        const auto initial = *memory.read_u32(address + 8u);
+        const auto attr = *memory.read_u32(address + 16u);
+        const auto option = *memory.read_u32(address + 20u);
+        if (std::bit_cast<std::int32_t>(maximum) <= 0 ||
+            std::bit_cast<std::int32_t>(initial) < 0 || initial > maximum) {
+            return reject(R5900HostSyscallStatus::Fault,
+                          "counts require max_count > 0 and 0 <= init_count <= max_count");
+        }
+        if (attr != 0u) {
+            return reject(R5900HostSyscallStatus::Unsupported,
+                          "nonzero semaphore attributes are unsupported in v0");
+        }
+        if (semaphore_count_ == semaphores_.size()) {
+            return reject(R5900HostSyscallStatus::Fault,
+                          "project v0 semaphore capacity exhausted");
+        }
+        const auto id = static_cast<std::uint32_t>(semaphore_count_ + 1u);
+        semaphores_[semaphore_count_] = {id, initial, maximum, initial, 0u, attr, option};
+        ++semaphore_count_;
+        state.gpr[2].low64 = id;
         return {R5900HostSyscallStatus::Handled, {}};
     }
 

@@ -3,8 +3,11 @@
 #include "recompiler/r5900_ir_executor.h"
 #include "runtime/ps2_memory_map.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace b3r::recompiler {
@@ -40,6 +43,16 @@ struct R5900SetupHeapContext {
     std::uint32_t heap_end{};
 };
 
+struct R5900SemaphoreContext {
+    std::uint32_t id{};
+    std::uint32_t count{};
+    std::uint32_t max_count{};
+    std::uint32_t initial_count{};
+    std::uint32_t wait_threads{};
+    std::uint32_t attr{};
+    std::uint32_t option{};
+};
+
 class IR5900HostSyscallService {
 public:
     virtual ~IR5900HostSyscallService() = default;
@@ -67,9 +80,16 @@ public:
         return setup_heap_context_;
     }
 
+    [[nodiscard]] std::span<const R5900SemaphoreContext> semaphores() const noexcept {
+        return std::span<const R5900SemaphoreContext>(semaphores_).first(semaphore_count_);
+    }
+
 private:
     std::optional<R5900SetupThreadContext> setup_thread_context_{};
     std::optional<R5900SetupHeapContext> setup_heap_context_{};
+    // Project v0 capacity; this is not a claim about the EE kernel's object limit.
+    std::array<R5900SemaphoreContext, 256> semaphores_{};
+    std::size_t semaphore_count_{};
 };
 
 } // namespace b3r::recompiler

@@ -41,6 +41,16 @@ else()
   target_compile_options(b3r_runtime PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_library(b3r_host_syscalls
+  src/recompiler/windows/r5900_host_syscall_service.cpp
+)
+target_link_libraries(b3r_host_syscalls PUBLIC b3r_runtime)
+if(MSVC)
+  target_compile_options(b3r_host_syscalls PRIVATE /W4 /permissive- /Zc:__cplusplus)
+else()
+  target_compile_options(b3r_host_syscalls PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_library(b3r_analysis
   src/analysis/r5900_control_flow.cpp
   src/analysis/r5900_reachability.cpp
@@ -100,12 +110,12 @@ if(WIN32)
 
   add_library(b3r_recompiler_dispatcher_x64 STATIC
     src/recompiler/windows/r5900_block_dispatcher.cpp
-    src/recompiler/windows/r5900_host_syscall_service.cpp
   )
   target_include_directories(b3r_recompiler_dispatcher_x64 PUBLIC src)
   target_link_libraries(b3r_recompiler_dispatcher_x64 PUBLIC
     b3r_analysis
     b3r_recompiler_x64
+    b3r_host_syscalls
   )
   if(MSVC)
     target_compile_options(b3r_recompiler_dispatcher_x64 PRIVATE /W4 /permissive- /Zc:__cplusplus)
@@ -522,6 +532,15 @@ if(B3R_BUILD_TESTS)
 endif()
 
 if(B3R_BUILD_TESTS AND WIN32)
+  add_executable(r5900_block_dispatcher_createsema_windows_tests
+    tests/r5900_block_dispatcher_createsema_windows_tests.cpp
+  )
+  target_link_libraries(r5900_block_dispatcher_createsema_windows_tests PRIVATE
+    b3r_recompiler_dispatcher_x64
+  )
+  add_test(NAME r5900_block_dispatcher_createsema_windows_tests
+    COMMAND r5900_block_dispatcher_createsema_windows_tests)
+
   add_executable(r5900_block_dispatcher_store32_windows_tests
     tests/r5900_block_dispatcher_store32_windows_tests.cpp
   )
@@ -547,6 +566,10 @@ if(B3R_BUILD_TESTS)
   )
   target_link_libraries(r5900_ir_store32_tests PRIVATE b3r_recompiler)
   add_test(NAME r5900_ir_store32_tests COMMAND r5900_ir_store32_tests)
+
+  add_executable(r5900_host_createsema_tests tests/r5900_host_createsema_tests.cpp)
+  target_link_libraries(r5900_host_createsema_tests PRIVATE b3r_host_syscalls)
+  add_test(NAME r5900_host_createsema_tests COMMAND r5900_host_createsema_tests)
 
   add_executable(r5900_ir_store32_executor_tests
     tests/r5900_ir_store32_executor_tests.cpp
