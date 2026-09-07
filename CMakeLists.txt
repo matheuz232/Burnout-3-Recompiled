@@ -18,6 +18,7 @@ target_include_directories(b3r_core PUBLIC src)
 
 add_library(b3r_input
   src/input/game_input.cpp
+  src/input/ps2_pad_report.cpp
 )
 target_include_directories(b3r_input PUBLIC src)
 if(MSVC)
@@ -178,6 +179,10 @@ if(B3R_BUILD_TESTS)
   add_executable(game_input_tests tests/game_input_tests.cpp)
   target_link_libraries(game_input_tests PRIVATE b3r_input)
   add_test(NAME game_input_tests COMMAND game_input_tests)
+
+  add_executable(ps2_pad_report_tests tests/ps2_pad_report_tests.cpp)
+  target_link_libraries(ps2_pad_report_tests PRIVATE b3r_input)
+  add_test(NAME ps2_pad_report_tests COMMAND ps2_pad_report_tests)
 
   add_executable(frame_schedule_tests tests/frame_schedule_tests.cpp)
   target_link_libraries(frame_schedule_tests PRIVATE b3r_core)
