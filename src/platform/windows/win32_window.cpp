@@ -53,7 +53,7 @@ bool Win32Window::create(HINSTANCE instance, int width, int height, bool fullscr
         nullptr,
         nullptr,
         instance_,
-        nullptr);
+        this);
 
     if (hwnd_ == nullptr) {
         return false;
@@ -81,6 +81,15 @@ HWND Win32Window::handle() const noexcept {
 }
 
 LRESULT CALLBACK Win32Window::window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+    if (message == WM_NCCREATE) {
+        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(l_param);
+        auto* window = static_cast<Win32Window*>(create->lpCreateParams);
+        if (window != nullptr) {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(window));
+            window->hwnd_ = hwnd;
+        }
+    }
+
     switch (message) {
     case WM_KEYDOWN:
         if (w_param == VK_ESCAPE) {
@@ -94,6 +103,14 @@ LRESULT CALLBACK Win32Window::window_proc(HWND hwnd, UINT message, WPARAM w_para
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
+    case WM_NCDESTROY: {
+        auto* window = reinterpret_cast<Win32Window*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (window != nullptr && window->hwnd_ == hwnd) {
+            window->hwnd_ = nullptr;
+        }
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        break;
+    }
     default:
         break;
     }
