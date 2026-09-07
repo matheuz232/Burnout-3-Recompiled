@@ -153,6 +153,12 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
 
     if (selector == kCreateSemaSelector) {
         const auto descriptor_address = ee_gpr_low32(state, 4u);
+        if ((descriptor_address & 3u) != 0u) {
+            return {
+                R5900HostSyscallStatus::Fault,
+                "CreateSema descriptor must be 4-byte aligned",
+            };
+        }
         if (!memory.translate(descriptor_address, kEeSemaDescriptorSize).has_value()) {
             return {
                 R5900HostSyscallStatus::Fault,
@@ -162,10 +168,13 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
 
         const auto max_count_raw = memory.read_u32(descriptor_address + 4u);
         const auto init_count_raw = memory.read_u32(descriptor_address + 8u);
-        if (!max_count_raw.has_value() || !init_count_raw.has_value()) {
+        const auto attr = memory.read_u32(descriptor_address + 16u);
+        const auto option = memory.read_u32(descriptor_address + 20u);
+        if (!max_count_raw.has_value() || !init_count_raw.has_value() ||
+            !attr.has_value() || !option.has_value()) {
             return {
                 R5900HostSyscallStatus::Fault,
-                "CreateSema descriptor count fields are unreadable",
+                "CreateSema descriptor fields are unreadable",
             };
         }
         const auto max_count = std::bit_cast<std::int32_t>(*max_count_raw);
@@ -183,7 +192,15 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
             };
         }
 
-        const auto id = next_sema_id_++;
+        const auto id = next_sema_id_;
+        sema_contexts_.push_back(R5900SemaContext{
+            id,
+            init_count,
+            max_count,
+            *attr,
+            *option,
+        });
+        ++next_sema_id_;
         state.gpr[2].low64 = static_cast<std::uint64_t>(static_cast<std::uint32_t>(id));
         return {R5900HostSyscallStatus::Handled, {}};
     }
