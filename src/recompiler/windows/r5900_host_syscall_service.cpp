@@ -14,6 +14,8 @@ namespace {
 
 constexpr std::int32_t kSetupThreadSelector = 0x3c;
 constexpr std::int32_t kSetupHeapSelector = 0x3d;
+constexpr std::int32_t kCreateSemaSelector = 0x40;
+constexpr std::size_t kEeSemaDescriptorSize = 24u;
 
 std::int32_t ee_syscall_selector(const R5900IrExecutionState& state) noexcept {
     return static_cast<std::int32_t>(
@@ -38,8 +40,6 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
     const R5900HostSyscallRequest& request,
     R5900IrExecutionState& state,
     runtime::Ps2MemoryMap& memory) {
-    (void)memory;
-
     if (decode_r5900(request.raw_instruction).instruction != R5900Instruction::Syscall) {
         return {
             R5900HostSyscallStatus::Fault,
@@ -149,6 +149,20 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
             heap_end,
         };
         return {R5900HostSyscallStatus::Handled, {}};
+    }
+
+    if (selector == kCreateSemaSelector) {
+        const auto descriptor_address = ee_gpr_low32(state, 4u);
+        if (!memory.translate(descriptor_address, kEeSemaDescriptorSize).has_value()) {
+            return {
+                R5900HostSyscallStatus::Fault,
+                "CreateSema descriptor is outside available EE memory",
+            };
+        }
+        return {
+            R5900HostSyscallStatus::Unsupported,
+            "CreateSema descriptor creation is not implemented in v0",
+        };
     }
 
     std::ostringstream out;
