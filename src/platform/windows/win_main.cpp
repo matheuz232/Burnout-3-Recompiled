@@ -5,6 +5,7 @@
 #include "platform/windows/qpc_clock.h"
 #include "platform/windows/win32_window.h"
 #include "platform/windows/windows_frame_pacer.h"
+#include "platform/windows/windows_game_input.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -115,6 +116,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     try {
         b3r::platform::windows::WindowsFramePacer pacer{120.0};
+        b3r::platform::windows::WindowsGameInput game_input;
         b3r::core::FrameStats frame_stats;
 
         std::ostringstream timer_info;
@@ -126,6 +128,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         double last_report = b3r::platform::windows::QpcClock::now_seconds();
         while (window.pump_messages()) {
             const double frame_begin = b3r::platform::windows::QpcClock::now_seconds();
+            const auto input_state = game_input.poll();
+            (void)input_state;
 
             const double simulation_begin = b3r::platform::windows::QpcClock::now_seconds();
             // Game simulation is intentionally not implemented in the bootstrap milestone.
