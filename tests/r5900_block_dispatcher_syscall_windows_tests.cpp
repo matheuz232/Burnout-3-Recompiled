@@ -135,10 +135,10 @@ int main() {
     constexpr std::uint32_t kSyscall = 0x0000000cu;
     constexpr std::uint32_t kUnsupportedXori =
         (0x0eu << 26u) | (1u << 21u) | (1u << 16u) | 1u;
-    constexpr std::uint32_t kUnsupportedLd =
+    constexpr std::uint32_t kLd =
         (0x37u << 26u) | (29u << 21u) | (31u << 16u);
-    expect(decode_r5900(kUnsupportedLd).instruction == R5900Instruction::Ld,
-           "unsupported-boundary fixture must encode LD");
+    expect(decode_r5900(kLd).instruction == R5900Instruction::Ld,
+           "LD fixture must encode LD");
 
     {
         auto memory = make_memory({kSyscall}, base);
@@ -219,16 +219,16 @@ int main() {
         constexpr std::uint32_t kPostSetupHeapPc = base + 32u;
         auto memory = make_memory(
             {
-                i_type(0x09u, 0u, 9u, 0x0055u),     // native prefix
-                kSyscall,                            // SetupThread
-                i_type(0x09u, 2u, 29u, 0x0000u),   // guest move sp,v0
-                i_type(0x0fu, 0u, 4u, 0x01ecu),    // LUI a0,0x01ec
-                i_type(0x0du, 4u, 4u, 0xea00u),    // ORI a0,a0,0xea00
-                i_type(0x09u, 0u, 5u, 0xffffu),    // ADDIU a1,r0,-1
-                i_type(0x09u, 0u, 3u, 0x003du),    // ADDIU v1,r0,0x3d
-                kSyscall,                            // SetupHeap
-                kUnsupportedXori,                    // deliberate boundary
-                kSyscall,                            // analyzer guard; must never be handled
+                i_type(0x09u, 0u, 9u, 0x0055u),
+                kSyscall,
+                i_type(0x09u, 2u, 29u, 0x0000u),
+                i_type(0x0fu, 0u, 4u, 0x01ecu),
+                i_type(0x0du, 4u, 4u, 0xea00u),
+                i_type(0x09u, 0u, 5u, 0xffffu),
+                i_type(0x09u, 0u, 3u, 0x003du),
+                kSyscall,
+                kUnsupportedXori,
+                kSyscall,
             },
             base);
 
@@ -286,55 +286,52 @@ int main() {
         const auto jal = j_type(0x03u, base + 0x20u);
         auto memory = make_memory(
             {
-                i_type(0x09u, 29u, 29u, 0xfff0u), // ADDIU sp,sp,-16
-                kUnsupportedLd,                    // LD ra,0(sp)
-                jal,                               // must remain unexecuted
-                0u,                                // JAL delay slot
+                i_type(0x09u, 29u, 29u, 0xfff0u),
+                kLd,
+                jal,
+                0u,
             },
             base);
+        expect(memory.write_u64(0x01fffff0u, 0x1122334455667788ull),
+               "LD stack fixture must initialize");
         R5900BlockDispatcher dispatcher(memory);
         R5900IrExecutionState state{};
         state.gpr[29] = {0x02000000u, 0x2929292929292929ull};
         state.gpr[31] = {0x001001f0u, 0x3131313131313131ull};
 
-        const auto result = dispatcher.run(base, state, 2u);
-        expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
-               "unsupported LD before JAL must stop as unsupported instruction");
-        expect(result.next_pc == base + 4u,
-               "unsupported LD before JAL must report exact first unexecuted PC");
-        expect(result.blocks_executed == 1u && result.instructions_executed == 1u,
-               "dispatcher must execute only supported prefix before LD boundary");
+        const auto result = dispatcher.run(base, state, 1u);
+        expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+               "ADDIU+LD+JAL must execute as one supported native block");
+        expect(result.next_pc == base + 0x20u &&
+                   result.blocks_executed == 1u && result.instructions_executed == 4u,
+               "ADDIU+LD+JAL accounting or target mismatch");
         expect(state.gpr[29].low64 == 0x01fffff0u &&
                    state.gpr[29].high64 == 0x2929292929292929ull,
-               "supported ADDIU prefix must commit before LD boundary");
-        expect(state.gpr[31].low64 == 0x001001f0u &&
+               "ADDIU prefix must commit before LD");
+        expect(state.gpr[31].low64 == base + 0x10u &&
                    state.gpr[31].high64 == 0x3131313131313131ull,
-               "JAL after unsupported LD must not mutate return address");
+               "JAL after LD must publish link low64 and preserve high64");
     }
 
     {
         const auto jal = j_type(0x03u, base + 0x20u);
-        auto memory = make_memory(
-            {
-                kUnsupportedLd, // boundary at entry
-                jal,            // must remain unexecuted
-                0u,             // JAL delay slot
-            },
-            base);
+        auto memory = make_memory({kLd, jal, 0u}, base);
+        expect(memory.write_u64(0x01fffff0u, 0xaabbccddeeff0011ull),
+               "entry LD fixture must initialize");
         R5900BlockDispatcher dispatcher(memory);
         R5900IrExecutionState state{};
+        state.gpr[29].low64 = 0x01fffff0u;
         state.gpr[31] = {0x001001f0u, 0x3131313131313131ull};
 
         const auto result = dispatcher.run(base, state, 1u);
-        expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
-               "unsupported LD at entry must stop as unsupported instruction");
-        expect(result.next_pc == base,
-               "unsupported LD at entry must retain exact boundary PC");
-        expect(result.blocks_executed == 0u && result.instructions_executed == 0u,
-               "unsupported LD at entry must execute no later transfer");
-        expect(state.gpr[31].low64 == 0x001001f0u &&
+        expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+               "entry LD followed by JAL must execute natively");
+        expect(result.next_pc == base + 0x20u &&
+                   result.blocks_executed == 1u && result.instructions_executed == 3u,
+               "entry LD/JAL accounting or target mismatch");
+        expect(state.gpr[31].low64 == base + 0x0cu &&
                    state.gpr[31].high64 == 0x3131313131313131ull,
-               "JAL after entry LD boundary must not mutate return address");
+               "JAL must overwrite loaded RA low64 with link and preserve high64");
     }
 
     {
