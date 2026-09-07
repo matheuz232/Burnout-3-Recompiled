@@ -540,3 +540,27 @@ if(B3R_BUILD_TESTS AND WIN32)
   add_test(NAME r5900_block_dispatcher_sw_startup_windows_tests
     COMMAND r5900_block_dispatcher_sw_startup_windows_tests)
 endif()
+
+if(B3R_BUILD_TESTS)
+  add_executable(r5900_ir_store32_tests
+    tests/r5900_ir_store32_tests.cpp
+  )
+  target_link_libraries(r5900_ir_store32_tests PRIVATE b3r_recompiler)
+  add_test(NAME r5900_ir_store32_tests COMMAND r5900_ir_store32_tests)
+
+  add_executable(r5900_ir_store32_executor_tests
+    tests/r5900_ir_store32_executor_tests.cpp
+  )
+  target_link_libraries(r5900_ir_store32_executor_tests PRIVATE b3r_recompiler)
+  add_test(NAME r5900_ir_store32_executor_tests
+    COMMAND r5900_ir_store32_executor_tests)
+
+  if(WIN32)
+    add_executable(r5900_x64_store32_windows_tests
+      tests/r5900_x64_store32_windows_tests.cpp
+    )
+    target_link_libraries(r5900_x64_store32_windows_tests PRIVATE b3r_recompiler_x64)
+    add_test(NAME r5900_x64_store32_windows_tests
+      COMMAND r5900_x64_store32_windows_tests)
+  endif()
+endif()
