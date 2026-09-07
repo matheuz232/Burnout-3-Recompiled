@@ -1,5 +1,7 @@
 #include "input/ps2_pad_report.h"
 
+#include <cmath>
+
 namespace b3r::input {
 namespace {
 
@@ -15,12 +17,30 @@ void encode_button(std::uint16_t& active_low,
 
 } // namespace
 
-std::uint8_t encode_ps2_stick_axis(float) noexcept {
-    return 0x80u;
+std::uint8_t encode_ps2_stick_axis(float axis) noexcept {
+    if (!std::isfinite(axis)) {
+        return 0x80u;
+    }
+
+    if (axis <= -1.0f) {
+        return 0x00u;
+    }
+    if (axis >= 1.0f) {
+        return 0xffu;
+    }
+    if (axis == 0.0f) {
+        return 0x80u;
+    }
+
+    const float scaled = (axis + 1.0f) * 127.5f;
+    return static_cast<std::uint8_t>(std::lround(scaled));
 }
 
-std::uint8_t encode_ps2_stick_vertical(float) noexcept {
-    return 0x80u;
+std::uint8_t encode_ps2_stick_vertical(float axis) noexcept {
+    if (!std::isfinite(axis)) {
+        return 0x80u;
+    }
+    return encode_ps2_stick_axis(-axis);
 }
 
 Ps2PadReport encode_ps2_pad_report(const GameInputState& state,
@@ -47,6 +67,11 @@ Ps2PadReport encode_ps2_pad_report(const GameInputState& state,
     encode_button(report.buttons_active_low, state, GameInputButton::Circle, Ps2PadButton::Circle);
     encode_button(report.buttons_active_low, state, GameInputButton::Cross, Ps2PadButton::Cross);
     encode_button(report.buttons_active_low, state, GameInputButton::Square, Ps2PadButton::Square);
+
+    report.right_x = encode_ps2_stick_axis(state.right_x);
+    report.right_y = encode_ps2_stick_vertical(state.right_y);
+    report.left_x = encode_ps2_stick_axis(state.left_x);
+    report.left_y = encode_ps2_stick_vertical(state.left_y);
     return report;
 }
 
