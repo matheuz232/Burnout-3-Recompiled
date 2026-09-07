@@ -113,34 +113,44 @@ int main() {
     using namespace b3r::recompiler;
 
     constexpr std::uint32_t base = 0x00100000u;
+    constexpr std::uint32_t andi =
+        (0x0cu << 26u) | (1u << 21u) | (2u << 16u) | 0x00ffu;
     constexpr std::uint32_t unsupported_xori =
         (0x0eu << 26u) | (1u << 21u) | (1u << 16u) | 1u;
 
     {
-        auto memory = make_memory({unsupported_xori}, base);
-        R5900BlockDispatcher dispatcher(memory);
+        auto memory = make_memory({andi}, base);
+        R5900BlockDispatcherOptions options{};
+        options.block_options.max_instructions = 1u;
+        R5900BlockDispatcher dispatcher(memory, options);
         R5900IrExecutionState state{};
+        state.gpr[1].low64 = 0x1234u;
         const auto result = dispatcher.run(base, state, 1u);
-        expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
-               "null guest service must preserve normal dispatch");
-        expect(result.next_pc == base,
-               "null guest service must retain unsupported boundary PC");
+        expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted,
+               "null guest service must preserve normal supported dispatch");
+        expect(result.next_pc == base + 4u && result.guest_calls_handled == 0u,
+               "null guest service must not intercept or alter normal next PC");
     }
 
     {
-        auto memory = make_memory({unsupported_xori}, base);
+        auto memory = make_memory({andi}, base);
         FakeGuestCallService service{};
         service.expected_pc = base;
         service.status = R5900GuestCallStatus::NotHandled;
         R5900BlockDispatcherOptions options{};
+        options.block_options.max_instructions = 1u;
         options.guest_calls = &service;
         R5900BlockDispatcher dispatcher(memory, options);
         R5900IrExecutionState state{};
+        state.gpr[1].low64 = 0x1234u;
         const auto result = dispatcher.run(base, state, 1u);
         expect(service.calls == 1u,
                "guest-call service must be queried at current PC");
-        expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction,
-               "NotHandled must preserve normal dispatch");
+        expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted &&
+                   result.next_pc == base + 4u,
+               "NotHandled must preserve normal supported dispatch");
+        expect(result.guest_calls_handled == 0u && state.gpr[2].low64 == 0x34u,
+               "NotHandled must not count or block the guest instruction");
     }
 
     {
