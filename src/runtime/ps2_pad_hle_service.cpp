@@ -2,6 +2,8 @@
 
 #include "runtime/ps2_memory_map.h"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
@@ -17,6 +19,7 @@ constexpr std::uint32_t kPadStateDisconnected = 0x00u;
 constexpr std::uint32_t kPadStateStable = 0x06u;
 constexpr std::size_t kPadAreaSize = 256u;
 constexpr std::uint32_t kPadAreaAlignment = 64u;
+constexpr std::size_t kPadButtonStatusSize = 32u;
 
 std::uint32_t gpr_low32(const recompiler::R5900IrExecutionState& state,
                         std::size_t index) noexcept {
@@ -136,8 +139,45 @@ recompiler::R5900GuestCallResult Ps2PadHleService::try_handle(
     }
 
     if (bindings_.pad_read != 0u && pc == bindings_.pad_read) {
-        return fault("padRead", pc,
-                     "report read is not enabled by the lifecycle implementation");
+        if (!initialized_) {
+            return fault("padRead", pc, "padInit(0) has not completed");
+        }
+        if (!is_port_zero_slot_zero(state)) {
+            return fault("padRead", pc, port_slot_detail(state));
+        }
+        if (!port_open_) {
+            return fault("padRead", pc, "port 0/slot 0 is not open");
+        }
+
+        if (!report_.connected) {
+            set_v0(state, 0u);
+            return handled();
+        }
+
+        const auto data_address = gpr_low32(state, 6u);
+        if (data_address == 0u) {
+            return fault("padRead", pc, "data destination must be non-null");
+        }
+
+        const auto destination = memory.translate(data_address, kPadButtonStatusSize);
+        if (!destination.has_value()) {
+            return fault("padRead", pc,
+                         "complete 32-byte destination must be backed by EE RAM");
+        }
+
+        std::array<std::uint8_t, kPadButtonStatusSize> bytes{};
+        bytes[0] = 0x00u;
+        bytes[1] = 0x79u;
+        bytes[2] = static_cast<std::uint8_t>(report_.buttons_active_low & 0xffu);
+        bytes[3] = static_cast<std::uint8_t>((report_.buttons_active_low >> 8u) & 0xffu);
+        bytes[4] = report_.right_x;
+        bytes[5] = report_.right_y;
+        bytes[6] = report_.left_x;
+        bytes[7] = report_.left_y;
+
+        std::copy(bytes.begin(), bytes.end(), destination->begin());
+        set_v0(state, static_cast<std::uint32_t>(bytes.size()));
+        return handled();
     }
 
     if (bindings_.pad_port_close != 0u && pc == bindings_.pad_port_close) {
