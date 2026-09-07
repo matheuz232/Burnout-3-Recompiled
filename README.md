@@ -4,33 +4,17 @@ Experimental native Windows x86-64 recompilation/port project for **Burnout 3: T
 
 ## Current milestone
 
-`Burnout 3 Recompiled - Test Build 0.1` now has native R5900 startup execution through the first real post-`SetupHeap` 32-bit stack stores.
+`Burnout 3 Recompiled - Test Build 0.1` now models the observed EE `CreateSema` startup boundary in addition to the existing native R5900 startup subset.
 
-The modeled startup path includes:
+The established startup path includes `SetupThread`, `SetupHeap`, `SD`, `DADDU`, `SW`, direct calls and host-side EE syscall handling. The project still does **not** boot the game.
 
-```text
-SetupThread @ 0x001001c8
-SetupHeap   @ 0x001001e4
-JAL         0x00115108
-ADDIU       sp,sp,-16
-SD          ra,0(sp)
-JAL         0x00114ed0
-ADDIU       sp,sp,-0x50
-ADDIU       v0,zero,1
-SD          ra,0x40(sp)
-DADDU       a0,sp,zero
-SW          v0,0x28(sp)
-```
-
-The project still does **not** boot the game.
-
-A lawful out-of-repository diagnostic of the user-supplied ELF shows that real execution continues through additional supported `SW` stores and a `JAL`, then reaches the next current host boundary:
+A lawful out-of-repository diagnostic of the user-supplied ELF now advances through both observed `CreateSema` calls and reaches the next unsupported guest instruction:
 
 ```text
-0x0010be24  SYSCALL   selector 0x40 in v1
+0x00114f08  LD
 ```
 
-That observation is **DIAGNOSTIC_VALIDATED** only. It is not a claim that this expanded path has been executed end-to-end by the external Windows-native ELF harness.
+That observation is **DIAGNOSTIC_VALIDATED** only. It is not a claim that the game boots or that the full path has been executed end-to-end by a physical Windows build.
 
 ## Current runtime/recompiler capabilities
 
@@ -40,85 +24,51 @@ That observation is **DIAGNOSTIC_VALIDATED** only. It is not a claim that this e
 - 32 MiB EE main RAM backing for `0x00000000..0x01ffffff`;
 - typed little-endian 8/16/32/64/128-bit guest-memory access;
 - incremental R5900 decoder/IR/reference-executor/x64 backend for the startup subset;
-- `SQ -> Store128`, `SD -> Store64`, `SW -> Store32`;
+- `SQ -> Store128`, `SD -> Store64`, `SW -> Store32`, `DADDU -> Add64`;
 - native/control-flow support for the currently required `BEQ/BNE`, `BEQL/BNEL`, `J/JAL`, `JR/JALR` and architectural delay slots;
 - cached native blocks with exact guest-word validation and fast replay;
 - boundary-prefix protection so a later transfer cannot execute past an earlier unsupported/faulting instruction;
 - injectable host-syscall boundary outside generated x64;
-- `SetupThread` (`0x3c`) and `SetupHeap` (`0x3d`) HLE;
+- `SetupThread` (`0x3c`), `SetupHeap` (`0x3d`) and `CreateSema` (`0x40`) HLE;
 - exact guest-PC/address/width memory-fault provenance.
 
-## `SW / Store32` contract
+## `CreateSema v0` contract
 
-For `SW rt, imm(rs)`:
+For EE syscall selector `0x40`, `a0.low32` is treated as a pointer to a six-word guest semaphore descriptor. v0:
 
-```text
-base32  = low32(GPR[rs].low64)
-offset  = sign_extend16(imm)
-address = uint32(base32 + offset)
-value   = low32(GPR[rt].low64)
-```
+- requires a 4-byte-aligned, fully readable descriptor;
+- validates `max_count > 0`;
+- validates `0 <= init_count <= max_count`;
+- uses `init_count` as the host-side current count;
+- records deterministic positive IDs `1, 2, 3, ...` without recycling;
+- records `id`, `current_count`, `max_count`, `attr` and `option` in a host registry;
+- ignores guest `count` and `wait_threads` as authoritative host state;
+- returns the ID in `v0.low64` while preserving `v0.high64` and unrelated architectural state;
+- does not mutate the guest descriptor;
+- is transactional on faults: failed creation does not create a registry entry or consume an ID.
 
-Properties:
-
-- address arithmetic wraps modulo 2^32;
-- the address must be **4-byte aligned**;
-- there is no alignment-down;
-- exactly the source low32 is written;
-- source high bits are ignored;
-- CPU register state is not modified by the store;
-- failed stores stop later guest instructions;
-- failure reports the exact guest PC/effective address with width `4`.
-
-The dispatcher wires `write32` in both cold/exact-cache and fast-cache execution contexts. Faulting native code remains cacheable/reusable; changing guest register state from a bad address to a good one does not force recompilation.
-
-## Startup-shaped SW acceptance
-
-Synthetic/native CI crosses the real first-SW PC using only public ISA encodings and synthetic data:
-
-```text
-0x00114ed0  ADDIU sp,sp,-0x50
-0x00114ed4  ADDIU v0,zero,1
-0x00114ed8  SD    ra,0x40(sp)
-0x00114edc  DADDU a0,sp,zero
-0x00114ee0  SW    v0,0x28(sp)
-```
-
-Acceptance state:
-
-```text
-initial sp                0x01fffff0
-initial ra                0x00115118
-sp after frame allocation 0x01ffffa0
-v0.low64                  0x0000000000000001
-a0.low64                  0x0000000001ffffa0
-mem64[0x01ffffe0]         0x0000000000115118
-mem32[0x01ffffc8]         0x00000001
-```
-
-The test also verifies adjacent 32-bit guards remain unchanged and separately proves a cached `SW + J + NOP` block fast-replays without recompilation.
+Scheduler behavior, blocking, wake queues and `DeleteSema`/`SignalSema`/`WaitSema` remain out of scope until they are reached empirically.
 
 ## Validation status
 
-Implementation/test head before this documentation update:
+Implementation head for the completed CreateSema behavior:
 
 ```text
-491385fc6e12f7f7d1189948daafe5e89d0bfbb2
+e7c618ebaa77538d8f9faccc932a0ef15b840ddc
 ```
 
-Windows CI run **#747** (`34073509755`) on Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 passed:
+Windows CI run **#763** (`34080792349`) on Windows Server 2022 / Visual Studio 2022 passed the complete existing suite plus the CreateSema contract. The workflow also passed frame-pacing telemetry, the one-second 120 Hz probe, analyzer-package validation and pacing-probe package validation.
 
-- **65/65 CTest**;
-- `r5900_ir_store32_tests`;
-- `r5900_ir_store32_executor_tests`;
-- `r5900_x64_store32_windows_tests`;
-- `r5900_block_dispatcher_store32_windows_tests`;
-- `r5900_block_dispatcher_sw_startup_windows_tests`;
-- all Store64/Store128 and legacy regression gates;
-- 240-sample frame-pacing telemetry with 8.333 ms mean and no sample above 9/10/12 ms;
-- one-second pacing probe: 120/120 frames at 120 Hz, 8.333 ms mean;
-- analyzer package validation;
-- pacing-probe package validation.
+Representative CreateSema TDD evidence:
+
+```text
+#756 RED  successful CreateSema contract not yet satisfied
+#757 GREEN basic mapped CreateSema handling
+#758 RED  second ID / validation behavior missing
+#760 GREEN deterministic IDs + count validation
+#761 RED  registry/alignment contract missing
+#763 GREEN registry + alignment + attr/option + transactional ID commit
+```
 
 Hosted-runner timing is smoke evidence only; it is not physical-desktop 120 FPS certification.
 
@@ -126,35 +76,21 @@ Hosted-runner timing is smoke evidence only; it is not physical-desktop 120 FPS 
 
 No proprietary Burnout 3 executable, raw instruction words, assets, audio, textures or game data are committed to this repository.
 
-The legal ELF remains outside the repository. Starting from the established state at `0x00114ed0`, the diagnostic confirms the supported model produces:
+Starting from the established post-`SetupHeap` startup state, the lawful local diagnostic reaches two calls to the `CreateSema` wrapper. Both observed descriptors resolve to simple binary semaphore state:
 
 ```text
-sp.low64                0x01ffffa0
-v0.low64                0x0000000000000001
-a0.low64                0x0000000001ffffa0
-mem64[0x01ffffe0]       0x0000000000115118
-mem32[0x01ffffc8]       0x00000001
+first CreateSema  -> id 1, current 1, max 1, attr 0, option 0
+second CreateSema -> id 2, current 1, max 1, attr 0, option 0
 ```
 
-Real execution then continues through more `SW` stores and a direct call. At the next current host boundary:
+The first returned semaphore ID is stored by the guest before the second call. After the second call returns, supported execution reaches:
 
 ```text
-PC          0x0010be24
-instruction SYSCALL
-selector    0x40 in v1
+PC          0x00114f08
+instruction LD
 ```
 
-Relevant derived state at that boundary includes:
-
-```text
-sp.low64  0x01ffffa0
-v0.low64  0x0000000000000001
-a0.low64  0x0000000001ffffa0
-ra.low64  0x0000000000114ef4
-v1.low64  0x0000000000000040
-```
-
-The current host syscall service implements selectors `0x3c` (`SetupThread`) and `0x3d` (`SetupHeap`); selector `0x40` is therefore the next concrete startup/HLE boundary to design. No semantics are assumed yet.
+`LD` is therefore the next concrete R5900 implementation boundary. This is diagnostic evidence from the lawful external ELF, not a boot/playability claim.
 
 ## External startup validation harness
 
@@ -164,7 +100,7 @@ The optional Windows startup dispatcher test can consume a user-supplied ELF loc
 .\build\Release\r5900_block_dispatcher_startup_windows_tests.exe "D:\Games\Burnout3\SLUS_210.50"
 ```
 
-Its historical external mode validates the real BSS-clear path through `SetupThread`. The newer `SetupHeap -> SD -> DADDU -> SW` path is currently covered by synthetic/native CI plus lawful local diagnosis, not by a completed external Windows-native run.
+Its historical external mode validates the earlier startup path. Newer boundaries remain covered by synthetic/native CI plus lawful local diagnosis until the external Windows-native harness is explicitly extended and run through them.
 
 ## Analyze an external PS2 ELF
 
