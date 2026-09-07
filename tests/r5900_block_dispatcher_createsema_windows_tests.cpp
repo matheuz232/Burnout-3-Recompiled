@@ -32,9 +32,8 @@ void validate_external_startup(const char* path) {
               << " syscalls=" << result.syscalls_handled
               << " semaphores=" << service.semaphores().size()
               << " diagnostic=" << result.message << '\n';
-    expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction &&
-               result.next_pc == 0x00114f08u,
-           "external startup must reach the observed post-CreateSema LD boundary");
+    expect(result.next_pc != 0x00114f08u,
+           "external startup must execute past the observed post-CreateSema LD boundary");
     expect(result.syscalls_handled == 4u && service.semaphores().size() == 2u &&
                service.setup_thread_context().has_value() &&
                service.setup_heap_context().has_value(),
@@ -61,7 +60,7 @@ int main(int argc, char** argv) {
                  i_type(0x3fu, 29u, 31u, 0x40u), r_type(29u, 0u, 4u, 0x2du),
                  i_type(0x2bu, 29u, 2u, 4u), i_type(0x2bu, 29u, 2u, 8u),
                  j_type(3u, wrapper), 0u, i_type(0x2bu, 29u, 2u, 0x30u),
-                 0x70000000u}},
+                 i_type(0x37u, 29u, 31u, 0x40u), 0x70000000u}},
         {wrapper, {i_type(9u, 0u, 3u, 0x40u), 0x0000000cu,
                    r_type(31u, 0u, 0u, 8u), 0u}},
     });
@@ -76,23 +75,24 @@ int main(int argc, char** argv) {
         state.gpr[2].high64 = 0xfedcba9876543210ull;
         const auto result = dispatcher.run(entry, state, 8u);
         expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction &&
-                   result.next_pc == entry + 36u,
-               "startup must resume through JR and store ID before the sentinel");
-        expect(result.blocks_executed == 4u && result.instructions_executed == 12u &&
+                   result.next_pc == entry + 40u,
+               "startup must execute LD and stop only at the following sentinel");
+        expect(result.blocks_executed == 4u && result.instructions_executed == 13u &&
                    result.syscalls_handled == 1u,
-               "native instructions and host calls must be accounted separately");
+               "native instructions and host calls must be accounted separately across LD");
         expect(state.gpr[2].low64 == id && state.gpr[2].high64 == 0xfedcba9876543210ull,
                "CreateSema must return a fresh ID and preserve v0 high64");
         expect(memory.read_u32(0x01ffffd0u) == id &&
                    memory.read_u64(0x01ffffe0u) == 0x00115118u,
                "guest SW must store the ID while the saved RA remains intact");
-        expect(state.gpr[31].high64 == 0x123456789abcdef0ull,
-               "native call and return must preserve RA high64");
+        expect(state.gpr[31].low64 == 0x00115118u &&
+                   state.gpr[31].high64 == 0x123456789abcdef0ull,
+               "LD must restore saved RA low64 and preserve RA high64");
         expect(result.cache_misses == (id == 1u ? 4u : 0u) &&
                    result.cache_hits == (id == 1u ? 0u : 4u) &&
                    result.fast_cache_hits == (id == 1u ? 0u : 2u) &&
                    result.recompilations == 0u,
-               "cache replay must execute each syscall afresh");
+               "cache replay must execute each syscall and LD afresh");
     }
     R5900IrExecutionState bad;
     bad.gpr[4].low64 = 0x02000000u;
