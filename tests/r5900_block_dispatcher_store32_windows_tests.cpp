@@ -212,14 +212,19 @@ int main() {
         R5900IrExecutionState state{};
         state.gpr[29].low64 = data_base;
         state.gpr[2].low64 = 0xdeadbeef55667788ull;
+        state.gpr[3].high64 = 0x3333333333333333ull;
         const auto result = dispatcher.run(code_base, state, 1u);
 
-        expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction &&
-                   result.next_pc == code_base + 4u &&
-                   result.instructions_executed == 1u,
-               "SW must commit before a later unsupported LD boundary");
+        expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted &&
+                   result.next_pc == 0x00132030u &&
+                   result.blocks_executed == 1u &&
+                   result.instructions_executed == 4u,
+               "SW+LD+J/NOP must execute as one supported native block");
         expect(memory.read_u32(data_base).value_or(0u) == 0x55667788u,
-               "boundary-prefix SW must store current low32 source");
+               "SW before LD must store current low32 source");
+        expect(state.gpr[3].low64 == 0x0000000055667788ull &&
+                   state.gpr[3].high64 == 0x3333333333333333ull,
+               "LD after SW must observe guest RAM and preserve destination high64");
     }
 
     std::cout << "r5900_block_dispatcher_store32_windows_tests: PASS\n";
