@@ -237,6 +237,25 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
     std::uint32_t current_pc = start_pc;
 
     while (result.blocks_executed < max_blocks) {
+        if (options_.guest_calls != nullptr) {
+            const auto intercepted_pc = current_pc;
+            const auto guest = options_.guest_calls->try_handle(
+                R5900GuestCallRequest{intercepted_pc}, state, memory_);
+
+            if (guest.status == R5900GuestCallStatus::Handled) {
+                ++result.guest_calls_handled;
+                current_pc = static_cast<std::uint32_t>(state.gpr[31].low64);
+                result.next_pc = current_pc;
+                continue;
+            }
+            if (guest.status == R5900GuestCallStatus::Fault) {
+                result.reason = R5900DispatchStopReason::GuestCallFailure;
+                result.next_pc = intercepted_pc;
+                result.message = guest.message;
+                return result;
+            }
+        }
+
         auto fast_cached = cache_.find(current_pc);
         if (fast_cached != cache_.end() &&
             fast_cached->second.fast_replay_eligible &&

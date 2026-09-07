@@ -1,6 +1,7 @@
 #pragma once
 
 #include "analysis/r5900_control_flow.h"
+#include "recompiler/r5900_guest_call_service.h"
 #include "recompiler/r5900_ir_executor.h"
 #include "recompiler/windows/r5900_host_syscall_service.h"
 #include "recompiler/windows/r5900_x64_backend.h"
@@ -21,6 +22,7 @@ enum class R5900DispatchStopReason {
     Trap,
     UnsupportedSyscall,
     HostSyscallFailure,
+    GuestCallFailure,
     InvalidBlockBudget,
     AnalysisFailure,
     LoweringFailure,
@@ -34,6 +36,7 @@ struct R5900DispatchResult {
     std::size_t blocks_executed{};
     std::size_t instructions_executed{};
     std::size_t syscalls_handled{};
+    std::size_t guest_calls_handled{};
     std::size_t cache_hits{};
     std::size_t fast_cache_hits{};
     std::size_t cache_misses{};
@@ -44,6 +47,7 @@ struct R5900DispatchResult {
 struct R5900BlockDispatcherOptions {
     analysis::R5900ControlFlowOptions block_options{};
     IR5900HostSyscallService* host_syscalls{};
+    IR5900GuestCallService* guest_calls{};
 };
 
 class R5900BlockDispatcher {
