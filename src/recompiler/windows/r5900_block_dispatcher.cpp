@@ -40,6 +40,21 @@ bool ps2_memory_write64_adapter(void* user,
     return memory != nullptr && memory->write_u64(address, value);
 }
 
+bool ps2_memory_read64_adapter(void* user,
+                               std::uint32_t address,
+                               std::uint64_t* value) noexcept {
+    if (user == nullptr || value == nullptr) {
+        return false;
+    }
+    const auto loaded =
+        static_cast<runtime::Ps2MemoryMap*>(user)->read_u64(address);
+    if (!loaded.has_value()) {
+        return false;
+    }
+    *value = *loaded;
+    return true;
+}
+
 bool ps2_memory_write128_adapter(void* user,
                                  std::uint32_t address,
                                  std::uint64_t low64,
@@ -52,8 +67,15 @@ bool ps2_memory_write128_adapter(void* user,
 }
 
 std::string format_memory_fault_detail(const R5900IrMemoryFault& fault) {
+    std::string_view access = "memory";
+    if (fault.access == R5900IrMemoryAccessKind::Load) {
+        access = "load";
+    } else if (fault.access == R5900IrMemoryAccessKind::Store) {
+        access = "store";
+    }
+
     std::ostringstream out;
-    out << "store width " << std::dec << fault.width_bytes
+    out << access << " width " << std::dec << fault.width_bytes
         << " bytes at guest address 0x"
         << std::hex << std::setw(8) << std::setfill('0') << fault.address;
     return out.str();
@@ -80,6 +102,7 @@ bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
     case R5900Instruction::Ctc1:
     case R5900Instruction::AddaS:
     case R5900Instruction::Sync:
+    case R5900Instruction::Ld:
     case R5900Instruction::Sw:
     case R5900Instruction::Sd:
     case R5900Instruction::Sq:
@@ -224,6 +247,7 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             execution_context.memory.write32 = &ps2_memory_write32_adapter;
             execution_context.memory.write64 = &ps2_memory_write64_adapter;
             execution_context.memory.write128 = &ps2_memory_write128_adapter;
+            execution_context.memory.read64 = &ps2_memory_read64_adapter;
 
             ++result.cache_hits;
             ++result.fast_cache_hits;
@@ -455,6 +479,7 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
         execution_context.memory.write32 = &ps2_memory_write32_adapter;
         execution_context.memory.write64 = &ps2_memory_write64_adapter;
         execution_context.memory.write128 = &ps2_memory_write128_adapter;
+        execution_context.memory.read64 = &ps2_memory_read64_adapter;
 
         R5900X64ExecutionResult native_execution{};
         std::size_t executed_instruction_count = guest_words.size();
