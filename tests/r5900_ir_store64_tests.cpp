@@ -40,6 +40,26 @@ b3r::recompiler::R5900IrOperand immediate(std::int64_t value) {
     return operand;
 }
 
+constexpr std::uint32_t i_type(std::uint8_t op,
+                               std::uint8_t rs,
+                               std::uint8_t rt,
+                               std::uint16_t imm) {
+    return (static_cast<std::uint32_t>(op) << 26u) |
+           (static_cast<std::uint32_t>(rs) << 21u) |
+           (static_cast<std::uint32_t>(rt) << 16u) |
+           imm;
+}
+
+b3r::recompiler::R5900IrInstruction valid_store32() {
+    using namespace b3r::recompiler;
+    R5900IrInstruction ir{};
+    ir.guest_pc = 0x00114ee0u;
+    ir.guest_raw = i_type(0x2bu, 29u, 2u, 0x0028u);
+    ir.opcode = R5900IrOpcode::Store32;
+    ir.inputs = {gpr(29u), gpr(2u), immediate(0x28)};
+    return ir;
+}
+
 b3r::recompiler::R5900IrInstruction valid_store64() {
     using namespace b3r::recompiler;
     R5900IrInstruction ir{};
@@ -54,6 +74,103 @@ b3r::recompiler::R5900IrInstruction valid_store64() {
 
 int main() {
     using namespace b3r::recompiler;
+
+    // Store32 contract for SW. The encoding is generated from public ISA fields.
+    constexpr std::uint32_t sw_word = i_type(0x2bu, 29u, 2u, 0x0028u);
+    const auto sw_decoded = decode_r5900(sw_word);
+    expect(sw_decoded.instruction == R5900Instruction::Sw,
+           "fixture must decode as SW");
+    expect(sw_decoded.instruction_class == R5900InstructionClass::Store &&
+               sw_decoded.memory_width == R5900MemoryWidth::Word,
+           "SW must decode as a word store");
+
+    const auto sw_lowered = lower_r5900_instruction(sw_decoded, 0x00114ee0u);
+    expect(sw_lowered.ok() && sw_lowered.instructions.size() == 1u,
+           "SW must lower to one IR instruction");
+    const auto& sw_ir = sw_lowered.instructions.front();
+    expect(sw_ir.opcode == R5900IrOpcode::Store32,
+           "SW must lower to Store32");
+    expect(sw_ir.guest_pc == 0x00114ee0u && sw_ir.guest_raw == sw_word,
+           "Store32 must preserve guest provenance");
+    expect(!sw_ir.destination.has_value() &&
+               sw_ir.write_mode == R5900IrGprWriteMode::None,
+           "Store32 must have no destination or write mode");
+    expect(sw_ir.inputs.size() == 3u &&
+               sw_ir.inputs[0].kind == R5900IrOperandKind::Gpr &&
+               sw_ir.inputs[0].gpr_index == 29u &&
+               sw_ir.inputs[1].kind == R5900IrOperandKind::Gpr &&
+               sw_ir.inputs[1].gpr_index == 2u &&
+               sw_ir.inputs[2].kind == R5900IrOperandKind::Immediate &&
+               sw_ir.inputs[2].immediate == 0x28,
+           "Store32 operand lowering mismatch");
+    expect(validate_r5900_ir_instruction(sw_ir, 0u).ok(),
+           "lowered Store32 must validate");
+
+    constexpr std::uint32_t sw_zero_word = i_type(0x2bu, 0u, 0u, 0xfffcu);
+    const auto sw_zero = lower_r5900_instruction(
+        decode_r5900(sw_zero_word), 0x00114ee4u);
+    expect(sw_zero.ok() && sw_zero.instructions.size() == 1u &&
+               sw_zero.instructions.front().opcode == R5900IrOpcode::Store32 &&
+               sw_zero.instructions.front().inputs[0].gpr_index == 0u &&
+               sw_zero.instructions.front().inputs[1].gpr_index == 0u &&
+               sw_zero.instructions.front().inputs[2].immediate == -4,
+           "SW with r0 base/value must remain an observable store");
+
+    {
+        auto malformed = valid_store32();
+        malformed.destination = R5900IrDestination{3u};
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Store32 destination must reject");
+    }
+    {
+        auto malformed = valid_store32();
+        malformed.write_mode = R5900IrGprWriteMode::Low64PreserveUpper64;
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Store32 GPR write mode must reject");
+    }
+    {
+        auto malformed = valid_store32();
+        malformed.inputs[0] = fpr(1u);
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Store32 FPR base must reject");
+    }
+    {
+        auto malformed = valid_store32();
+        malformed.inputs[1] = fpr(2u);
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Store32 FPR value must reject");
+    }
+    {
+        auto malformed = valid_store32();
+        malformed.inputs[2] = gpr(3u);
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Store32 register offset must reject");
+    }
+    for (const auto input_index : {0u, 1u}) {
+        auto malformed = valid_store32();
+        malformed.inputs[input_index] = gpr(32u);
+        expect(validate_r5900_ir_instruction(malformed, 0u).error ==
+                   R5900IrValidationError::InvalidRegister,
+               "Store32 GPR index 32 must reject as invalid register");
+    }
+    for (const auto count : {0u, 1u, 2u, 4u}) {
+        auto malformed = valid_store32();
+        malformed.inputs.resize(count);
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Store32 must require exactly three operands");
+    }
+    for (const auto offset : {-32768, 32767}) {
+        auto valid = valid_store32();
+        valid.inputs[2] = immediate(offset);
+        expect(validate_r5900_ir_instruction(valid, 0u).ok(),
+               "Store32 must accept signed16 endpoint offsets");
+    }
+    for (const auto offset : {-32769, 32768}) {
+        auto malformed = valid_store32();
+        malformed.inputs[2] = immediate(offset);
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Store32 must reject offsets outside signed16");
+    }
 
     constexpr std::uint32_t sd_word =
         (0x3fu << 26u) | (29u << 21u) | (31u << 16u) | 0xfff8u;
