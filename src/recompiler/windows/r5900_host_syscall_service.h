@@ -70,6 +70,7 @@ public:
 private:
     std::optional<R5900SetupThreadContext> setup_thread_context_{};
     std::optional<R5900SetupHeapContext> setup_heap_context_{};
+    std::int32_t next_sema_id_{1};
 };
 
 } // namespace b3r::recompiler
