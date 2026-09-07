@@ -221,6 +221,38 @@ R5900IrExecutionResult execute_ir_sequence(
             break;
         }
 
+        case R5900IrOpcode::Store32: {
+            const auto base = static_cast<std::uint32_t>(
+                state.gpr[ir.inputs[0].gpr_index].low64);
+            const auto offset = static_cast<std::uint32_t>(
+                static_cast<std::int32_t>(ir.inputs[2].immediate));
+            const auto address = static_cast<std::uint32_t>(base + offset);
+            const auto source = static_cast<std::uint32_t>(
+                state.gpr[ir.inputs[1].gpr_index].low64);
+
+            context.current_memory_guest_pc = ir.guest_pc;
+            const bool aligned = (address & 0x3u) == 0u;
+            const bool available = context.memory.user != nullptr &&
+                                   context.memory.write32 != nullptr;
+            const bool written = aligned && available &&
+                context.memory.write32(context.memory.user, address, source);
+            if (!written) {
+                context.memory_fault = {
+                    true,
+                    R5900IrMemoryAccessKind::Store,
+                    ir.guest_pc,
+                    address,
+                    4u,
+                };
+                normalize_zero(state);
+                return {R5900IrExecutionError::MemoryAccessFailure,
+                        aligned
+                            ? "R5900 Store32 guest-memory write failed"
+                            : "R5900 Store32 effective address is not 4-byte aligned"};
+            }
+            break;
+        }
+
         case R5900IrOpcode::Store64: {
             const auto base = static_cast<std::uint32_t>(
                 state.gpr[ir.inputs[0].gpr_index].low64);
