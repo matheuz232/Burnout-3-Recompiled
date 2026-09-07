@@ -17,6 +17,7 @@ using Ps2MemoryValue128 = std::array<std::uint64_t, 2>;
 enum class Ps2MemoryMapBuildError {
     None = 0,
     AddressOverflow,
+    OutsideSupportedMainRam,
     OverlappingRegions,
     SegmentPayloadMismatch,
     AllocationFailed,
@@ -56,13 +57,8 @@ public:
                                   const Ps2MemoryValue128& value) noexcept;
 
 private:
-    struct BackingRegion {
-        Ps2MemoryRegion metadata{};
-        std::vector<std::uint8_t> bytes{};
-    };
-
     std::vector<Ps2MemoryRegion> regions_{};
-    std::vector<BackingRegion> backing_regions_{};
+    std::vector<std::uint8_t> main_ram_{};
 };
 
 struct Ps2MemoryMapBuildResult {

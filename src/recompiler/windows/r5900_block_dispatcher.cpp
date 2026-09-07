@@ -26,6 +26,20 @@ std::string format_stage_error(std::string_view stage,
     return out.str();
 }
 
+bool ps2_memory_write32_adapter(void* user,
+                                std::uint32_t address,
+                                std::uint32_t value) noexcept {
+    auto* memory = static_cast<runtime::Ps2MemoryMap*>(user);
+    return memory != nullptr && memory->write_u32(address, value);
+}
+
+bool ps2_memory_write64_adapter(void* user,
+                                std::uint32_t address,
+                                std::uint64_t value) noexcept {
+    auto* memory = static_cast<runtime::Ps2MemoryMap*>(user);
+    return memory != nullptr && memory->write_u64(address, value);
+}
+
 bool ps2_memory_write128_adapter(void* user,
                                  std::uint32_t address,
                                  std::uint64_t low64,
@@ -49,8 +63,10 @@ bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
     switch (instruction) {
     case R5900Instruction::Nop:
     case R5900Instruction::Addu:
+    case R5900Instruction::Daddu:
     case R5900Instruction::Addiu:
     case R5900Instruction::Ori:
+    case R5900Instruction::Or:
     case R5900Instruction::Andi:
     case R5900Instruction::And:
     case R5900Instruction::Lui:
@@ -64,6 +80,8 @@ bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
     case R5900Instruction::Ctc1:
     case R5900Instruction::AddaS:
     case R5900Instruction::Sync:
+    case R5900Instruction::Sw:
+    case R5900Instruction::Sd:
     case R5900Instruction::Sq:
         return true;
     default:
@@ -121,6 +139,51 @@ bool cached_guest_words_match(
     return true;
 }
 
+enum class HostSyscallDisposition {
+    Resume,
+    Stop,
+};
+
+HostSyscallDisposition handle_host_syscall_boundary(
+    IR5900HostSyscallService* service,
+    runtime::Ps2MemoryMap& memory,
+    const analysis::R5900InstructionSite& site,
+    R5900IrExecutionState& state,
+    R5900DispatchResult& result,
+    std::uint32_t& current_pc) {
+    if (service == nullptr) {
+        result.reason = R5900DispatchStopReason::Trap;
+        result.next_pc = site.pc;
+        return HostSyscallDisposition::Stop;
+    }
+
+    const auto host = service->handle(
+        R5900HostSyscallRequest{site.pc, site.decoded.raw}, state, memory);
+
+    switch (host.status) {
+    case R5900HostSyscallStatus::Handled:
+        ++result.syscalls_handled;
+        current_pc = site.pc + 4u;
+        result.next_pc = current_pc;
+        return HostSyscallDisposition::Resume;
+    case R5900HostSyscallStatus::Unsupported:
+        result.reason = R5900DispatchStopReason::UnsupportedSyscall;
+        result.next_pc = site.pc;
+        result.message = host.message;
+        return HostSyscallDisposition::Stop;
+    case R5900HostSyscallStatus::Fault:
+        result.reason = R5900DispatchStopReason::HostSyscallFailure;
+        result.next_pc = site.pc;
+        result.message = host.message;
+        return HostSyscallDisposition::Stop;
+    }
+
+    result.reason = R5900DispatchStopReason::HostSyscallFailure;
+    result.next_pc = site.pc;
+    result.message = "host syscall service returned invalid status";
+    return HostSyscallDisposition::Stop;
+}
+
 } // namespace
 
 R5900BlockDispatcher::R5900BlockDispatcher(runtime::Ps2MemoryMap& memory,
@@ -158,6 +221,8 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             R5900IrExecutionContext execution_context{};
             execution_context.state = &state;
             execution_context.memory.user = &memory_;
+            execution_context.memory.write32 = &ps2_memory_write32_adapter;
+            execution_context.memory.write64 = &ps2_memory_write64_adapter;
             execution_context.memory.write128 = &ps2_memory_write128_adapter;
 
             ++result.cache_hits;
@@ -246,7 +311,7 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             block.end_kind == analysis::R5900BlockEndKind::IndirectCall &&
             !block.instructions.empty() &&
             block.instructions.back().decoded.instruction == R5900Instruction::Jalr;
-        const bool has_supported_transfer =
+        bool has_supported_transfer =
             has_supported_beq || has_supported_bne || has_supported_beql ||
             has_supported_bnel || has_supported_j || has_supported_jal ||
             has_supported_jr || has_supported_jalr;
@@ -259,6 +324,7 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
 
         std::optional<R5900DispatchStopReason> boundary_reason{};
         std::uint32_t boundary_pc = current_pc;
+        const analysis::R5900InstructionSite* syscall_site = nullptr;
 
         for (std::size_t index = 0; index < block.instructions.size(); ++index) {
             const auto& site = block.instructions[index];
@@ -273,8 +339,12 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             }
 
             if (site.decoded.instruction_class == R5900InstructionClass::System) {
-                boundary_reason = R5900DispatchStopReason::Trap;
                 boundary_pc = site.pc;
+                if (site.decoded.instruction == R5900Instruction::Syscall) {
+                    syscall_site = &site;
+                } else {
+                    boundary_reason = R5900DispatchStopReason::Trap;
+                }
                 break;
             }
 
@@ -285,6 +355,25 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             }
 
             body_sites.push_back(site);
+        }
+
+        if (boundary_reason.has_value() || syscall_site != nullptr) {
+            has_supported_transfer = false;
+            transfer_site = nullptr;
+        }
+
+        if (body_sites.empty() && !has_supported_transfer && syscall_site != nullptr) {
+            const auto disposition = handle_host_syscall_boundary(
+                options_.host_syscalls,
+                memory_,
+                *syscall_site,
+                state,
+                result,
+                current_pc);
+            if (disposition == HostSyscallDisposition::Resume) {
+                continue;
+            }
+            return result;
         }
 
         if (body_sites.empty() && !has_supported_transfer) {
@@ -363,6 +452,8 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
         R5900IrExecutionContext execution_context{};
         execution_context.state = &state;
         execution_context.memory.user = &memory_;
+        execution_context.memory.write32 = &ps2_memory_write32_adapter;
+        execution_context.memory.write64 = &ps2_memory_write64_adapter;
         execution_context.memory.write128 = &ps2_memory_write128_adapter;
 
         R5900X64ExecutionResult native_execution{};
@@ -569,6 +660,20 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
         result.instructions_executed += executed_instruction_count;
         current_pc = native_next_pc;
         result.next_pc = native_next_pc;
+
+        if (syscall_site != nullptr) {
+            const auto disposition = handle_host_syscall_boundary(
+                options_.host_syscalls,
+                memory_,
+                *syscall_site,
+                state,
+                result,
+                current_pc);
+            if (disposition == HostSyscallDisposition::Resume) {
+                continue;
+            }
+            return result;
+        }
 
         if (boundary_reason.has_value()) {
             result.reason = *boundary_reason;

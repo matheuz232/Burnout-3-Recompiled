@@ -90,6 +90,28 @@ int main() {
     }
 
     {
+        const auto decoded = decode_r5900(r_type(29u, 0u, 4u, 0u, 0x2du));
+        expect(decoded.instruction == R5900Instruction::Daddu,
+               "SPECIAL/DADDU must decode");
+        expect(decoded.instruction_class == R5900InstructionClass::Alu,
+               "DADDU must classify as ALU");
+        expect(decoded.rs == 29u && decoded.rt == 0u && decoded.rd == 4u,
+               "DADDU register fields must decode");
+        expect(!decoded.has_delay_slot && !decoded.link &&
+                   decoded.memory_width == R5900MemoryWidth::None,
+               "DADDU must not expose transfer or memory semantics");
+        expect(std::string_view(r5900_instruction_name(decoded.instruction)) == "DADDU",
+               "DADDU mnemonic must be stable");
+    }
+
+    {
+        const auto decoded = decode_r5900(r_type(7u, 11u, 13u, 0u, 0x2du));
+        expect(decoded.instruction == R5900Instruction::Daddu &&
+                   decoded.rs == 7u && decoded.rt == 11u && decoded.rd == 13u,
+               "arbitrary DADDU fields must remain intact");
+    }
+
+    {
         const auto decoded = decode_r5900(i_type(0x09, 29, 29, 0xFFF0)); // addiu sp,sp,-16
         expect(decoded.instruction == R5900Instruction::Addiu, "ADDIU must decode");
         expect(decoded.signed_immediate() == -16, "signed immediate must sign extend");

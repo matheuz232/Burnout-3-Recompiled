@@ -53,6 +53,18 @@ void put_program_header(Bytes& bytes,
     put_u32(bytes, offset + 28u, 0x1000u);
 }
 
+constexpr std::uint32_t r_type(std::uint8_t rs,
+                               std::uint8_t rt,
+                               std::uint8_t rd,
+                               std::uint8_t sa,
+                               std::uint8_t funct) {
+    return (static_cast<std::uint32_t>(rs) << 21u) |
+           (static_cast<std::uint32_t>(rt) << 16u) |
+           (static_cast<std::uint32_t>(rd) << 11u) |
+           (static_cast<std::uint32_t>(sa) << 6u) |
+           funct;
+}
+
 constexpr std::uint32_t i_type(std::uint8_t op,
                                std::uint8_t rs,
                                std::uint8_t rt,
@@ -77,15 +89,23 @@ b3r::runtime::Ps2MemoryMap make_memory(std::uint32_t code_base,
     constexpr std::uint32_t kDataSize = 0x80u;
 
     const std::vector<std::uint32_t> words = {
-        i_type(0x04u, 2u, 3u, 7u),       // BEQ r2,r3,exit
+        i_type(0x04u, 2u, 3u, 5u),       // BEQ r2,r3,post_loop
         0u,                               // delay
         i_type(0x1fu, 2u, 0u, 0u),       // SQ r0,0(r2)
         i_type(0x09u, 2u, 2u, 0x10u),    // ADDIU r2,r2,16
         j_type(0x02u, code_base),         // J loop
         0u,                               // delay
-        0u,
-        0u,
-        0x0000000cu,                      // SYSCALL
+        r_type(4u, 5u, 9u, 0u, 0x25u),   // OR r9,r4,r5
+        i_type(0x09u, 0u, 3u, 0x003cu),  // ADDIU v1,r0,0x3c (SetupThread)
+        0x0000000cu,                      // SetupThread SYSCALL
+        i_type(0x09u, 2u, 29u, 0x0000u), // guest move sp,v0
+        i_type(0x0fu, 0u, 4u, 0x01ecu),  // LUI a0,0x01ec
+        i_type(0x0du, 4u, 4u, 0xea00u),  // ORI a0,a0,0xea00
+        i_type(0x09u, 0u, 5u, 0xffffu),  // ADDIU a1,r0,-1
+        i_type(0x09u, 0u, 3u, 0x003du),  // ADDIU v1,r0,0x3d (SetupHeap)
+        0x0000000cu,                      // SetupHeap SYSCALL
+        i_type(0x0eu, 1u, 1u, 1u),       // XORI: deliberate unsupported boundary
+        0x0000000cu,                      // analyzer guard; must never be handled
     };
     const auto code_size = static_cast<std::uint32_t>(words.size() * 4u);
 
@@ -133,33 +153,49 @@ int main() {
 
     constexpr std::uint32_t kCodeBase = 0x00100000u;
     constexpr std::uint32_t kDataBase = 0x00200000u;
+    constexpr std::uint32_t kDataSize = 0x80u;
     constexpr std::uint32_t kClearBegin = kDataBase + 0x10u;
     constexpr std::uint32_t kClearEnd = kDataBase + 0x50u;
-    constexpr std::uint32_t kSyscallPc = kCodeBase + 0x20u;
+    constexpr std::uint32_t kSetupThreadSyscallPc = kCodeBase + 0x20u;
+    constexpr std::uint32_t kSetupHeapSyscallPc = kCodeBase + 0x38u;
+    constexpr std::uint32_t kPostSetupHeapPc = kSetupHeapSyscallPc + 4u;
 
     auto memory = make_memory(kCodeBase, kDataBase);
     R5900BlockDispatcher dispatcher(memory);
     R5900IrExecutionState state{};
     state.gpr[2].low64 = kClearBegin;
     state.gpr[3].low64 = kClearEnd;
+    state.gpr[4] = {0x004e8670u, 0x1111111111111111ull};
+    state.gpr[5] = {0x01ff0000u, 0x2222222222222222ull};
+    state.gpr[6] = {0x00010000u, 0x3333333333333333ull};
+    state.gpr[7] = {0x01d9ce80u, 0x4444444444444444ull};
+    state.gpr[8] = {0x00100220u, 0x5555555555555555ull};
+    state.gpr[9] = {0u, 0xaaaaaaaaaaaaaaaaull};
 
     const auto result = dispatcher.run(kCodeBase, state, 16u);
 
     expect(result.reason == R5900DispatchStopReason::Trap,
-           "BSS-clear loop must stop at the syscall boundary");
-    expect(result.next_pc == kSyscallPc,
-           "BSS-clear loop must reach the exact syscall PC");
-    expect(result.blocks_executed == 9u && result.instructions_executed == 26u,
-           "four-quadword loop must preserve selected-word accounting");
-    expect(result.cache_misses == 2u && result.cache_hits == 7u &&
+           "null host service must stop at SetupThread syscall boundary");
+    expect(result.next_pc == kSetupThreadSyscallPc,
+           "null host service must reach the exact SetupThread syscall PC");
+    expect(result.blocks_executed == 10u && result.instructions_executed == 28u,
+           "null-service startup prefix must preserve historical native accounting");
+    expect(result.syscalls_handled == 0u,
+           "null host service must not count the trapped syscall as handled");
+    expect(result.cache_misses == 3u && result.cache_hits == 7u &&
                result.recompilations == 0u,
-           "BSS-clear loop must compile two blocks and reuse them seven times");
+           "null-service startup prefix must preserve cache accounting");
     expect(result.fast_cache_hits == 7u,
-           "all repeated loop transfers must bypass analyzer/lowering through fast cache replay");
-    expect(dispatcher.cache_size() == 2u,
-           "BSS-clear loop must retain exactly two native cache entries");
+           "all repeated loop transfers must use fast cache replay");
+    expect(dispatcher.cache_size() == 3u,
+           "null-service startup prefix must retain three native cache entries");
     expect(state.gpr[2].low64 == kClearEnd,
-           "BSS-clear pointer must finish exactly at end address");
+           "BSS pointer must finish at end before trapped SetupThread");
+    expect(state.gpr[3].low64 == 0x3cu,
+           "post-loop setup must select SetupThread");
+    expect(state.gpr[9].low64 == 0x01ff8670u &&
+               state.gpr[9].high64 == 0xaaaaaaaaaaaaaaaaull,
+           "post-loop OR must commit without corrupting SetupThread ABI registers");
 
     expect(memory.read_u8(kClearBegin - 1u) == 0xa5u,
            "BSS-clear must preserve byte immediately before range");
@@ -169,6 +205,78 @@ int main() {
     }
     expect(memory.read_u8(kClearEnd) == 0xa5u,
            "BSS-clear must preserve byte immediately after range");
+
+    auto handled_memory = make_memory(kCodeBase, kDataBase);
+    R5900HostSyscallService host{};
+    R5900BlockDispatcherOptions options{};
+    options.host_syscalls = &host;
+    R5900BlockDispatcher handled_dispatcher(handled_memory, options);
+
+    R5900IrExecutionState handled_state{};
+    handled_state.gpr[2].low64 = kClearBegin;
+    handled_state.gpr[3].low64 = kClearEnd;
+    handled_state.gpr[4] = {0x004e8670u, 0x1111111111111111ull};
+    handled_state.gpr[5] = {0x01ff0000u, 0x2222222222222222ull};
+    handled_state.gpr[6] = {0x00010000u, 0x3333333333333333ull};
+    handled_state.gpr[7] = {0x01d9ce80u, 0x4444444444444444ull};
+    handled_state.gpr[8] = {0x00100220u, 0x5555555555555555ull};
+    handled_state.gpr[9] = {0u, 0xaaaaaaaaaaaaaaaaull};
+    handled_state.gpr[29].high64 = 0x2929292929292929ull;
+
+    const auto handled = handled_dispatcher.run(kCodeBase, handled_state, 16u);
+
+    expect(handled.reason == R5900DispatchStopReason::UnsupportedInstruction,
+           "production startup path must cross SetupThread and SetupHeap to XORI boundary");
+    expect(handled.next_pc == kPostSetupHeapPc,
+           "production SetupHeap continuation must land at syscall PC+4");
+    expect(handled.blocks_executed == 11u && handled.instructions_executed == 33u,
+           "two-syscall startup path must account for one additional native setup block");
+    expect(handled.syscalls_handled == 2u,
+           "exactly SetupThread and SetupHeap must be handled");
+    expect(handled.cache_misses == 4u && handled.cache_hits == 7u &&
+               handled.fast_cache_hits == 7u && handled.recompilations == 0u,
+           "SetupHeap startup continuation must add one stable native cache miss only");
+    expect(handled_dispatcher.cache_size() == 4u,
+           "two handled syscalls must remain outside the four native cache entries");
+    expect(handled_state.gpr[2].low64 == 0x02000000u,
+           "SetupHeap must preserve SetupThread v0 stack-top result");
+    expect(handled_state.gpr[29].low64 == 0x02000000u &&
+               handled_state.gpr[29].high64 == 0x2929292929292929ull,
+           "guest startup instruction must copy SetupThread v0 into sp");
+    expect(handled_state.gpr[3].low64 == 0x3du,
+           "guest startup must select SetupHeap before second syscall");
+    expect(handled_state.gpr[4].low64 == 0x01ecea00u &&
+               static_cast<std::uint32_t>(handled_state.gpr[5].low64) == 0xffffffffu,
+           "guest startup must prepare Burnout SetupHeap arguments");
+    expect(handled_state.gpr[9].low64 == 0x01ff8670u &&
+               handled_state.gpr[9].high64 == 0xaaaaaaaaaaaaaaaaull,
+           "post-loop OR state must survive both host syscalls");
+
+    expect(host.setup_thread_context().has_value(),
+           "production SetupThread must record a context");
+    expect(host.setup_thread_context()->gp == 0x004e8670u &&
+               host.setup_thread_context()->stack_base == 0x01ff0000u &&
+               host.setup_thread_context()->stack_size == 0x00010000u &&
+               host.setup_thread_context()->stack_top == 0x02000000u &&
+               host.setup_thread_context()->args == 0x01d9ce80u &&
+               host.setup_thread_context()->root_func == 0x00100220u,
+           "startup-shaped SetupThread context mismatch");
+    expect(host.setup_heap_context().has_value(),
+           "production SetupHeap must record a context");
+    expect(host.setup_heap_context()->heap_start == 0x01ecea00u &&
+               host.setup_heap_context()->requested_heap_size == 0xffffffffu &&
+               host.setup_heap_context()->heap_end == 0x01ff0000u,
+           "startup-shaped SetupHeap context mismatch");
+
+    for (std::uint32_t offset = 0u; offset < kDataSize; ++offset) {
+        const auto address = kDataBase + offset;
+        const auto trapped_byte = memory.read_u8(address);
+        const auto handled_byte = handled_memory.read_u8(address);
+        expect(trapped_byte.has_value() && handled_byte.has_value(),
+               "startup-shaped data region must stay mapped in both runs");
+        expect(*handled_byte == *trapped_byte,
+               "SetupThread/SetupHeap HLE must not change guest memory beyond native BSS effects");
+    }
 
     std::cout << "r5900_block_dispatcher_bss_clear_windows_tests: PASS\n";
     return EXIT_SUCCESS;

@@ -66,6 +66,7 @@ void decode_special(R5900DecodedInstruction& decoded) noexcept {
     case 0x27: set_instruction(decoded, R5900Instruction::Nor, R5900InstructionClass::Alu); break;
     case 0x2A: set_instruction(decoded, R5900Instruction::Slt, R5900InstructionClass::Alu); break;
     case 0x2B: set_instruction(decoded, R5900Instruction::Sltu, R5900InstructionClass::Alu); break;
+    case 0x2D: set_instruction(decoded, R5900Instruction::Daddu, R5900InstructionClass::Alu); break;
     default: break;
     }
 }
@@ -247,6 +248,7 @@ const char* r5900_instruction_name(R5900Instruction instruction) noexcept {
     case R5900Instruction::Divu: return "DIVU";
     case R5900Instruction::Add: return "ADD";
     case R5900Instruction::Addu: return "ADDU";
+    case R5900Instruction::Daddu: return "DADDU";
     case R5900Instruction::Sub: return "SUB";
     case R5900Instruction::Subu: return "SUBU";
     case R5900Instruction::And: return "AND";

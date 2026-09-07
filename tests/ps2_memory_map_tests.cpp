@@ -1,7 +1,9 @@
 #include "recompiler/ps2_elf.h"
 #include "runtime/ps2_memory_map.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <cstdlib>
 #include <iostream>
 #include <utility>
@@ -111,8 +113,31 @@ int main() {
         expect((*view)[0] == 0x11u && (*view)[3] == 0x44u, "ELF file bytes must be copied");
         expect((*view)[4] == 0u && (*view)[7] == 0u, "BSS tail must be zero-filled");
 
-        expect(!built.memory->translate(0x000FFFFFu, 1u).has_value(), "unmapped address must reject");
-        expect(!built.memory->translate(0x00100007u, 2u).has_value(), "cross-region access must reject");
+        const auto before_segment = built.memory->translate(0x000fffffu, 1u);
+        expect(before_segment.has_value() && (*before_segment)[0] == 0u,
+               "EE RAM outside PT_LOAD must translate and begin zero-filled");
+        const auto across_segment = built.memory->translate(0x00100007u, 2u);
+        expect(across_segment.has_value() && (*across_segment)[0] == 0u &&
+                   (*across_segment)[1] == 0u,
+               "physical RAM must cross PT_LOAD metadata edges");
+        const auto& memory = *built.memory;
+        const auto ram = memory.translate(0u, 0x02000000u);
+        expect(ram.has_value(), "all 32 MiB of EE main RAM must be backed");
+        const auto zero = [](std::uint8_t byte) { return byte == 0u; };
+        expect(std::all_of(ram->begin(), ram->begin() + 0x00100000u, zero) &&
+                   std::all_of(ram->begin() + 0x00100004u, ram->end(), zero),
+               "all RAM apart from ELF file bytes must begin zero-filled");
+        expect(memory.read_u64(0x01fffff0u).value_or(1u) == 0u,
+               "uninitialized stack RAM must be zero");
+        expect(built.memory->write_u64(0x01fffff0u, 0x00000000001001f0ull),
+               "stack write_u64 outside PT_LOAD must succeed");
+        expect(memory.read_u64(0x01fffff0u).value_or(0u) == 0x00000000001001f0ull,
+               "stack read_u64 must round-trip the return address");
+        expect(!memory.translate(0x01ffffffu, 2u).has_value() &&
+                   !built.memory->translate(0x02000000u, 1u).has_value(),
+               "access crossing EE main RAM end must reject");
+        expect(!memory.translate(1u, std::numeric_limits<std::size_t>::max()).has_value(),
+               "oversized translation must reject without arithmetic wrap");
         expect(!built.memory->translate(0xFFFFFFFFu, 2u).has_value(), "translation arithmetic overflow must reject");
     }
 
@@ -125,6 +150,23 @@ int main() {
         expect(!built.ok(), "overlapping guest regions must reject");
         expect(built.error == Ps2MemoryMapBuildError::OverlappingRegions,
                "overlap must return explicit error");
+    }
+
+    for (const auto address : {0x03000000u, 0x01fffff0u}) {
+        const auto elf = parse_or_fail(make_elf({
+            {0x100, address, 4u, 0x20u, 5u, {1, 2, 3, 4}},
+        }));
+        const auto built = Ps2MemoryMap::from_elf(elf);
+        expect(!built.ok() && !built.memory.has_value(),
+               "PT_LOAD outside or crossing EE main RAM must reject atomically");
+        expect(built.error == Ps2MemoryMapBuildError::OutsideSupportedMainRam,
+               "out-of-RAM PT_LOAD must use explicit build error");
+    }
+
+    {
+        Ps2MemoryMap empty;
+        expect(!empty.translate(0u, 1u).has_value() && !empty.read_u64(0u).has_value(),
+               "unbuilt memory map must not expose unavailable backing");
     }
 
     {
@@ -182,10 +224,10 @@ int main() {
         expect((*wide_bytes)[16] == 0x10u && (*wide_bytes)[23] == 0xfeu,
                "u128 high64 must follow low64 in little-endian order");
 
-        expect(!memory.read_u32(0x0030001Eu).has_value(), "cross-boundary scalar read must reject");
-        expect(!memory.write_u32(0x0030001Eu, 1u), "cross-boundary scalar write must reject");
-        expect(!memory.read_u64(0x0030001Cu).has_value(), "cross-boundary u64 read must reject");
-        expect(!memory.write_u64(0x0030001Cu, 1u), "cross-boundary u64 write must reject");
+        expect(!memory.read_u32(0x01fffffeu).has_value(), "cross-boundary scalar read must reject");
+        expect(!memory.write_u32(0x01fffffeu, 1u), "cross-boundary scalar write must reject");
+        expect(!memory.read_u64(0x01fffffcu).has_value(), "cross-boundary u64 read must reject");
+        expect(!memory.write_u64(0x01fffffcu, 1u), "cross-boundary u64 write must reject");
     }
 
     {
@@ -196,7 +238,7 @@ int main() {
         expect(built.ok(), "atomicity fixture must map");
         auto& memory = *built.memory;
 
-        auto tail = memory.translate(0x00400010u, 8u);
+        auto tail = memory.translate(0x01fffff8u, 8u);
         expect(tail.has_value(), "atomicity fixture tail must translate");
         for (std::size_t index = 0; index < tail->size(); ++index) {
             (*tail)[index] = static_cast<std::uint8_t>(0xa0u + index);
@@ -207,10 +249,10 @@ int main() {
             0x1112131415161718ull,
             0x2122232425262728ull,
         };
-        expect(!memory.write_u128(0x00400010u, replacement),
-               "write_u128 must reject a partially mapped 16-byte span");
+        expect(!memory.write_u128(0x01fffff8u, replacement),
+               "write_u128 must reject a span crossing physical RAM end");
 
-        const auto after = memory.translate(0x00400010u, 8u);
+        const auto after = memory.translate(0x01fffff8u, 8u);
         expect(after.has_value(), "atomicity fixture tail must remain mapped");
         expect(std::vector<std::uint8_t>(after->begin(), after->end()) == before,
                "failed write_u128 must leave every mapped byte unchanged");

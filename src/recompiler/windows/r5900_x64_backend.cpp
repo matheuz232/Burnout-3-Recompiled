@@ -98,6 +98,50 @@ R5900X64CompileError map_validation_error(R5900IrValidationError error) {
     }
 }
 
+bool r5900_native_store32(R5900IrExecutionContext* context,
+                          std::uint32_t address,
+                          std::uint32_t value) noexcept {
+    if (context == nullptr) {
+        return false;
+    }
+    if ((address & 0x3u) != 0u ||
+        context->memory.user == nullptr ||
+        context->memory.write32 == nullptr ||
+        !context->memory.write32(context->memory.user, address, value)) {
+        context->memory_fault = {
+            true,
+            R5900IrMemoryAccessKind::Store,
+            context->current_memory_guest_pc,
+            address,
+            4u,
+        };
+        return false;
+    }
+    return true;
+}
+
+bool r5900_native_store64(R5900IrExecutionContext* context,
+                          std::uint32_t address,
+                          std::uint64_t value) noexcept {
+    if (context == nullptr) {
+        return false;
+    }
+    if ((address & 0x7u) != 0u ||
+        context->memory.user == nullptr ||
+        context->memory.write64 == nullptr ||
+        !context->memory.write64(context->memory.user, address, value)) {
+        context->memory_fault = {
+            true,
+            R5900IrMemoryAccessKind::Store,
+            context->current_memory_guest_pc,
+            address,
+            8u,
+        };
+        return false;
+    }
+    return true;
+}
+
 bool r5900_native_store128(R5900IrExecutionContext* context,
                            std::uint32_t address,
                            std::uint64_t low64,
@@ -318,6 +362,19 @@ void emit_add_word_sign_extend(std::vector<std::uint8_t>& bytes,
     }
 }
 
+void emit_add64(std::vector<std::uint8_t>& bytes,
+                const R5900IrInstruction& instruction) {
+    emit_operand64_to_rax(bytes, instruction.inputs[0]);
+    emit_operand64_to_rdx(bytes, instruction.inputs[1]);
+    bytes.push_back(0x48u);
+    bytes.push_back(0x01u);
+    bytes.push_back(0xd0u);
+    if (instruction.destination->index != 0u) {
+        emit_store_rax_to_state(bytes,
+                                gpr_low64_offset(instruction.destination->index));
+    }
+}
+
 void emit_or64(std::vector<std::uint8_t>& bytes,
                const R5900IrInstruction& instruction) {
     emit_operand64_to_rax(bytes, instruction.inputs[0]);
@@ -495,6 +552,117 @@ void emit_add_f32_to_accumulator(std::vector<std::uint8_t>& bytes,
     emit_store_xmm0_f32(bytes, fp_acc_offset());
 }
 
+void emit_store32(std::vector<std::uint8_t>& bytes,
+                  const R5900IrInstruction& instruction) {
+    emit_reload_state_and_context(bytes);
+
+    // mov rax, [rsp+0x28] ; context
+    bytes.insert(bytes.end(), {0x48u, 0x8bu, 0x44u, 0x24u, 0x28u});
+    // mov dword ptr [rax+current_memory_guest_pc], guest_pc
+    bytes.push_back(0xc7u);
+    bytes.push_back(0x80u);
+    emit_u32(bytes, current_memory_guest_pc_offset());
+    emit_u32(bytes, instruction.guest_pc);
+
+    // EDX = low32(base) + signed16(offset), modulo 32 bits. No alignment mask.
+    emit_load_eax_from_state(bytes,
+                             gpr_low64_offset(instruction.inputs[0].gpr_index));
+    bytes.push_back(0x05u); // add eax, imm32
+    emit_u32(bytes, static_cast<std::uint32_t>(
+                        static_cast<std::int32_t>(instruction.inputs[2].immediate)));
+    bytes.insert(bytes.end(), {0x89u, 0xc2u}); // mov edx, eax
+
+    // R8D = source low32; every wider source bit is ignored.
+    bytes.insert(bytes.end(), {0x44u, 0x8bu, 0x81u});
+    emit_u32(bytes, gpr_low64_offset(instruction.inputs[1].gpr_index));
+
+    // RCX = context. EDX/R8D already carry the remaining Win64 arguments.
+    bytes.insert(bytes.end(), {0x48u, 0x8bu, 0x4cu, 0x24u, 0x28u});
+    emit_mov_rax_imm64(
+        bytes,
+        static_cast<std::uint64_t>(
+            reinterpret_cast<std::uintptr_t>(&r5900_native_store32)));
+    bytes.insert(bytes.end(), {0xffu, 0xd0u}); // call rax
+    bytes.insert(bytes.end(), {0x84u, 0xc0u}); // test al, al
+
+    bytes.insert(bytes.end(), {0x0fu, 0x85u}); // jnz success
+    const auto success_rel32_offset = bytes.size();
+    emit_u32(bytes, 0u);
+
+    emit_xor_eax_eax(bytes);
+    emit_helper_frame_epilogue(bytes);
+    bytes.push_back(0xc3u);
+
+    const auto success_offset = bytes.size();
+    const auto branch_end = success_rel32_offset + sizeof(std::uint32_t);
+    const auto displacement =
+        static_cast<std::int64_t>(success_offset) -
+        static_cast<std::int64_t>(branch_end);
+    patch_u32(bytes,
+              success_rel32_offset,
+              static_cast<std::uint32_t>(
+                  static_cast<std::int32_t>(displacement)));
+
+    emit_reload_state_and_context(bytes);
+}
+
+void emit_store64(std::vector<std::uint8_t>& bytes,
+                   const R5900IrInstruction& instruction) {
+    // Restore state into RCX in case an earlier helper call clobbered volatile
+    // registers. The saved pointers live outside the Win64 shadow area.
+    emit_reload_state_and_context(bytes);
+
+    // mov rax, [rsp+0x28] ; context
+    bytes.insert(bytes.end(), {0x48u, 0x8bu, 0x44u, 0x24u, 0x28u});
+    // mov dword ptr [rax+current_memory_guest_pc], guest_pc
+    bytes.push_back(0xc7u);
+    bytes.push_back(0x80u);
+    emit_u32(bytes, current_memory_guest_pc_offset());
+    emit_u32(bytes, instruction.guest_pc);
+
+    // EDX = low32(base) + signed16(offset), modulo 32 bits. No alignment mask.
+    emit_load_eax_from_state(bytes,
+                             gpr_low64_offset(instruction.inputs[0].gpr_index));
+    bytes.push_back(0x05u); // add eax, imm32
+    emit_u32(bytes, static_cast<std::uint32_t>(
+                        static_cast<std::int32_t>(instruction.inputs[2].immediate)));
+    bytes.insert(bytes.end(), {0x89u, 0xc2u}); // mov edx, eax
+
+    // R8 = source low64; source high64 is ignored.
+    bytes.insert(bytes.end(), {0x4cu, 0x8bu, 0x81u});
+    emit_u32(bytes, gpr_low64_offset(instruction.inputs[1].gpr_index));
+
+    // RCX = context. EDX/R8 already carry the remaining Win64 arguments.
+    bytes.insert(bytes.end(), {0x48u, 0x8bu, 0x4cu, 0x24u, 0x28u});
+    emit_mov_rax_imm64(
+        bytes,
+        static_cast<std::uint64_t>(
+            reinterpret_cast<std::uintptr_t>(&r5900_native_store64)));
+    bytes.insert(bytes.end(), {0xffu, 0xd0u}); // call rax
+    bytes.insert(bytes.end(), {0x84u, 0xc0u}); // test al, al
+
+    // jnz success. Helper failure is terminal for the current native block.
+    bytes.insert(bytes.end(), {0x0fu, 0x85u});
+    const auto success_rel32_offset = bytes.size();
+    emit_u32(bytes, 0u);
+
+    emit_xor_eax_eax(bytes);
+    emit_helper_frame_epilogue(bytes);
+    bytes.push_back(0xc3u);
+
+    const auto success_offset = bytes.size();
+    const auto branch_end = success_rel32_offset + sizeof(std::uint32_t);
+    const auto displacement =
+        static_cast<std::int64_t>(success_offset) -
+        static_cast<std::int64_t>(branch_end);
+    patch_u32(bytes,
+              success_rel32_offset,
+              static_cast<std::uint32_t>(
+                  static_cast<std::int32_t>(displacement)));
+
+    emit_reload_state_and_context(bytes);
+}
+
 void emit_store128(std::vector<std::uint8_t>& bytes,
                    const R5900IrInstruction& instruction) {
     // Restore state into RCX in case an earlier helper call clobbered volatile
@@ -586,7 +754,9 @@ EmitResult emit_failure(R5900X64CompileError error,
 bool sequence_needs_helper(
     const std::vector<R5900IrInstruction>& instructions) noexcept {
     for (const auto& instruction : instructions) {
-        if (instruction.opcode == R5900IrOpcode::Store128) {
+        if (instruction.opcode == R5900IrOpcode::Store32 ||
+            instruction.opcode == R5900IrOpcode::Store64 ||
+            instruction.opcode == R5900IrOpcode::Store128) {
             return true;
         }
     }
@@ -602,6 +772,9 @@ EmitResult emit_ir_instruction(std::vector<std::uint8_t>& bytes,
         return {};
     case R5900IrOpcode::AddWordSignExtend:
         emit_add_word_sign_extend(bytes, instruction);
+        return {};
+    case R5900IrOpcode::Add64:
+        emit_add64(bytes, instruction);
         return {};
     case R5900IrOpcode::Or64:
         emit_or64(bytes, instruction);
@@ -626,6 +799,22 @@ EmitResult emit_ir_instruction(std::vector<std::uint8_t>& bytes,
         return {};
     case R5900IrOpcode::AddF32ToAccumulator:
         emit_add_f32_to_accumulator(bytes, instruction);
+        return {};
+    case R5900IrOpcode::Store32:
+        if (!helper_frame) {
+            return emit_failure(R5900X64CompileError::UnsupportedOpcode,
+                                index,
+                                instruction);
+        }
+        emit_store32(bytes, instruction);
+        return {};
+    case R5900IrOpcode::Store64:
+        if (!helper_frame) {
+            return emit_failure(R5900X64CompileError::UnsupportedOpcode,
+                                index,
+                                instruction);
+        }
+        emit_store64(bytes, instruction);
         return {};
     case R5900IrOpcode::Store128:
         if (!helper_frame) {

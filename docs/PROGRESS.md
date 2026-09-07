@@ -1,141 +1,223 @@
 # Progress
 
-Status date: 2026-09-05
+Status date: 2026-09-06
 
 Completion rule: `implemented -> compiled -> executed/tested -> validated`.
 
+This file is the active engineering snapshot. Detailed history remains in Git.
+
+## Current status
+
 | Component | Status | Evidence / next gate |
 |---|---|---|
-| Repository/CMake bootstrap | DONE | Clean host configure/build succeeds with GCC and Clang; Windows CI configures with VS2022 |
-| Portable 120 Hz frame schedule | DONE | Deterministic unit tests pass on host and Windows CI |
-| Frame statistics | DONE | Unit tests pass on host and Windows CI |
-| Frame pacing telemetry | CI_VALIDATED | Pure mean/min/max/stddev/P50/P95/P99/threshold metrics are deterministic; Windows CI captures 240 real pacer samples and surfaces the report |
-| `Burnout3PacingProbe` | CI_VALIDATED | Windows x64 console probe reuses the production 120 Hz pacer/QPC path; parser, 1-second/120-frame smoke, stdout report and file-output contract pass Windows/MSVC CI; physical 60-second-or-longer desktop capture remains pending |
-| `Burnout3PacingProbe` Windows artifact | CI_VALIDATED | Post-merge `main` run `33834646204` published isolated artifact `Burnout3PacingProbe-windows-x64` ID `9922874193` from commit `212997302b2026c9447d5386c728339442a9c9c7`; downloaded ZIP inspection confirmed exactly the probe executable plus usage guide and matching SHA-256 `6ed6a3e8f0906056ec57a35b5e60b6ba0f0199035301b0b4587b37c2ab84a4ec` |
-| Runtime option parser | DONE | Unit tests pass on host and Windows CI |
-| Structured logging | DONE | Unit tests pass on host and Windows CI |
-| Win32 executable target | COMPILED_IN_CI | `Burnout3Recompiled_Test.exe` builds with MSVC 19.44 / Visual Studio 2022; interactive launch still required |
-| Win32 window | READY_FOR_INTERACTIVE_VALIDATION | Windows CI smoke creates a real `HWND`, verifies it is live, posts `WM_CLOSE`, observes `WM_QUIT` and confirms destruction; visual/interactive Windows 10/11 validation still required |
-| QPC high-resolution clock | DONE | Windows integration test executes successfully in GitHub Actions |
-| 120 FPS Windows frame pacer | WORKING | Short CI telemetry validates the production pacing path; `Burnout3PacingProbe` now provides a reproducible 60-second-or-longer desktop capture path, but a normal physical Windows desktop capture remains the validation gate |
-| Crash handler/minidump | CI_VALIDATED | Controlled child-process access violation on Windows CI verifies `last_crash.txt`, PS2/native execution markers and a non-empty `.dmp`; GUI/window validation remains separate |
-| PS2 ELF loader | CI_VALIDATED | Synthetic ELF32 little-endian MIPS tests pass with GCC, Clang and MSVC; external real-file native startup harness is compiled, but the supplied ELF still must be run through that Windows path |
-| PS2 memory mapping | CI_VALIDATED | ELF PT_LOAD-backed mapper now covers little-endian u8/u16/u32/u64/u128 reads/writes; 128-bit writes validate the complete range before mutation so failed `SQ` writes are non-partial. Synthetic startup uses a separate data/BSS PT_LOAD around `0x004e2680`; native external dispatcher execution remains pending |
-| R5900 decoder | CI_VALIDATED | Integer/control-flow/load-store decoding plus the startup EE/MMI/COP1 subset pass Windows/MSVC CI. `SQ` is decoded as a 128-bit guest store; out-of-repository real-ELF inspection identifies the startup `SQ` at `0x00100160` and target-building state |
-| R5900 IR v0 | CI_VALIDATED | Provenance-carrying lowering covers the startup integer/MMI/COP1 subset plus scalar `AND` and `Store128`; block IR now has typed `BranchEqual64`, `BranchEqualLikely64`, `BranchNotEqualLikely64`, `DirectJump`, `DirectCall`, `IndirectJump`, and `IndirectCall` terminators with explicit delay slots, runtime-target GPR inputs, and validated link state |
-| R5900 IR reference executor v0 | CI_VALIDATED | Executes instruction/block IR against full modeled EE state and an opaque guest-memory callback bridge. BEQL/BNEL reference execution proves low64 predicate capture before delay, taken-only delay execution, zero not-taken delay/helper/fault effects, and Store128 failure propagation; direct/indirect transfer ordering coverage remains green |
-| R5900 Windows x86-64 backend v0 | CI_VALIDATED | Emits callable Windows x86-64 for the modeled startup subset, ordinary and likely conditional branches, direct/indirect control transfers, and `Store128`. BEQL uses JNE and BNEL uses JE to branch around the complete delay path on predicate failure; reference/native differentials cover taken/not-taken annulment and Store128 helper suppression/failure while the RW -> RX/W^X path remains intact |
-| R5900 BEQ + delay slot v0 | CI_VALIDATED | Ordinary BEQ is a native block terminator. Predicate uses GPR low64 values before the slot; taken/not-taken targets are returned by generated code and the delay always executes once. BEQL/BNEL are separately supported by explicit likely terminators; ordinary BEQ semantics remain unchanged |
-| R5900 BNE + delay slot v0 | CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION | Ordinary BNE is dispatched through the existing `BranchEqual64` terminator with equality/inequality destinations swapped. Taken/not-taken paths execute one architectural delay slot; cache reuse across runtime predicate changes, delay-word invalidation, and BNE+SQ delay rejection are covered. Clean code SHA `e0af1a1b4d2147c84a469b003b884cb2e9e023dc` passed Windows CI run `33988016891`, job `101365058018`, with 47/47 tests plus pacing/package validation; external legal-ELF execution remains pending |
-| R5900 BEQL + BNEL branch-likely v0 | CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION | IR uses `BranchEqualLikely64` + `BranchNotEqualLikely64`. Reference/native annulment differential coverage: PASS. Dispatcher/cache likely-branch coverage: PASS, including runtime predicate cache hits, branch/delay mutation recompilation, selected-word accounting, and SQ-delay rejection. CTest: 51/51. Synthetic startup: 7 blocks / 96 selected guest words / `AnalysisFailure @ 0x001001cc`. Windows CI run `33993550729`, job `101379915351`, code SHA `6d486b9a1276542ec1f1117c76fc431fb2495a54`: 240 pacing samples at 8.333 ms mean (8.329 min / 8.338 max / 0.000 stddev), zero >9/10/12 ms, high-resolution timer YES; probe 120/120 at 8.333 ms mean. External legal ELF: NOT RUN for this expanded path. Game boot: NOT ACHIEVED |
-| R5900 JR + JALR v0 | CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION | `IndirectJump`/`IndirectCall` snapshot the low32 target before link/delay execution; `JALR` supports arbitrary `rd`, `rd == rs`, and `rd == 0` while preserving high64. Dispatcher/cache differentials and the startup E2E are green; external legal-ELF execution remains pending |
-| R5900 SQ + guest-memory writes v0 | CI_VALIDATED | Straight-line `SQ` bodies execute through `Store128`: effective address is low32(base) + signed imm16 with 32-bit wrap, silently aligned down to 16 bytes, then all 128 source bits are written. Runtime memory failure is deterministic/non-partial; `SQ` in dispatcher-managed BEQ/BNE/BEQL/BNEL/J/JAL/JR/JALR delay slots is explicitly outside v0 |
-| R5900 BSS clear loop v0 | CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION | Transfer-block cache entries can now fast-replay after direct byte-exact guest-word verification, bypassing repeated analysis/lowering while preserving stale-code fallback and recompilation. A dedicated 4-quadword synthetic BSS loop proves 2 compiled blocks, 7/7 fast replays, exact zero range/preserved sentinels, 9 blocks / 26 selected words, and Trap at the syscall boundary. Clean code SHA `da82c5afd42a4d66b43e1eed6bfbec37ddb0fde7` passed Windows CI run `33995680666`, job `101385700565`, with 52/52 tests plus pacing/package validation. The external harness is prepared for the real 1,698,872-iteration BSS loop through `SetupThread @ 0x001001c8`, but that legal-ELF Windows run is NOT RUN. |
-| R5900 native block dispatcher v0 | CI_VALIDATED | Dispatcher consumes native `next_pc`, supports ordinary BEQ/BNE, likely BEQL/BNEL, direct J/JAL and indirect JR/JALR with one selected delay word and body `SQ`, fingerprints exact body/terminator/delay guest words, excludes runtime predicate/indirect target values from the cache key, and recompiles stale code. Stable cached transfer blocks now use direct guest-word verification plus fast native replay before analysis; any mismatch falls back to the existing analysis/fingerprint/recompile path. Not-taken likely paths annul delay effects while `instructions_executed` remains selected-word accounting. Synthetic startup remains 7 blocks / 96 instructions at analysis failure `0x001001cc` |
-| R5900 startup execution v0 | CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION | Synthetic control-transfer path remains 7 blocks / 96 selected guest instructions at deterministic `AnalysisFailure 0x001001cc`; a separate BSS-loop fixture validates repeated `BEQ`/`SQ`/`ADDIU`/`J` execution and fast-cache replay through a syscall boundary. The external harness now requires the real path to `SetupThread @ 0x001001c8` after exactly 1,698,872 BSS iterations, 3,397,748 blocks and 13,591,071 selected guest words. The actual legal ELF has not been run through this expanded Windows native path, so `EXTERNALLY_VALIDATED` is intentionally not claimed |
-| R5900 basic-block analysis | CI_VALIDATED | Conservative block/edge analysis passes GCC/Clang tests and Windows/MSVC CI; delay slots and branch-likely are explicit |
-| Reachable control-flow graph | CI_VALIDATED | Default bounded worklist keeps calls as evidence; opt-in `follow_direct_calls` traverses explicit direct callees with shared block budget, deduplication and failure evidence while indirect exits remain unresolved |
-| R5900 analysis report | CI_VALIDATED | Stable deterministic text report for blocks/instructions/calls/issues plus evidence metrics passes Windows/MSVC CI |
-| R5900 opcode coverage metrics | CI_VALIDATED | Report includes deterministic instruction histogram, unknown-primary histogram and per-PC `UNKNOWN_SITES` raw bitfield diagnostics including delay slots |
-| R5900 direct-call target metrics | CI_VALIDATED | `DIRECT_CALL_TARGETS` groups resolved direct references by guest target address and counts static call sites deterministically; indirect/unresolved calls remain ordinary evidence and no function boundary is inferred |
-| External PS2 ELF analysis pipeline | CI_VALIDATED | Synthetic ELF is parsed, mapped, traversed and rendered end-to-end; current byte-exact report contract passes Windows/MSVC CI |
-| `Burnout3Analyze` CLI | CI_VALIDATED | Console executable builds with VS2022/MSVC; `--follow-direct-calls` is opt-in, defaults off, propagates end-to-end and preserves deterministic reporting |
-| `Burnout3Analyze` Windows artifact | CI_VALIDATED | `main`/manual Windows CI publishes `Burnout3Analyze-windows-x64`; latest verified current-main artifact ID `9922873755` was published by run `33834646204` from `main` commit `212997302b2026c9447d5386c728339442a9c9c7` |
-| Static/binary recompiler | IN_PROGRESS | Decoder -> IR -> reference -> Windows x64 -> dispatcher executes the modeled startup control flow and now has a fast replay path suitable for the real BSS-clear loop. The next real boundary is EE kernel `SetupThread` syscall `0x3c` at `0x001001c8`, followed by `SetupHeap` `0x3d`; syscall/HLE, broader guest loads/stores, remaining control flow, and real external ELF native execution are the next gates |
-| Graphics | TODO | No D3D initialization yet |
-| Audio | TODO | No XAudio2 initialization yet |
-| Input | TODO | No keyboard/XInput layer yet |
-| Game initialization | TODO | No game code translated beyond the narrow startup execution infrastructure |
-| Menu/frontend | TODO | Blocked by prior milestones |
-| Test race | TODO | Blocked by prior milestones |
+| Repository / CMake bootstrap | DONE | C++20, CMake 3.25+, Visual Studio 2022 / Windows x64 workflow |
+| Win32 bootstrap/window | READY_FOR_INTERACTIVE_VALIDATION | CI creates/closes an HWND; physical Windows visual validation remains |
+| QPC / 120 Hz frame pacing | CI_VALIDATED | Current SW milestone passes telemetry + 120-frame probe; physical 60-second desktop validation remains |
+| Crash handler / minidump | CI_VALIDATED | Controlled Windows CI crash path |
+| PS2 ELF loader | CI_VALIDATED | ELF32 little-endian MIPS parsing and PT_LOAD tests |
+| EE main RAM v0 | CI_VALIDATED | Zero-filled 32 MiB `0x00000000..0x01ffffff`; PT_LOAD copied into RAM |
+| Typed guest memory | CI_VALIDATED | Little-endian u8/u16/u32/u64/u128 reads/writes |
+| R5900 decoder / IR | CI_VALIDATED | Incremental startup subset; `SQ -> Store128`, `SD -> Store64`, `SW -> Store32`, `DADDU -> Add64` |
+| R5900 reference executor | CI_VALIDATED | Modeled EE state plus typed memory callbacks including write32/write64/write128 |
+| Windows x86-64 backend | CI_VALIDATED | Native Store32/Store64/Store128 and current startup integer/control-flow subset; native/reference differential coverage |
+| Native dispatcher/cache | CI_VALIDATED | On-demand lowering/native compile, exact guest-word validation, fast replay, boundary-prefix protection and store callbacks |
+| `SQ / Store128` | CI_VALIDATED | Existing v0 full-128 store semantics |
+| `SD / Store64` | CI_VALIDATED | Low64 source, 32-bit address wrap, strict 8-byte alignment, width-8 fault provenance |
+| `DADDU / Add64` | CI_VALIDATED | Modulo-2^64 low64 add; destination high64 preserved |
+| `SW / Store32` | CI_VALIDATED | Low32 source, 32-bit address wrap, strict 4-byte alignment, no align-down, exact width-4 fault provenance |
+| `BEQ/BNE`, `BEQL/BNEL`, `J/JAL`, `JR/JALR` | CI_VALIDATED | Native control transfers and architectural delay-slot semantics |
+| BSS clear startup loop | CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION | Synthetic/native loop validated; historical external harness reaches SetupThread |
+| Host syscall service | CI_VALIDATED | Host boundary outside generated x64; deterministic handled/unsupported/fault accounting |
+| `SetupThread` HLE `0x3c` | CI_VALIDATED | Explicit-stack mode |
+| `SetupHeap` HLE `0x3d` | CI_VALIDATED | Automatic-size `-1` convention resolved from thread stack base |
+| Startup through `SW @ 0x00114ee0` | CI_VALIDATED | Synthetic/native startup-shaped path executes `ADDIU/ADDIU/SD/DADDU/SW` and validates stack memory/state |
+| Lawful next-boundary diagnosis | DIAGNOSTIC_VALIDATED | Legal ELF diagnosis continues beyond the first SW and reaches `SYSCALL @ 0x0010be24`, selector `0x40` in `v1`; not externally Windows-native validated |
+| Static/binary recompiler | IN_PROGRESS | Next concrete startup/HLE boundary: syscall selector `0x40 @ 0x0010be24`; semantics still need design/diagnosis |
+| Graphics / GS / VU | TODO | No game rendering path yet |
+| IOP / SPU2 / audio | TODO | No game audio path yet |
+| Game input | TODO | Not implemented |
+| Game initialization | TODO | Not reached |
+| Menu / gameplay | TODO | Game does not boot or reach gameplay |
 
-## Windows CI evidence
+## R5900 SW / Store32 v0
 
-`R5900 BSS clear loop v0` added transfer-block fast cache replay with byte-exact guest-word verification before native reuse. RED run `33995448140`, job `101385087338`, failed exactly because the new `fast_cache_hits` telemetry did not yet exist. Clean GREEN SHA `da82c5afd42a4d66b43e1eed6bfbec37ddb0fde7` passed Windows CI run `33995680666`, job `101385700565`, with **52/52 tests**; the dedicated BSS fixture completed 4 aligned `SQ` iterations through 9 blocks / 26 selected words, compiled two native blocks and recorded seven fast replays. Pacing telemetry reported 240 samples at 8.333 ms mean with zero samples above 9/10/12 ms; the one-second probe completed 120/120 frames. Analyzer and pacing-probe package gates passed. The external harness is compiled to require the real `0x004e2680..0x01ecea00` clear and `SetupThread @ 0x001001c8`, but the legal ELF has not been executed on the Windows native path, so this is not `EXTERNALLY_VALIDATED`.
+### Scope
 
-`BEQL + BNEL branch-likely v0` completed explicit IR-validation, reference-executor, native-x64, and dispatcher/cache TDD gates. The clean code SHA `6d486b9a1276542ec1f1117c76fc431fb2495a54` passed Windows CI run `33993550729`, job `101379915351`, with **51/51 tests**. Pacing telemetry reported 240 samples at 8.333 ms mean (8.329 ms min, 8.338 ms max, 0.000 ms stddev), P50/P95/P99 8.333 ms, and zero samples above 9/10/12 ms; high-resolution timing was active. The one-second probe completed 120/120 frames at 8.333 ms mean (8.330 ms min, 8.333 ms max), with zero samples above 9/10/12 ms. Analyzer and pacing-probe package staging/validation passed. A legacy direct-transfer test boundary was moved from BNEL to still-unsupported BGTZ because BNEL is now intentionally executable; production semantics were unchanged by that fixture repair. This remains CI evidence only: the legal external ELF was not executed and the game does not boot.
-
-`BNE + delay slot v0` reused the existing `BranchEqual64` native path with swapped equality/inequality destinations. RED run `33987192233` built successfully and failed only the new BNE execution expectation; subsequent fixture debugging established the correct synthetic endpoint as 7 blocks / 96 instructions at `AnalysisFailure 0x001001cc`. Coverage RED run `33987884461` passed 46/47 and failed only the intentional `BEQ/BNE` SQ-delay diagnostic assertion. Clean GREEN code SHA `e0af1a1b4d2147c84a469b003b884cb2e9e023dc` passed run `33988016891`, job `101365058018`, with **47/47 tests**. Pacing reported 240 samples at 8.333 ms mean (8.308 ms min, 8.359 ms max, 0.002 ms stddev) with zero samples above 9/10/12 ms; the one-second probe completed 120/120 frames at 8.333 ms mean. Analyzer and pacing-probe staging/validation passed. This is CI evidence only; no legal external ELF was executed.
-
-`JR + JALR v0` used explicit TDD gates through IR validation, reference execution, native x64 differentials, dispatcher/cache behavior and startup E2E. The clean feature SHA `2f7a68fcd493f9bb8dcca84a9c5633c1d5f3cab5` passed Windows CI run `33983976120`, job `101354052009`, with **47/47 tests**. The synthetic startup reaches unsupported `BNE 0x001001c4` after **7 native blocks / 94 guest instructions**. Pacing telemetry reported 240 samples at 8.333 ms mean with zero samples over 9/10/12 ms; the one-second probe completed 120/120 frames. Analyzer and pacing-probe package staging/validation also passed. This is CI evidence only; no legal external ELF was executed in that run.
-
-GitHub Actions run `33713829165` on `windows-2022` completed successfully using Visual Studio 2022 / MSVC 19.44. It built `Burnout3Recompiled_Test.exe` and passed all six bootstrap tests. Feature run `33714243602` passed 7/7 after adding the ELF loader.
-
-Memory-map run `33715582203` passed 8/8. R5900 decoder run `33716010679` passed 9/9. R5900 basic-block run `33716632916` built `b3r_analysis` with MSVC 19.44 and passed 10/10 tests including `r5900_control_flow_tests`.
-
-Reachability run `33717425111` passed 11/11. Analysis-report GREEN run `33718514985` passed 12/12.
-
-`Burnout3Analyze` development used three additional TDD gates plus the final executable gate:
-
-- ELF-pipeline RED `33772468390` -> GREEN `33772705605` (13/13);
-- CLI-options RED `33772935813` -> GREEN `33773184514` (14/14);
-- file-I/O app RED `33773406647` -> GREEN `33773705488` (15/15);
-- executable help-smoke RED `33773875369` -> GREEN `33774102751` (16/16).
-
-PR #7 merge-ref run `33774831203` passed 16/16, and post-merge `main` run `33777197703` also completed successfully.
-
-Opcode-coverage RED run `33777384366` built successfully and failed only the two report-contract tests that required the new histograms. GREEN run `33777558935` built the updated renderer and passed 16/16 tests. PR #8 merge-ref run `33778143705` and post-merge `main` run `33778300157` both passed 16/16.
-
-Crash-handler RED run `33799222874` failed during CMake generation exactly because the test-declared probe source did not exist. GREEN run `33799323131` built the isolated probe and harness with MSVC 19.44 and passed 17/17 tests, including controlled access-violation state/minidump validation. PR #9 merge-ref run `33799706870` and post-merge `main` run `33799864371` also passed 17/17.
-
-Win32-window smoke RED run `33802472364` failed during CMake generation exactly because the declared smoke source did not exist. GREEN run `33802569842` built the real-window smoke test and passed 18/18 tests; `win32_window_smoke_tests` created/closed the window and completed in 0.05 seconds.
-
-Frame-pacing telemetry RED run `33805068940` failed exactly because `core/frame_pacing_telemetry.h` did not yet exist. Pure telemetry GREEN run `33805247593` passed 19/19. Windows telemetry run `33805412037` passed 19/19 with a 240-frame pacing smoke. Run `33805548230` additionally surfaced the report in the CI log: 240 samples, 8.333 ms mean, 8.204 ms min, 8.462 ms max, 0.012 ms population stddev, 8.333 ms P50/P95/P99, 80 samples above the exact 120 Hz period, and zero above 9/10/12 ms; the high-resolution timer path was active.
-
-Analyzer-artifact RED run `33808095539` passed configure/build, 19/19 tests and pacing telemetry, then failed only at package staging because `docs/ANALYZE-USAGE.txt` was absent. GREEN run `33808250674` passed 19/19 plus package staging/validation, with upload correctly skipped on a feature-branch push. PR #12 merge-ref run `33808465659` passed 19/19 plus staging/validation and also skipped publishing. After merge commit `46f04e4f798cd1850ae94647952c85bd16911e13`, post-merge `main` run `33808599204` passed 19/19 and published artifact `Burnout3Analyze-windows-x64` ID `9913944778` (58,379-byte ZIP; SHA-256 `07bde0a403eb7981a2d43ab0335ba0318f691aa0840aae3aeaed875c5cc724d1`). Download inspection confirmed exactly `Burnout3Analyze.exe` and `ANALYZE-USAGE.txt`, with no ELF, assets, dumps or other proprietary data.
-
-Direct-call traversal used three explicit RED/GREEN evidence gates. Core RED run `33811079587` failed exactly because `R5900ReachabilityOptions::follow_direct_calls` did not exist; core GREEN run `33811230685` passed 20/20. CLI RED run `33811349684` failed exactly because `Burnout3AnalyzeOptions::follow_direct_calls` did not exist; parser GREEN run `33811484381` passed 20/20. App propagation RED run `33811708045` built successfully and failed only `burnout3_analyze_app_tests` because the option was not yet forwarded into reachability. After propagation and correction of a test-only report-string mismatch, GREEN run `33812029332` passed 20/20. Regression-coverage run `33812164557` also passed 20/20 while proving direct-callee deduplication, shared `max_blocks` accounting and `TargetAnalysisFailed` behavior for an unmapped direct callee. PR #14 merge-ref run `33812746572` passed 20/20; merge commit `99aa138688f7d36d26ad94409a99b9288aa7138e` then passed 20/20 in post-merge main run `33812901166` and published analyzer artifact ID `9915484087` (58,885-byte ZIP; SHA-256 `fe4470f544794cbcd66a3508880ee2f3e550bfb69ed12f8f6578467691601da0`).
-
-`UNKNOWN_SITES` diagnostics used an explicit report-contract RED/GREEN sequence. RED run `33817785688` built successfully and passed 19/20 tests; only `r5900_analysis_report_tests` failed because the new site-level diagnostics were absent. Renderer run `33817933590` proved the new report section itself: `r5900_analysis_report_tests` passed, while the only remaining failure was the older byte-exact `ps2_elf_analysis_tests` expected text missing `UNKNOWN_SITES 0`. After updating that test-only end-to-end contract, GREEN run `33818075117` passed 20/20 with telemetry plus analyzer package staging/validation. PR #15 merge-ref run `33818605215` passed 20/20 on temporary merge SHA `a0b4694779bf4dadd5bfe3f958428e66fc6347ee`; merge commit `d493761463d33249fa17ab26916d9d44b51a7164` then passed 20/20 in main run `33818702279` and published analyzer artifact ID `9917475746` (61,394-byte ZIP; SHA-256 `ba5a626be85e5904f624cb1731c433c9e22a1ad5e44ee263d198b8830e368c9e`). Synthetic coverage verifies two unknown sites, including an architectural delay slot, raw-field extraction for `PRIMARY/RS/RT/RD/SA/FUNCT`, PC ordering and byte-identical output under reordered graph containers.
-
-`DIRECT_CALL_TARGETS` diagnostics used the same report-contract TDD pattern. RED run `33828724619` built successfully and passed 19/20 tests; only `r5900_analysis_report_tests` failed because target aggregation was absent. Renderer run `33828875766` proved grouping/filtering/order: `r5900_analysis_report_tests` passed, while the only remaining failure was the older byte-exact `ps2_elf_analysis_tests` expectation missing `DIRECT_CALL_TARGETS 0`. After updating only that expected text, GREEN run `33828970350` passed 20/20 plus frame-pacing telemetry and analyzer package staging/validation. PR #16 merged as `79b83039df6d58d3d997a1536021c32cadac6a33`; post-merge run `33829442535` passed 20/20 and published current analyzer artifact ID `9921137059`.
-
-`Burnout3PacingProbe` uses four explicit TDD/packaging gates. Parser RED run `33833425537` failed compilation exactly because `tools/burnout3_pacing_probe_options.h` was absent; parser GREEN run `33833561650` passed 21/21. Executable-smoke RED run `33833683371` passed 21/22 with only `burnout3_pacing_probe_smoke` Not Run because `Burnout3PacingProbe.exe` did not yet exist; executable GREEN run `33833827722` passed 22/22 and captured a real 1-second/120-frame 120 Hz smoke. File-output RED run `33833988815` passed 22/23 and failed only `burnout3_pacing_probe_output` because file output was deliberately unavailable; output GREEN run `33834065915` passed 23/23 and verified the requested report file plus no duplicate stdout. Package RED run `33834158018` passed 23/23, existing pacing telemetry, the visible probe smoke, and analyzer package staging/validation, then failed only because `docs/PACING-PROBE-USAGE.txt` was absent. Package GREEN run `33834235339` passed 23/23 plus visible probe smoke and both analyzer/probe package staging/validation, with uploads correctly skipped on the feature branch. PR #17 merge-ref run `33834545021` passed 23/23 with both packages staged/validated and uploads skipped for the pull-request event. Merge commit `212997302b2026c9447d5386c728339442a9c9c7` then passed 23/23 in post-merge `main` run `33834646204`; the one-second probe reported `TARGET_HZ 120`, `REQUESTED_SECONDS 1`, `FRAMES 120` and `HIGH_RESOLUTION_TIMER YES`. That run published pacing-probe artifact ID `9922874193` (27,369-byte ZIP; SHA-256 `6ed6a3e8f0906056ec57a35b5e60b6ba0f0199035301b0b4587b37c2ab84a4ec`) and republished analyzer artifact ID `9922873755`. Download inspection of the pacing-probe ZIP confirmed exactly `Burnout3PacingProbe.exe` (62,976 bytes, PE/MZ) and `PACING-PROBE-USAGE.txt` (1,588 bytes).
-
-Initial R5900 IR lowering used an explicit TDD gate. RED run `33836158322` configured successfully and failed in the Build step exactly because `recompiler/r5900_ir.h` did not yet exist. GREEN run `33836270427` built the new IR/lowering implementation with MSVC 19.44 and passed 24/24 tests, including `r5900_ir_tests`; frame-pacing telemetry, pacing-probe smoke, analyzer package validation and pacing-probe package validation also remained green. The v0 lowering initially supported only NOP, ADDU, ADDIU and ORI, retained guest PC/raw provenance, and rejected every other instruction explicitly without emitting partial IR.
-
-IR semantic hardening used a second RED/GREEN gate after review of EE GPR behavior. RED run `33836540408` configured successfully and failed in the Build step exactly because `R5900IrGprWriteMode` and `write_mode` did not yet exist. GREEN run `33836644443` passed 24/24 after adding explicit `Low64PreserveUpper64` write semantics for the 128-bit EE GPR file and converting side-effect-free writes to GPR zero into provenance-preserving `Nop` IR. Frame-pacing telemetry, pacing-probe smoke, analyzer package validation and pacing-probe package validation also remained green.
-
-R5900 IR reference execution used explicit semantic and validation TDD gates. Contract RED run `33838914206` configured successfully and failed in the Build step exactly because `recompiler/r5900_ir_executor.h` did not yet exist; expanded semantic RED run `33839043526` reproduced the same intended missing-contract failure. Core GREEN run `33839181048` built and executed the first valid `Nop`, word-add and 64-bit OR semantics while keeping all existing pacing/package gates green. Validation RED run `33839297639` built successfully and passed 24/25 tests; only `r5900_ir_executor_tests` failed, specifically because source GPR 32 was not yet rejected. After pre-read/pre-mutation structural validation and fail-fast semantics were added, the final feature gate `33839600806` passed 25/25 on Windows Server 2022 / MSVC 19.44, including the synthetic `decode_r5900 -> lower_r5900_instruction -> execute_r5900_ir` path for ADDU, ADDIU and ORI. That run also kept 240-sample pacing telemetry at an 8.333 ms mean, the one-second 120-frame pacing probe green, and both analyzer/probe package validation steps green.
-
-The initial Windows x86-64 backend used explicit TDD gates on the dedicated `feature/r5900-x64-backend-v0` branch. Shared-validator RED failed because `recompiler/r5900_ir_validation.h` was absent, then validator GREEN run `33886428635` passed the complete Windows workflow. The native block contract was introduced with a missing-header RED, followed by foundation GREEN run `33887004924` for move-only executable-page ownership, RW -> RX protection, instruction-cache flush, empty programs and `Nop`. `AddWordSignExtend` RED run `33887322932` built successfully and passed 26/27 tests; only `r5900_x64_backend_windows_tests` failed because ADDU-style IR was not yet compiled. GREEN run `33887583595` passed the full workflow after adding 32-bit wrapping addition plus sign extension while preserving `high64`. `Or64` RED run `33887749637` again passed 26/27 with only the native backend test failing because ORI-style IR was unsupported. GREEN run `33887959306` passed after adding 64-bit OR emission with full 64-bit immediate materialization. Final differential run `33888159096` passed 27/27 on Windows Server 2022 / MSVC 19.44, compared all 32 EE GPR low/high halves bit-for-bit against the reference executor, proved the synthetic `decode_r5900 -> lower_r5900_instruction -> compile_r5900_ir_x64 -> native execution` path, retained 8.333 ms pacing telemetry, completed the one-second 120-frame probe, and kept both package validation steps green.
-
-R5900 native block dispatch used five incremental TDD gates on `feature/r5900-block-dispatcher-v0`. Contract RED deliberately failed CMake because the dispatcher source was absent; Task 1 GREEN run `33902522850` passed 28/28 after adding the Windows dispatcher contract and analysis/budget entry validation. Task 2 RED run `33902778270` built successfully and failed only `r5900_block_dispatcher_windows_tests` at the first unimplemented prefix boundary; GREEN run `33903045666` passed 28/28 after adding NOP/ADDU/ADDIU/ORI prefix lowering/native execution and explicit stops before branch/jump/trap/unsupported instructions. Task 3 RED run `33903296304` failed only the new two-block accumulated-progress assertion; GREEN run `33903496358` passed after adding bounded sequential dispatch, cache reuse and `clear_cache()`. Task 4 RED run `33903758315` failed only the required stale-code recompilation accounting assertion; GREEN run `33904005587` passed after adding deterministic 64-bit FNV-1a plus exact guest-word validation and stale supported-block recompilation. Task 5 RED run `33904276468` passed build and failed only the new requirement that invalid budget diagnostics include stage and guest PC. Final feature GREEN run `33913209962` on commit `9ba27b6f1e5b3f58d711d3e77fa197744f835e47` passed 28/28 on Windows Server 2022 / MSVC 19.44, including all-32-GPR differential equality, non-executable/unmapped/invalid-analysis failures, and partial-progress preservation after a later analysis failure. The same run kept 240-sample pacing telemetry at an 8.333 ms mean with zero samples above 9/10/12 ms, completed the one-second 120-frame probe, and kept both package validation stages green.
-
-R5900 startup execution v0 extended that stack using isolated RED/GREEN gates on `feature/r5900-startup-execution-v0`. COP1 lowering reached GREEN in run `33933755689`. Validator RED `33933950409` passed 27/28 and failed only the newly required valid MTC1 semantic IR; validator GREEN `33934064902` passed the complete gate. COP1 reference-executor RED `33934195417` passed 28/29 and failed only the new MTC1 raw-copy assertion; executor GREEN `33934300285` passed 29/29 plus pacing/package gates. Non-COP1 x64 RED `33934440499` passed 29/30 and failed only because the backend lacked the new startup opcode emission; GREEN `33934554960` passed 30/30 with full modeled-state differential comparison. COP1 x64 RED `33934666768` passed 30/31 and failed only the new COP1 differential target; GREEN `33934775942` passed 31/31. Dispatcher startup RED `33934957366` passed 31/32 and failed only the new 74-instruction startup-shaped dispatch test. After expanding dispatcher eligibility, regression-detector run `33935075369` proved that the new startup test passed while the sole remaining failure was an obsolete legacy expectation that ANDI remain unsupported. Updating those legacy sentinels to XORI and making ANDI a positive execution case produced GREEN run `33935216744`, which passed 32/32 plus pacing and package validation. External-ELF harness commit `788781ba5d2dc8d8a1246975076d81c348e952bb` then passed the complete Windows workflow in run `33936132487`; CI intentionally supplies no game data, so the optional real-file path remains unexecuted there.
-
-R5900 BEQ + delay-slot v0 continued from integrated startup execution on `feature/r5900-beq-delay-slot-v0`. Block-IR/validator GREEN run `33939217738` established typed branch terminators. Scalar register-AND coverage reached GREEN in run `33940033230`. Block reference execution, including predicate-before-slot semantics, reached GREEN in `33941017610`. Native x64 BEQ ABI/emission and the expanded differential matrix reached GREEN in `33941847909`. Dispatcher/cache integration, including dynamic cached outcomes, stale body/BEQ/delay invalidation and atomic failure accounting, reached GREEN in `33943865928`. The first 81-instruction E2E run `33943954014` failed only at the expected pre-AND dispatcher boundary. Enabling already-tested scalar AND moved execution through the second BEQ; run `33944082051` then exposed a synthetic-fixture analysis issue because `SQ` was the final mapped word. Adding an analyzer-only mapped J+delay sentinel after `SQ` preserved the milestone address while allowing the analyzer to return the block. Final E2E run `33944600510` passed 35/35 on Windows Server 2022 / MSVC 19.44 and also passed frame-pacing telemetry, pacing-probe smoke, analyzer package validation and pacing-probe package validation. The synthetic path completed exactly 2 guest blocks / 81 instructions, with first BEQ taken, second BEQ not taken, both delay slots executed, and `SQ` at `0x00100160` left unexecuted.
-
-R5900 `SQ + guest-memory writes v0` continued from that exact boundary on `feature/r5900-sq-guest-memory-v0`. The memory-map/IR/reference gates added typed 64/128-bit memory access, `Store128` lowering/validation and the callback execution context before native emission. Native backend RED run `33947340541` failed compilation exactly because `R5900X64CompiledBlock::execute(R5900IrExecutionContext&)` did not yet exist. GREEN run `33947490402` added the Win64 helper-call frame and native `Store128`; build, tests, frame-pacing telemetry, pacing probe and package validation all passed. Dispatcher RED run `33947858685` failed compilation exactly because `R5900DispatchStopReason::MemoryAccessFailure` did not yet exist. Dispatcher implementation run `33947979736` built successfully and passed 37/38 tests: the new Store128 dispatcher target passed, while the sole failure was the intentionally obsolete startup expectation that execution still stop before `SQ`. Updating only the startup fixture to add a writable data/BSS PT_LOAD and require SQ progress produced final GREEN run `33948139927`, which passed **38/38** plus frame-pacing telemetry, pacing-probe smoke and both package validations.
-
-Synthetic SQ proof for the final gate:
+`SW rt, imm(rs)` is modeled as:
 
 ```text
-SQ PC          0x00100160
-store target   0x004e2680
-store width    16 bytes
-source         GPR0 => all zero
-next boundary  synthetic J at 0x00100164
-blocks         3
-instructions   82
+base32  = low32(GPR[rs].low64)
+offset  = sign_extend16(imm)
+address = uint32(base32 + offset)
+value   = low32(GPR[rt].low64)
 ```
 
-The synthetic test initializes the target and immediate neighboring bytes to `0xa5`, proves exactly the 16 target bytes become zero, and proves the byte before and byte after remain unchanged. Runtime-fault tests separately prove unmapped stores are non-partial, prior guest instructions remain committed/countable, the faulting `SQ` and block are not counted, and the successfully compiled native cache entry can be reused on a later corrected execution.
+Contract:
 
-Out-of-repository inspection of the supplied legal ELF confirms ELF32 little-endian MIPS entry `0x00100008`. The first 74-instruction body is followed by BEQ at `0x00100130` and its NOP delay slot; startup state makes that branch taken to `0x0010014C`. The continuation contains LUI/ORI/AND, BEQ at `0x00100158` and a NOP delay slot; the produced values make that branch not taken, so fallthrough reaches `SQ` at `0x00100160` targeting `0x004e2680`. This is static real-file evidence only. The Windows external dispatcher test has not yet been executed against that ELF, so the project does not claim `EXTERNALLY_VALIDATED` native startup execution.
+- 32-bit effective-address arithmetic wraps modulo 2^32;
+- strict 4-byte alignment;
+- no alignment-down;
+- exactly four bytes are written;
+- source bits above bit 31 are ignored;
+- CPU register state is preserved;
+- failure stops later guest instructions;
+- fault records exact guest PC/address and width `4`.
 
-The current dispatcher executes ordinary BEQ + architectural delay slot and straight-line `SQ` guest writes. `SQ` in a BEQ delay slot, guest loads, other store widths, broader jump/call/branch forms, BSS-clearing loops beyond this startup store, syscall/HLE behavior, game initialization, graphics, audio and input remain outside this increment. Hosted CI smoke evidence is not treated as physical-desktop performance certification.
+The memory callback ABI now contains `write32`, `write64`, and `write128`. The dispatcher wires all three in cold/exact-cache and fast-cache paths.
 
-The first CI attempt failed before compilation because `windows-latest` had moved to a Windows Server 2025 / Visual Studio 2026 image while the project explicitly requested the Visual Studio 2022 CMake generator. The workflow remains pinned to `windows-2022`.
+### TDD evidence
 
-## Test Build 0.1 gate
+Representative RED/GREEN evidence:
 
+```text
+Task 1 RED   bd9310e1...  Store32 IR contract failed because opcode did not exist
+Task 1 GREEN f598ed3d...  SW lowering + Store32 validation; CI #734 green
+Task 2 RED   1e9c825f...  executor contract failed because write32 did not exist
+Task 2 GREEN 6883c3c2...  write32 ABI + reference execution; CI #737 green
+Task 3 RED   e80bd83a...  59/60 PASS; only native Store32 unsupported
+Task 3 GREEN 2bf39108...  x64 Store32 helper/emitter; CI #739 green
+Task 4 RED   4a9e857e...  60/62 PASS; only two dispatcher SW gates failed at SW boundary
+Task 4 GREEN 751ff620...  dispatcher write32 + SW eligibility; CI #743 62/62 green
+```
 
-Direct `J`/`JAL` v0 used explicit RED/GREEN gates across IR validation, reference execution, native x64 emission and dispatcher integration. After aligning legacy fixtures whose old contract treated J/JAL as unsupported boundaries, code-complete SHA `e81b1e891821a2e36a7cb7b20815c2ac1fdf7221` passed Windows CI run `33954774597` / job `101275974117` on `windows-2022` with MSVC 19.44.35228: **43/43 CTest passed**. Focused tests `r5900_ir_direct_transfer_validation_tests`, `r5900_ir_direct_transfer_executor_tests`, `r5900_x64_direct_transfer_windows_tests`, `r5900_block_dispatcher_direct_transfer_windows_tests`, and the startup E2E all passed. The synthetic startup now reaches unsupported JR `0x001001a4` after 5 blocks / 87 guest instructions. The same run recorded 240 pacing samples at 8.333 ms mean with zero samples above 9/10/12 ms and a 120-frame probe at 120 Hz. This is hosted-CI evidence only; no legal external game ELF was executed by that run.
+Dedicated named Store32 gates were then split out without changing production code. Implementation/test head before documentation:
 
-The bootstrap is materially further along but **Test Build 0.1 is not yet complete**. Remaining validation gates include:
+```text
+491385fc6e12f7f7d1189948daafe5e89d0bfbb2
+```
 
-1. visually inspect the GUI executable on an interactive Windows 10/11 desktop; automated create/`WM_CLOSE`/`WM_QUIT` lifecycle is already covered by Windows CI smoke;
-2. run `Burnout3PacingProbe --seconds 60 --output <report>` (or longer) during a normal physical Windows 10/11 desktop session and review the generated pacing report; hosted-CI 1-second/120-frame and 240-frame telemetry are evidence only, not a physical-desktop benchmark;
-3. run `r5900_block_dispatcher_startup_windows_tests.exe <SLUS_210.50>` on Windows x64 against the externally supplied legal ELF and require a `REAL_ELF_SQ_VALIDATED` line proving `sq=0x00100160`, `target=0x004e2680`, at least 82 executed instructions, a stop PC beyond `0x00100160`, and a zeroed 16-byte target. Until then startup execution remains `READY_FOR_EXTERNAL_VALIDATION`;
-4. continue the execution scope with broader guest loads/stores, indirect `JR`/`JALR`, and the next syscall/HLE boundaries, without committing proprietary data.
+Windows CI run **#747** (`34073509755`) produced:
+
+```text
+host  Windows Server 2022
+MSVC  19.44 / Visual Studio 2022
+CTest 65/65 PASS
+```
+
+Required Store32 gates:
+
+```text
+r5900_ir_store32_tests                         PASS
+r5900_ir_store32_executor_tests                PASS
+r5900_x64_store32_windows_tests                PASS
+r5900_block_dispatcher_store32_windows_tests   PASS
+r5900_block_dispatcher_sw_startup_windows_tests PASS
+```
+
+Legacy Store64/Store128, control-flow, syscall, memory-map and startup tests also passed.
+
+Frame-pacing telemetry on #747:
+
+```text
+samples         240
+mean            8.333 ms
+min             8.256 ms
+max             8.384 ms
+P95             8.333 ms
+P99             8.351 ms
+>9/10/12 ms     0 / 0 / 0
+high-res timer  YES
+```
+
+One-second pacing probe:
+
+```text
+target          120 Hz
+frames          120
+mean            8.333 ms
+min             8.331 ms
+max             8.333 ms
+>9/10/12 ms     0 / 0 / 0
+high-res timer  YES
+```
+
+Analyzer and pacing-probe package validation both passed. Hosted CI pacing remains smoke evidence rather than physical-desktop performance certification.
+
+### Synthetic/native startup acceptance
+
+The SW startup gate uses only public ISA encodings and synthetic data, while retaining the real startup PCs:
+
+```text
+0x00114ed0  ADDIU sp,sp,-0x50
+0x00114ed4  ADDIU v0,zero,1
+0x00114ed8  SD    ra,0x40(sp)
+0x00114edc  DADDU a0,sp,zero
+0x00114ee0  SW    v0,0x28(sp)
+```
+
+Acceptance:
+
+```text
+initial sp                0x01fffff0
+initial ra                0x00115118
+sp                        0x01ffffa0
+v0.low64                  0x0000000000000001
+a0.low64                  0x0000000001ffffa0
+a0.high64                 preserved
+mem64[0x01ffffe0]         0x0000000000115118
+mem32[0x01ffffc8]         0x00000001
+adjacent 32-bit guards    unchanged
+```
+
+Separate dispatcher coverage proves:
+
+- aligned success;
+- misaligned/out-of-range `MemoryAccessFailure` width 4;
+- faulting SW is not counted as completed;
+- earlier prefix effects remain visible on SW failure;
+- a compiled SW block survives cold fault -> corrected success -> cached fault with no recompilation;
+- SW commits before a later unsupported boundary;
+- a second successful `SW + J + NOP` execution fast-replays from cache.
+
+## Lawful real-ELF diagnostic after SW
+
+The user's lawful Burnout 3 ELF remains outside the repository. No real raw instruction words/bytes are copied into source, tests, or documentation.
+
+Starting state at the known call target:
+
+```text
+PC = 0x00114ed0
+sp = 0x01fffff0
+ra = 0x00115118
+```
+
+The supported model advances through the first SW and the real path continues through additional already-supported stores and a direct call. Derived state at the next current host boundary:
+
+```text
+PC        0x0010be24
+boundary  SYSCALL
+selector  0x40 in v1
+
+sp.low64  0x01ffffa0
+v0.low64  0x0000000000000001
+a0.low64  0x0000000001ffffa0
+ra.low64  0x0000000000114ef4
+v1.low64  0x0000000000000040
+
+mem64[0x01ffffe0]  0x0000000000115118
+mem32[0x01ffffc8]  0x00000001
+mem32[0x01ffffa4]  0x00000001
+mem32[0x01ffffa8]  0x00000001
+mem32[0x01ffffc4]  0x00000001
+```
+
+The host syscall service currently recognizes only selectors `0x3c` (`SetupThread`) and `0x3d` (`SetupHeap`). Therefore selector `0x40` is the next empirically observed HLE boundary. Its semantics are **not** guessed here; the next milestone must diagnose/design them first.
+
+This is `DIAGNOSTIC_VALIDATED`, not `EXTERNALLY_VALIDATED`. The existing external Windows startup harness has not yet been extended/executed end-to-end through SetupHeap/SD/DADDU/SW.
+
+## Remaining Test Build 0.1 gates
+
+1. Diagnose and design the observed EE syscall selector `0x40` boundary.
+2. Extend the external Windows-native startup harness through the newer startup path using only a user-supplied local ELF.
+3. Validate the Win32 executable interactively on a physical Windows 10/11 desktop.
+4. Run a 60-second or longer physical-desktop 120 Hz pacing capture.
+5. Continue R5900/kernel/HLE coverage iteratively from measured boundaries.
+6. Implement the still-missing GS/VU, IOP/SPU2, input and game-runtime subsystems before any boot/playability claim.
+
+## Guardrails
+
+- `design/r5900-sw-v0` is the isolated milestone branch.
+- Base/integration branch is `feature/r5900-or-v0`.
+- Integration requires explicit user authorization after final branch verification.
+- Never commit proprietary Burnout 3 data.
+- Never claim boot/playability without direct evidence.

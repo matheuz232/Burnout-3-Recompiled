@@ -160,7 +160,7 @@ int main() {
         auto memory = make_memory({sq_r7_r2, jump, 0u}, code_base, data_base);
         R5900BlockDispatcher dispatcher(memory);
         R5900IrExecutionState state{};
-        state.gpr[2].low64 = 0x00330007u;
+        state.gpr[2].low64 = 0x02000007u;
         state.gpr[7] = {1u, 2u};
 
         const auto result = dispatcher.run(code_base, state, 1u);
@@ -172,7 +172,7 @@ int main() {
                "faulting entry SQ must complete no guest progress");
         expect(result.message.find("runtime-memory") != std::string::npos &&
                    result.message.find("0x00110000") != std::string::npos &&
-                   result.message.find("0x00330000") != std::string::npos &&
+                   result.message.find("0x02000000") != std::string::npos &&
                    result.message.find("16") != std::string::npos,
                "runtime memory diagnostic must include stage, PCs/address and width");
     }
@@ -183,7 +183,7 @@ int main() {
             {addiu_r5, sq_r7_r2, jump, 0u}, code_base, data_base);
         R5900BlockDispatcher dispatcher(memory);
         R5900IrExecutionState state{};
-        state.gpr[2].low64 = 0x00330000u;
+        state.gpr[2].low64 = 0x02000000u;
         state.gpr[7] = {3u, 4u};
 
         const auto result = dispatcher.run(code_base, state, 1u);
@@ -202,7 +202,7 @@ int main() {
         R5900BlockDispatcher dispatcher(memory);
 
         R5900IrExecutionState faulting{};
-        faulting.gpr[2].low64 = 0x00330000u;
+        faulting.gpr[2].low64 = 0x02000000u;
         faulting.gpr[7] = {5u, 6u};
         const auto first = dispatcher.run(code_base, faulting, 1u);
         expect(first.reason == R5900DispatchStopReason::MemoryAccessFailure,

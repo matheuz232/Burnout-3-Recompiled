@@ -113,6 +113,34 @@ R5900IrValidationResult validate_existing_integer_write(const R5900IrInstruction
     return {};
 }
 
+R5900IrValidationResult validate_add64(const R5900IrInstruction& ir,
+                                       std::size_t index) {
+    const auto destination = validate_gpr_destination(
+        ir, index, R5900IrGprWriteMode::Low64PreserveUpper64);
+    if (!destination.ok()) {
+        return destination;
+    }
+    if (ir.inputs.size() != 2u) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "Add64 expects exactly two GPR inputs");
+    }
+    for (const auto& operand : ir.inputs) {
+        const auto validation = validate_operand(operand, index, ir.guest_pc);
+        if (!validation.ok()) {
+            return validation;
+        }
+        if (operand.kind != R5900IrOperandKind::Gpr) {
+            return failure(R5900IrValidationError::MalformedInstruction,
+                           index,
+                           ir.guest_pc,
+                           "Add64 expects exactly two GPR inputs");
+        }
+    }
+    return {};
+}
+
 R5900IrValidationResult validate_and64(const R5900IrInstruction& ir,
                                        std::size_t index) {
     const auto destination = validate_gpr_destination(
@@ -348,6 +376,76 @@ R5900IrValidationResult validate_add_f32_accumulator(const R5900IrInstruction& i
     return {};
 }
 
+R5900IrValidationResult validate_store32(const R5900IrInstruction& ir,
+                                         std::size_t index) {
+    if (ir.destination.has_value() ||
+        ir.write_mode != R5900IrGprWriteMode::None) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "Store32 must not have a destination or GPR write mode");
+    }
+    if (ir.inputs.size() != 3u ||
+        ir.inputs[0].kind != R5900IrOperandKind::Gpr ||
+        ir.inputs[1].kind != R5900IrOperandKind::Gpr ||
+        ir.inputs[2].kind != R5900IrOperandKind::Immediate) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "Store32 expects base GPR, value GPR, signed immediate");
+    }
+    if (ir.inputs[0].gpr_index >= 32u ||
+        ir.inputs[1].gpr_index >= 32u) {
+        return failure(R5900IrValidationError::InvalidRegister,
+                       index,
+                       ir.guest_pc,
+                       "Store32 GPR index out of range");
+    }
+    if (ir.inputs[2].immediate < -32768 ||
+        ir.inputs[2].immediate > 32767) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "Store32 immediate must fit signed 16 bits");
+    }
+    return {};
+}
+
+R5900IrValidationResult validate_store64(const R5900IrInstruction& ir,
+                                          std::size_t index) {
+    if (ir.destination.has_value() ||
+        ir.write_mode != R5900IrGprWriteMode::None) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "Store64 must not have a destination or GPR write mode");
+    }
+    if (ir.inputs.size() != 3u ||
+        ir.inputs[0].kind != R5900IrOperandKind::Gpr ||
+        ir.inputs[1].kind != R5900IrOperandKind::Gpr ||
+        ir.inputs[2].kind != R5900IrOperandKind::Immediate) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "Store64 expects base GPR, value GPR, signed immediate");
+    }
+    if (ir.inputs[0].gpr_index >= 32u ||
+        ir.inputs[1].gpr_index >= 32u) {
+        return failure(R5900IrValidationError::InvalidRegister,
+                       index,
+                       ir.guest_pc,
+                       "Store64 GPR index out of range");
+    }
+    if (ir.inputs[2].immediate < -32768 ||
+        ir.inputs[2].immediate > 32767) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "Store64 immediate must fit signed 16 bits");
+    }
+    return {};
+}
+
 R5900IrValidationResult validate_store128(const R5900IrInstruction& ir,
                                           std::size_t index) {
     if (ir.destination.has_value() ||
@@ -416,6 +514,9 @@ R5900IrValidationResult validate_r5900_ir_instruction(
     case R5900IrOpcode::Or64:
         return validate_existing_integer_write(instruction, instruction_index);
 
+    case R5900IrOpcode::Add64:
+        return validate_add64(instruction, instruction_index);
+
     case R5900IrOpcode::And64:
         return validate_and64(instruction, instruction_index);
 
@@ -436,6 +537,12 @@ R5900IrValidationResult validate_r5900_ir_instruction(
 
     case R5900IrOpcode::AddF32ToAccumulator:
         return validate_add_f32_accumulator(instruction, instruction_index);
+
+    case R5900IrOpcode::Store32:
+        return validate_store32(instruction, instruction_index);
+
+    case R5900IrOpcode::Store64:
+        return validate_store64(instruction, instruction_index);
 
     case R5900IrOpcode::Store128:
         return validate_store128(instruction, instruction_index);

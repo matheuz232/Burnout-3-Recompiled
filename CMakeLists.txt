@@ -100,6 +100,7 @@ if(WIN32)
 
   add_library(b3r_recompiler_dispatcher_x64 STATIC
     src/recompiler/windows/r5900_block_dispatcher.cpp
+    src/recompiler/windows/r5900_host_syscall_service.cpp
   )
   target_include_directories(b3r_recompiler_dispatcher_x64 PUBLIC src)
   target_link_libraries(b3r_recompiler_dispatcher_x64 PUBLIC
@@ -185,9 +186,17 @@ if(B3R_BUILD_TESTS)
   target_link_libraries(r5900_ir_tests PRIVATE b3r_recompiler)
   add_test(NAME r5900_ir_tests COMMAND r5900_ir_tests)
 
+  add_executable(r5900_ir_add64_tests tests/r5900_ir_add64_tests.cpp)
+  target_link_libraries(r5900_ir_add64_tests PRIVATE b3r_recompiler)
+  add_test(NAME r5900_ir_add64_tests COMMAND r5900_ir_add64_tests)
+
   add_executable(r5900_ir_store128_tests tests/r5900_ir_store128_tests.cpp)
   target_link_libraries(r5900_ir_store128_tests PRIVATE b3r_recompiler)
   add_test(NAME r5900_ir_store128_tests COMMAND r5900_ir_store128_tests)
+
+  add_executable(r5900_ir_store64_tests tests/r5900_ir_store64_tests.cpp)
+  target_link_libraries(r5900_ir_store64_tests PRIVATE b3r_recompiler)
+  add_test(NAME r5900_ir_store64_tests COMMAND r5900_ir_store64_tests)
 
   add_executable(r5900_ir_executor_tests tests/r5900_ir_executor_tests.cpp)
   target_link_libraries(r5900_ir_executor_tests PRIVATE b3r_recompiler)
@@ -198,6 +207,12 @@ if(B3R_BUILD_TESTS)
   )
   target_link_libraries(r5900_ir_store128_executor_tests PRIVATE b3r_recompiler)
   add_test(NAME r5900_ir_store128_executor_tests COMMAND r5900_ir_store128_executor_tests)
+
+  add_executable(r5900_ir_store64_executor_tests
+    tests/r5900_ir_store64_executor_tests.cpp
+  )
+  target_link_libraries(r5900_ir_store64_executor_tests PRIVATE b3r_recompiler)
+  add_test(NAME r5900_ir_store64_executor_tests COMMAND r5900_ir_store64_executor_tests)
 
   add_executable(r5900_ir_executor_cop1_tests tests/r5900_ir_executor_cop1_tests.cpp)
   target_link_libraries(r5900_ir_executor_cop1_tests PRIVATE b3r_recompiler)
@@ -314,6 +329,12 @@ if(B3R_BUILD_TESTS)
     target_link_libraries(r5900_x64_store128_windows_tests PRIVATE b3r_recompiler_x64)
     add_test(NAME r5900_x64_store128_windows_tests COMMAND r5900_x64_store128_windows_tests)
 
+    add_executable(r5900_x64_store64_windows_tests
+      tests/r5900_x64_store64_windows_tests.cpp
+    )
+    target_link_libraries(r5900_x64_store64_windows_tests PRIVATE b3r_recompiler_x64)
+    add_test(NAME r5900_x64_store64_windows_tests COMMAND r5900_x64_store64_windows_tests)
+
     add_executable(r5900_x64_direct_transfer_windows_tests
       tests/r5900_x64_direct_transfer_windows_tests.cpp
     )
@@ -388,6 +409,24 @@ if(B3R_BUILD_TESTS)
     add_test(NAME r5900_block_dispatcher_store128_windows_tests
       COMMAND r5900_block_dispatcher_store128_windows_tests)
 
+    add_executable(r5900_block_dispatcher_store64_windows_tests
+      tests/r5900_block_dispatcher_store64_windows_tests.cpp
+    )
+    target_link_libraries(r5900_block_dispatcher_store64_windows_tests PRIVATE
+      b3r_recompiler_dispatcher_x64
+    )
+    add_test(NAME r5900_block_dispatcher_store64_windows_tests
+      COMMAND r5900_block_dispatcher_store64_windows_tests)
+
+    add_executable(r5900_block_dispatcher_sd_startup_windows_tests
+      tests/r5900_block_dispatcher_sd_startup_windows_tests.cpp
+    )
+    target_link_libraries(r5900_block_dispatcher_sd_startup_windows_tests PRIVATE
+      b3r_recompiler_dispatcher_x64
+    )
+    add_test(NAME r5900_block_dispatcher_sd_startup_windows_tests
+      COMMAND r5900_block_dispatcher_sd_startup_windows_tests)
+
     add_executable(r5900_block_dispatcher_branch_likely_windows_tests
       tests/r5900_block_dispatcher_branch_likely_windows_tests.cpp
     )
@@ -413,6 +452,24 @@ if(B3R_BUILD_TESTS)
     )
     add_test(NAME r5900_block_dispatcher_bss_clear_windows_tests
       COMMAND r5900_block_dispatcher_bss_clear_windows_tests)
+
+    add_executable(r5900_host_syscall_service_windows_tests
+      tests/r5900_host_syscall_service_windows_tests.cpp
+    )
+    target_link_libraries(r5900_host_syscall_service_windows_tests PRIVATE
+      b3r_recompiler_dispatcher_x64
+    )
+    add_test(NAME r5900_host_syscall_service_windows_tests
+      COMMAND r5900_host_syscall_service_windows_tests)
+
+    add_executable(r5900_block_dispatcher_syscall_windows_tests
+      tests/r5900_block_dispatcher_syscall_windows_tests.cpp
+    )
+    target_link_libraries(r5900_block_dispatcher_syscall_windows_tests PRIVATE
+      b3r_recompiler_dispatcher_x64
+    )
+    add_test(NAME r5900_block_dispatcher_syscall_windows_tests
+      COMMAND r5900_block_dispatcher_syscall_windows_tests)
 
     add_executable(qpc_clock_windows_tests tests/qpc_clock_windows_tests.cpp)
     target_link_libraries(qpc_clock_windows_tests PRIVATE b3r_windows_runtime)
@@ -461,5 +518,49 @@ if(B3R_BUILD_TESTS)
       COMMAND crash_handler_windows_tests $<TARGET_FILE:crash_handler_probe>
     )
     set_tests_properties(crash_handler_windows_tests PROPERTIES TIMEOUT 30)
+  endif()
+endif()
+
+if(B3R_BUILD_TESTS AND WIN32)
+  add_executable(r5900_block_dispatcher_store32_windows_tests
+    tests/r5900_block_dispatcher_store32_windows_tests.cpp
+  )
+  target_link_libraries(r5900_block_dispatcher_store32_windows_tests PRIVATE
+    b3r_recompiler_dispatcher_x64
+  )
+  add_test(NAME r5900_block_dispatcher_store32_windows_tests
+    COMMAND r5900_block_dispatcher_store32_windows_tests)
+
+  add_executable(r5900_block_dispatcher_sw_startup_windows_tests
+    tests/r5900_block_dispatcher_sw_startup_windows_tests.cpp
+  )
+  target_link_libraries(r5900_block_dispatcher_sw_startup_windows_tests PRIVATE
+    b3r_recompiler_dispatcher_x64
+  )
+  add_test(NAME r5900_block_dispatcher_sw_startup_windows_tests
+    COMMAND r5900_block_dispatcher_sw_startup_windows_tests)
+endif()
+
+if(B3R_BUILD_TESTS)
+  add_executable(r5900_ir_store32_tests
+    tests/r5900_ir_store32_tests.cpp
+  )
+  target_link_libraries(r5900_ir_store32_tests PRIVATE b3r_recompiler)
+  add_test(NAME r5900_ir_store32_tests COMMAND r5900_ir_store32_tests)
+
+  add_executable(r5900_ir_store32_executor_tests
+    tests/r5900_ir_store32_executor_tests.cpp
+  )
+  target_link_libraries(r5900_ir_store32_executor_tests PRIVATE b3r_recompiler)
+  add_test(NAME r5900_ir_store32_executor_tests
+    COMMAND r5900_ir_store32_executor_tests)
+
+  if(WIN32)
+    add_executable(r5900_x64_store32_windows_tests
+      tests/r5900_x64_store32_windows_tests.cpp
+    )
+    target_link_libraries(r5900_x64_store32_windows_tests PRIVATE b3r_recompiler_x64)
+    add_test(NAME r5900_x64_store32_windows_tests
+      COMMAND r5900_x64_store32_windows_tests)
   endif()
 endif()

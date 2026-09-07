@@ -96,6 +96,19 @@ lower_r5900_instruction(const R5900DecodedInstruction& decoded, std::uint32_t gu
         return result;
     }
 
+    case R5900Instruction::Daddu: {
+        if (decoded.rd == 0u) {
+            return discarded_gpr_zero_write(decoded, guest_pc);
+        }
+
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::Add64);
+        set_low64_destination(ir, decoded.rd);
+        ir.inputs.push_back(gpr(decoded.rs));
+        ir.inputs.push_back(gpr(decoded.rt));
+        result.instructions.push_back(ir);
+        return result;
+    }
+
     case R5900Instruction::Addiu: {
         if (decoded.rt == 0u) {
             return discarded_gpr_zero_write(decoded, guest_pc);
@@ -118,6 +131,19 @@ lower_r5900_instruction(const R5900DecodedInstruction& decoded, std::uint32_t gu
         set_low64_destination(ir, decoded.rt);
         ir.inputs.push_back(gpr(decoded.rs));
         ir.inputs.push_back(immediate(static_cast<std::int64_t>(decoded.immediate)));
+        result.instructions.push_back(ir);
+        return result;
+    }
+
+    case R5900Instruction::Or: {
+        if (decoded.rd == 0u) {
+            return discarded_gpr_zero_write(decoded, guest_pc);
+        }
+
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::Or64);
+        set_low64_destination(ir, decoded.rd);
+        ir.inputs.push_back(gpr(decoded.rs));
+        ir.inputs.push_back(gpr(decoded.rt));
         result.instructions.push_back(ir);
         return result;
     }
@@ -239,6 +265,24 @@ lower_r5900_instruction(const R5900DecodedInstruction& decoded, std::uint32_t gu
         set_destination(ir, R5900IrDestinationKind::FpAccumulator);
         ir.inputs.push_back(fpr(decoded.rd));
         ir.inputs.push_back(fpr(decoded.rt));
+        result.instructions.push_back(ir);
+        return result;
+    }
+
+    case R5900Instruction::Sw: {
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::Store32);
+        ir.inputs.push_back(gpr(decoded.rs));
+        ir.inputs.push_back(gpr(decoded.rt));
+        ir.inputs.push_back(immediate(decoded.signed_immediate()));
+        result.instructions.push_back(ir);
+        return result;
+    }
+
+    case R5900Instruction::Sd: {
+        auto ir = base_instruction(decoded, guest_pc, R5900IrOpcode::Store64);
+        ir.inputs.push_back(gpr(decoded.rs));
+        ir.inputs.push_back(gpr(decoded.rt));
+        ir.inputs.push_back(immediate(decoded.signed_immediate()));
         result.instructions.push_back(ir);
         return result;
     }

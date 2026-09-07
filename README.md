@@ -4,88 +4,177 @@ Experimental native Windows x86-64 recompilation/port project for **Burnout 3: T
 
 ## Current milestone
 
-`Burnout 3 Recompiled - Test Build 0.1` bootstrap, static-analysis, and native R5900 startup-execution infrastructure through the real startup BSS-clear loop boundary, with `SQ` guest-memory writes, ordinary `BEQ`/`BNE`, branch-likely `BEQL`/`BNEL`, direct `J`/`JAL`, indirect `JR`/`JALR`, and transfer-block fast cache replay.
+`Burnout 3 Recompiled - Test Build 0.1` now has native R5900 startup execution through the first real post-`SetupHeap` 32-bit stack stores.
 
-The current source tree contains:
+The modeled startup path includes:
 
-- C++20/CMake project structure;
-- native Win32 window bootstrap;
-- structured logging and Windows minidump plumbing;
-- QueryPerformanceCounter clock and 120 Hz Windows frame pacer;
-- validated PS2 ELF32/MIPS structural loading;
-- PT_LOAD-backed guest memory mapping with little-endian typed 8/16/32/64/128-bit access and atomic full-range 128-bit writes;
-- an R5900 decoder with the narrow EE/MMI/COP1 startup subset required by the Burnout 3 entry path, including `SYNC`, `MTSAH`, `MTHI1`, `MTLO1`, `PADDUW`, `MTC1`, `CTC1`, `ADDA.S`, ordinary `BEQ`/`BNE`, scalar `AND`, and `SQ`;
-- provenance-carrying R5900 IR with lowering for the startup execution subset, including NOP/ADDU/ADDIU/ORI/ANDI/LUI/AND, special HI/LO/SA writes, PADDUW, COP1 moves/accumulator add, SYNC semantics, and `Store128` lowering for `SQ`;
-- block-level R5900 IR with typed `BranchEqual64`, `BranchEqualLikely64`, `BranchNotEqualLikely64`, `DirectJump`, `DirectCall`, `IndirectJump`, and `IndirectCall` terminators plus one explicit architectural delay slot; indirect calls carry an explicit link GPR;
-- deterministic R5900 IR reference execution over all 32 128-bit EE GPRs plus HI/LO/HI1/LO1, SA, 32 raw FPRs, FCR31, FP accumulator state, and an opaque guest-memory callback bridge for `Store128`;
-- a Windows x86-64 machine-code backend for the startup subset, with executable-page ownership and W^X allocation/protection;
-- native x86-64 control-transfer emission for ordinary `BEQ`/`BNE`, branch-likely `BEQL`/`BNEL`, direct `J`/`JAL`, and indirect `JR`/`JALR`; `BEQL`/`BNEL` evaluate the low64 predicate before the slot, execute the delay exactly once only when taken, and branch around the complete emitted delay path when not taken; `BNE` reuses the equality terminator with swapped runtime destinations; indirect transfers snapshot the low 32-bit target before link/delay execution, `JALR` writes zero-extended `PC+8` to the decoded link GPR while preserving its high64 half, and the `rd == rs` / `rd == 0` cases are explicitly supported;
-- native x86-64 `Store128` emission that uses a Win64 ABI-safe helper call, 32-bit EE effective-address wrap, 16-byte alignment-down semantics, and complete low/high 64-bit source forwarding;
-- a Windows R5900 native block dispatcher that analyzes guest blocks, lowers/compiles them on demand, executes them through the x86-64 backend, consumes the JIT-returned `next_pc`, supports ordinary `BEQ`/`BNE`, branch-likely `BEQL`/`BNEL`, direct `J`/`JAL`, and indirect `JR`/`JALR`, applies a block budget, caches native blocks by guest PC, rejects stale cache entries after guest-code changes, bridges mutable guest memory for body `SQ` operations, and fast-replays unchanged cached transfer blocks after direct guest-word verification without repeating analysis/lowering;
-- deterministic runtime `MemoryAccessFailure` propagation for guest stores, with completed-prefix accounting and cache retention when execution fails because the runtime address is unmapped;
-- cache fingerprints that cover straight-line body words plus supported `BEQ`/`BNE`/`BEQL`/`BNEL`/`J`/`JAL`/`JR`/`JALR` terminator and delay-slot words; runtime branch predicates and indirect target values are deliberately excluded from the key so cached conditional/indirect blocks can change runtime outcomes without recompilation;
-- differential Windows tests comparing reference and native x86-64 execution for integer/MMI/COP1 state, ordinary `BEQ`, branch-likely `BEQL`/`BNEL`, direct `J`/`JAL`, indirect `JR`/`JALR`, likely-branch annulment, target-snapshot/link-before-delay ordering, `rd == rs`, `rd == 0`, link high64 preservation, source-mutating delay slots, and `Store128` success/failure semantics; dispatcher tests additionally cover likely taken/not-taken behavior, cache reuse across runtime predicate changes, branch/delay-word invalidation, selected-guest-word accounting, and `SQ` delay rejection;
-- a synthetic startup-shaped dispatcher test that completes **7 native guest blocks / 96 guest instructions**, covers one taken and one not-taken `BEQ`, executes `SQ` at `0x00100160`, direct `J`/`JAL`, `JR` with its delay slot, aliasing `JALR r5,r5` with link-visible delay semantics, reaches the indirect target at `0x001001c0`, executes not-taken `BNE r0,r0` at `0x001001c4` plus its NOP delay, and then stops at deterministic analysis failure `0x001001cc` because the synthetic executable fixture ends;
-- an optional external-ELF validation mode for the startup dispatcher test, allowing a legally supplied `SLUS_210.50` to execute the full real BSS-clear loop locally and prove the exact `SetupThread` syscall boundary without committing or uploading game data;
-- conservative basic-block and reachable-CFG analysis;
-- deterministic analysis reports;
-- `Burnout3Analyze`, a console tool for analyzing an externally supplied PS2 ELF without executing guest code;
-- portable/unit tests plus Windows-specific integration tests;
-- Windows CI pinned to Visual Studio 2022.
+```text
+SetupThread @ 0x001001c8
+SetupHeap   @ 0x001001e4
+JAL         0x00115108
+ADDIU       sp,sp,-16
+SD          ra,0(sp)
+JAL         0x00114ed0
+ADDIU       sp,sp,-0x50
+ADDIU       v0,zero,1
+SD          ra,0x40(sp)
+DADDU       a0,sp,zero
+SW          v0,0x28(sp)
+```
 
-Validated native control transfers: `BEQ`, `BNE`, `BEQL`, `BNEL`, `J`, `JAL`, `JR`, `JALR`. `BEQL`/`BNEL` implement architectural branch-likely annulment: their delay slot executes only on the taken path. `BLEZL`/`BGTZL` and REGIMM likely/link-likely variants remain unsupported. External legal-ELF validation of this expanded path is pending. The game does not boot yet.
+The project still does **not** boot the game.
 
-The startup execution state models all 32 EE GPRs as 128-bit values split into low/high 64-bit halves and additionally models HI/LO/HI1/LO1, SA, raw 32-bit FPR values, FCR31, and the floating-point accumulator. Current integer write semantics preserve the modeled upper halves where required and GPR zero is normalized explicitly.
+A lawful out-of-repository diagnostic of the user-supplied ELF shows that real execution continues through additional supported `SW` stores and a `JAL`, then reaches the next current host boundary:
 
-The Windows x86-64 backend emits callable native machine code for the current startup subset and is differentially checked against the reference executor. PADDUW uses alias-safe source capture and four-lane unsigned saturating addition; COP1 `MTC1`/`CTC1` preserve raw 32-bit payloads and the current `ADDA.S` implementation operates on the modeled raw single-precision values under the explicit v0 floating-point contract. `Store128` is emitted through a narrow C++ helper rather than embedding `Ps2MemoryMap` internals in generated code. The helper path uses a Win64-compliant call frame/shadow space and reports memory faults through the shared execution context. Executable memory is allocated writable, populated, changed to execute/read, and instruction-cache-flushed before execution.
+```text
+0x0010be24  SYSCALL   selector 0x40 in v1
+```
 
-`R5900BlockDispatcher` supports ordinary `BEQ`/`BNE`, branch-likely `BEQL`/`BNEL`, direct `J`/`JAL`, and indirect `JR`/`JALR` as native block terminators plus `SQ` in straight-line block bodies. The block body, supported terminator, and architectural delay slot form one cache candidate. `BEQ` and `BNE` evaluate their low64 GPR predicates before the slot and always execute one architectural delay instruction; `BNE` reuses `BranchEqual64` with the equality and inequality destinations swapped. `BEQL` and `BNEL` also decide the low64 predicate before the slot, but implement architectural branch-likely annulment: the taken path executes the delay exactly once while the not-taken path bypasses all delay code and returns `PC+8`. `J` returns its fixed direct target; `JAL` writes `PC+8` to `GPR31.low64` before the slot while preserving the upper 64 bits. `JR`/`JALR` snapshot the low 32-bit runtime target before the slot, and `JALR` writes its decoded link GPR before the delay slot without disturbing that register's high64 half; `rd == rs` therefore jumps using the old target, while `rd == 0` suppresses the link write. `SQ` uses the low 32 bits of the base GPR plus the signed 16-bit immediate with 32-bit wrap, then silently aligns the address down to 16 bytes before writing the full 128-bit source GPR. `SQ` in dispatcher-managed `BEQ`/`BNE`/`BEQL`/`BNEL`, `J`/`JAL`, or `JR`/`JALR` delay slots remains deliberately outside v0. `BLEZL`, `BGTZL`, REGIMM likely/link-likely variants, guest loads, other guest stores, and other unsupported control flow still stop conservatively.
+That observation is **DIAGNOSTIC_VALIDATED** only. It is not a claim that this expanded path has been executed end-to-end by the external Windows-native ELF harness.
 
-A legally supplied Burnout 3 ELF was inspected out-of-repository. Its entry point is `0x00100008`. Static inspection identifies the original 74-instruction startup body before the first `BEQ` at `0x00100130`; the first branch is taken to `0x0010014C` with a NOP delay slot. The continuation reaches `SQ` at `0x00100160` and enters the real BSS-clear loop, advancing `r2` by 16 bytes from `0x004e2680` to `0x01ecea00`. That is 1,698,872 `SQ` iterations. After the loop, startup prepares the EE kernel call arguments and reaches `SYSCALL` at `0x001001c8` with `v1=0x3c` (`SetupThread`); the next startup syscall observed statically is `v1=0x3d` (`SetupHeap`) at `0x001001e4`. This real-file inspection is **not** claimed as native external execution: the Windows external-ELF dispatcher path is compiled and CI-tested without game data, but the supplied ELF has not yet been run through that Windows executable in this environment.
+## Current runtime/recompiler capabilities
 
-The game still does **not** boot. The real BSS-clear loop is now represented by a dedicated native-dispatcher fixture and transfer-block fast cache replay, while the external harness is prepared to validate the same loop through `SetupThread` at `0x001001c8`. Broader guest-memory loads/stores, additional control flow including `BLEZL`/`BGTZL` and REGIMM likely/link-likely variants, syscall/HLE integration, graphics, audio, input, menus, and gameplay remain unimplemented. The `R5900 BSS clear loop v0` milestone is **CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION** with 52/52 Windows tests; the legally supplied external ELF has not been run through this expanded Windows native path in this environment.
+- C++20 / CMake / Visual Studio 2022 Windows x64 project;
+- native Win32 bootstrap, logging, crash/minidump support and QPC-based 120 Hz pacing infrastructure;
+- PS2 ELF32 little-endian MIPS loading and conservative control-flow analysis;
+- 32 MiB EE main RAM backing for `0x00000000..0x01ffffff`;
+- typed little-endian 8/16/32/64/128-bit guest-memory access;
+- incremental R5900 decoder/IR/reference-executor/x64 backend for the startup subset;
+- `SQ -> Store128`, `SD -> Store64`, `SW -> Store32`;
+- native/control-flow support for the currently required `BEQ/BNE`, `BEQL/BNEL`, `J/JAL`, `JR/JALR` and architectural delay slots;
+- cached native blocks with exact guest-word validation and fast replay;
+- boundary-prefix protection so a later transfer cannot execute past an earlier unsupported/faulting instruction;
+- injectable host-syscall boundary outside generated x64;
+- `SetupThread` (`0x3c`) and `SetupHeap` (`0x3d`) HLE;
+- exact guest-PC/address/width memory-fault provenance.
 
-## Legal data policy
+## `SW / Store32` contract
 
-No proprietary Burnout 3 executable, assets, audio, textures, symbols, dumps, or game data are included in this repository. Game-data analysis and external execution validation use files supplied externally by the owner from a legally obtained copy. Do not commit those files.
+For `SW rt, imm(rs)`:
+
+```text
+base32  = low32(GPR[rs].low64)
+offset  = sign_extend16(imm)
+address = uint32(base32 + offset)
+value   = low32(GPR[rt].low64)
+```
+
+Properties:
+
+- address arithmetic wraps modulo 2^32;
+- the address must be **4-byte aligned**;
+- there is no alignment-down;
+- exactly the source low32 is written;
+- source high bits are ignored;
+- CPU register state is not modified by the store;
+- failed stores stop later guest instructions;
+- failure reports the exact guest PC/effective address with width `4`.
+
+The dispatcher wires `write32` in both cold/exact-cache and fast-cache execution contexts. Faulting native code remains cacheable/reusable; changing guest register state from a bad address to a good one does not force recompilation.
+
+## Startup-shaped SW acceptance
+
+Synthetic/native CI crosses the real first-SW PC using only public ISA encodings and synthetic data:
+
+```text
+0x00114ed0  ADDIU sp,sp,-0x50
+0x00114ed4  ADDIU v0,zero,1
+0x00114ed8  SD    ra,0x40(sp)
+0x00114edc  DADDU a0,sp,zero
+0x00114ee0  SW    v0,0x28(sp)
+```
+
+Acceptance state:
+
+```text
+initial sp                0x01fffff0
+initial ra                0x00115118
+sp after frame allocation 0x01ffffa0
+v0.low64                  0x0000000000000001
+a0.low64                  0x0000000001ffffa0
+mem64[0x01ffffe0]         0x0000000000115118
+mem32[0x01ffffc8]         0x00000001
+```
+
+The test also verifies adjacent 32-bit guards remain unchanged and separately proves a cached `SW + J + NOP` block fast-replays without recompilation.
+
+## Validation status
+
+Implementation/test head before this documentation update:
+
+```text
+491385fc6e12f7f7d1189948daafe5e89d0bfbb2
+```
+
+Windows CI run **#747** (`34073509755`) on Windows Server 2022 / Visual Studio 2022 / MSVC 19.44 passed:
+
+- **65/65 CTest**;
+- `r5900_ir_store32_tests`;
+- `r5900_ir_store32_executor_tests`;
+- `r5900_x64_store32_windows_tests`;
+- `r5900_block_dispatcher_store32_windows_tests`;
+- `r5900_block_dispatcher_sw_startup_windows_tests`;
+- all Store64/Store128 and legacy regression gates;
+- 240-sample frame-pacing telemetry with 8.333 ms mean and no sample above 9/10/12 ms;
+- one-second pacing probe: 120/120 frames at 120 Hz, 8.333 ms mean;
+- analyzer package validation;
+- pacing-probe package validation.
+
+Hosted-runner timing is smoke evidence only; it is not physical-desktop 120 FPS certification.
+
+## Lawful external ELF evidence
+
+No proprietary Burnout 3 executable, raw instruction words, assets, audio, textures or game data are committed to this repository.
+
+The legal ELF remains outside the repository. Starting from the established state at `0x00114ed0`, the diagnostic confirms the supported model produces:
+
+```text
+sp.low64                0x01ffffa0
+v0.low64                0x0000000000000001
+a0.low64                0x0000000001ffffa0
+mem64[0x01ffffe0]       0x0000000000115118
+mem32[0x01ffffc8]       0x00000001
+```
+
+Real execution then continues through more `SW` stores and a direct call. At the next current host boundary:
+
+```text
+PC          0x0010be24
+instruction SYSCALL
+selector    0x40 in v1
+```
+
+Relevant derived state at that boundary includes:
+
+```text
+sp.low64  0x01ffffa0
+v0.low64  0x0000000000000001
+a0.low64  0x0000000001ffffa0
+ra.low64  0x0000000000114ef4
+v1.low64  0x0000000000000040
+```
+
+The current host syscall service implements selectors `0x3c` (`SetupThread`) and `0x3d` (`SetupHeap`); selector `0x40` is therefore the next concrete startup/HLE boundary to design. No semantics are assumed yet.
+
+## External startup validation harness
+
+The optional Windows startup dispatcher test can consume a user-supplied ELF locally:
+
+```powershell
+.\build\Release\r5900_block_dispatcher_startup_windows_tests.exe "D:\Games\Burnout3\SLUS_210.50"
+```
+
+Its historical external mode validates the real BSS-clear path through `SetupThread`. The newer `SetupHeap -> SD -> DADDU -> SW` path is currently covered by synthetic/native CI plus lawful local diagnosis, not by a completed external Windows-native run.
 
 ## Analyze an external PS2 ELF
 
 After a Release build:
 
 ```powershell
-Burnout3Analyze.exe --elf "D:\\Games\\Burnout3\\SLUS_210.50" --output "burnout3-analysis.txt"
+Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --output "burnout3-analysis.txt"
 ```
 
-To write the report directly to the console:
-
-```powershell
-Burnout3Analyze.exe --elf "D:\\Games\\Burnout3\\SLUS_210.50"
-```
-
-The reachable-CFG worklist is bounded. The default is 4096 blocks and can be overridden explicitly:
-
-```powershell
-Burnout3Analyze.exe --elf "D:\\Games\\Burnout3\\SLUS_210.50" --max-blocks 8192
-```
-
-This tool performs static analysis only. It does not execute PS2 instructions, emulate a PS2, infer register-indirect targets, or invoke the native x86-64 recompilation backend. See `docs/ANALYSIS_TOOL.md` for the output contract and current limitations.
-
-## Validate startup and the BSS clear loop against an external ELF
-
-The Windows startup dispatcher test can optionally consume a user-supplied ELF. The file is read locally at runtime and is never required by CI:
-
-```powershell
-.\build\Release\r5900_block_dispatcher_startup_windows_tests.exe "D:\\Games\\Burnout3\\SLUS_210.50"
-```
-
-A successful real-file run must print a line of this form:
-
-```text
-REAL_ELF_BSS_CLEAR_VALIDATED begin=0x004e2680 end=0x01ecea00 stop=0x001001c8 iterations=1698872 blocks=3397748 instructions=13591071 fast_cache_hits=3397742
-```
-
-The harness now requires the exact real startup path through the BSS clear: 1,698,872 aligned 16-byte `SQ` iterations over `0x004e2680..0x01ecea00`, 3,397,748 native blocks, 13,591,071 selected guest words, and 3,397,742 fast-cache replays before the dispatcher stops at the `SetupThread` syscall (`v1=0x3c`) at `0x001001c8`. It also verifies the startup syscall argument registers and zero recompilations. Until that command has been executed successfully against the supplied ELF on Windows x64, the milestone remains **CI_VALIDATED / READY_FOR_EXTERNAL_VALIDATION**, not externally native-validated.
+The analyzer performs static analysis only. It does not emulate a PS2 or execute the game.
 
 ## Build on Windows 10/11 x64
 
@@ -95,15 +184,7 @@ Requirements:
 - CMake 3.25+;
 - Windows 10/11 SDK.
 
-From a Developer PowerShell:
-
-```powershell
-cmake --preset vs2022-debug
-cmake --build --preset vs2022-debug
-ctest --preset vs2022-debug
-```
-
-Release:
+Release example:
 
 ```powershell
 cmake --preset vs2022-release
@@ -111,34 +192,12 @@ cmake --build --preset vs2022-release
 ctest --preset vs2022-release
 ```
 
-The Visual Studio multi-config executables are normally under the selected configuration directory, including:
-
-```text
-Burnout3Recompiled_Test.exe
-Burnout3Analyze.exe
-```
-
-## Runtime bootstrap options
-
-`Burnout3Recompiled_Test.exe` currently accepts:
-
-```text
---debug
---verbose
---windowed
---fullscreen
---game-data <path>
---log-level <level>
---disable-audio
---frame-stats
-```
-
-Some flags are accepted before their corresponding subsystem exists. Missing functionality remains documented rather than silently simulated.
-
 ## 120 FPS policy
 
-The target presentation cadence is exactly **120.000 FPS**, corresponding to **8.333333 ms** per frame. The current bootstrap validates schedule math independently from the Windows waiting mechanism. The Windows backend uses QPC, a waitable timer, and a short spin phase to avoid relying exclusively on `Sleep()`.
+The target presentation cadence is exactly **120.000 FPS** (`8.333333 ms` per frame). Current CI validates pacing infrastructure only. The original game's simulation rate is not assumed; simulation timing will be chosen from runtime evidence.
 
-This is only the presentation/frame-pacing foundation. The original game's simulation rate is **not assumed** to be 30 or 60 Hz; simulation timing will be chosen only after binary/runtime evidence.
+## Legal data policy
 
-See `docs/PROGRESS.md` for the authoritative status.
+Only public ISA encodings and synthetic fixtures belong in the repository. Game-data analysis and external validation use files supplied externally by the owner from a legally obtained copy. Do not commit those files.
+
+See `docs/PROGRESS.md` for the authoritative engineering snapshot.
