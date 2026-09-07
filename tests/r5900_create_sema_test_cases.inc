@@ -132,4 +132,53 @@
                    sema_memory.read_u32(descriptor + 16u).value_or(0u) == 0x20u &&
                    sema_memory.read_u32(descriptor + 20u).value_or(0u) == 0x12345678u,
                "CreateSema must not mutate the guest descriptor");
+
+        const auto second_before = sema_state;
+        const auto second_result = sema_service.handle(
+            R5900HostSyscallRequest{0x0010be24u, 0x0000000cu},
+            sema_state,
+            sema_memory);
+        expect(second_result.status == R5900HostSyscallStatus::Handled,
+               "second valid CreateSema descriptor must be handled");
+        expect(sema_state.gpr[2].low64 == 2u,
+               "second CreateSema must return deterministic id 2 in v0.low64");
+        expect(sema_state.gpr[2].high64 == second_before.gpr[2].high64,
+               "second CreateSema must preserve v0.high64");
+
+        expect(sema_memory.write_u32(descriptor + 4u, 0u),
+               "CreateSema invalid max_count write must succeed");
+        const auto invalid_max_before = sema_state;
+        const auto invalid_max = sema_service.handle(
+            R5900HostSyscallRequest{0x0010be24u, 0x0000000cu},
+            sema_state,
+            sema_memory);
+        expect(invalid_max.status == R5900HostSyscallStatus::Fault,
+               "CreateSema max_count <= 0 must fault");
+        expect_states_equal(invalid_max_before, sema_state,
+                            "CreateSema invalid max_count must preserve guest state");
+
+        expect(sema_memory.write_u32(descriptor + 4u, 2u),
+               "CreateSema restored max_count write must succeed");
+        expect(sema_memory.write_u32(descriptor + 8u, 3u),
+               "CreateSema invalid init_count write must succeed");
+        const auto invalid_init_before = sema_state;
+        const auto invalid_init = sema_service.handle(
+            R5900HostSyscallRequest{0x0010be24u, 0x0000000cu},
+            sema_state,
+            sema_memory);
+        expect(invalid_init.status == R5900HostSyscallStatus::Fault,
+               "CreateSema init_count > max_count must fault");
+        expect_states_equal(invalid_init_before, sema_state,
+                            "CreateSema invalid init_count must preserve guest state");
+
+        expect(sema_memory.write_u32(descriptor + 8u, 1u),
+               "CreateSema restored init_count write must succeed");
+        const auto after_faults = sema_service.handle(
+            R5900HostSyscallRequest{0x0010be24u, 0x0000000cu},
+            sema_state,
+            sema_memory);
+        expect(after_faults.status == R5900HostSyscallStatus::Handled,
+               "valid CreateSema after faults must still be handled");
+        expect(sema_state.gpr[2].low64 == 3u,
+               "CreateSema faults must not consume deterministic ids");
     }
