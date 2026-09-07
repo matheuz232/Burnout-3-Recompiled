@@ -42,7 +42,10 @@ const char* instruction_class_name(R5900InstructionClass instruction_class) noex
     return "Unknown";
 }
 
-bool is_discovered_boundary(R5900DispatchStopReason reason) noexcept;
+bool is_discovered_boundary(R5900DispatchStopReason reason) noexcept {
+    return reason == R5900DispatchStopReason::UnsupportedInstruction ||
+           reason == R5900DispatchStopReason::UnsupportedSyscall;
+}
 
 std::string format_boundary_probe(
     b3r::runtime::Ps2MemoryMap& memory,
@@ -93,18 +96,19 @@ void validate_external_startup(const char* path) {
     R5900BlockDispatcher dispatcher(*built.memory, options);
     R5900IrExecutionState state;
     const auto result = dispatcher.run(parsed.image->entry_point(), state, 4000000u);
-    std::cout << "EXTERNAL_STARTUP next_pc=0x" << std::hex << result.next_pc << std::dec
-              << " blocks=" << result.blocks_executed
-              << " instructions=" << result.instructions_executed
-              << " syscalls=" << result.syscalls_handled
+
+    std::cout << format_boundary_probe(*built.memory, result)
               << " semaphores=" << service.semaphores().size()
               << " diagnostic=" << result.message << '\n';
+
     expect(result.next_pc != 0x00114f08u,
            "external startup must execute past the observed post-CreateSema LD boundary");
     expect(result.syscalls_handled == 4u && service.semaphores().size() == 2u &&
                service.setup_thread_context().has_value() &&
                service.setup_heap_context().has_value(),
            "external startup must cross SetupThread, SetupHeap and two CreateSema calls");
+    expect(is_discovered_boundary(result.reason),
+           "external startup must stop at a controlled unsupported instruction or syscall boundary");
     for (const auto& semaphore : service.semaphores()) {
         expect(semaphore.count == 1u && semaphore.max_count == 1u && semaphore.attr == 0u,
                "external semaphore parameters must match the diagnosed startup");
