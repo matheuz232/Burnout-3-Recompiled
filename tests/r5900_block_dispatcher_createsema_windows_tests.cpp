@@ -42,6 +42,8 @@ const char* instruction_class_name(R5900InstructionClass instruction_class) noex
     return "Unknown";
 }
 
+bool is_discovered_boundary(R5900DispatchStopReason reason) noexcept;
+
 std::string format_boundary_probe(
     b3r::runtime::Ps2MemoryMap& memory,
     const R5900DispatchResult& result) {
@@ -117,6 +119,17 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
     expect(argc == 1, "usage: r5900_block_dispatcher_createsema_windows_tests [external ELF]");
+
+    expect(is_discovered_boundary(R5900DispatchStopReason::UnsupportedInstruction),
+           "unsupported instruction must be a discovered boundary");
+    expect(is_discovered_boundary(R5900DispatchStopReason::UnsupportedSyscall),
+           "unsupported syscall must be a discovered boundary");
+    expect(!is_discovered_boundary(R5900DispatchStopReason::CompileFailure) &&
+               !is_discovered_boundary(R5900DispatchStopReason::AnalysisFailure) &&
+               !is_discovered_boundary(R5900DispatchStopReason::MemoryAccessFailure) &&
+               !is_discovered_boundary(R5900DispatchStopReason::HostSyscallFailure),
+           "unexpected execution failures must not be accepted as discovered boundaries");
+
     // Public ISA encodings and synthetic data only; no game payload.
     constexpr std::uint32_t entry = 0x00114ed0u;
     constexpr std::uint32_t wrapper = 0x0010be20u;
