@@ -47,11 +47,16 @@ Those operations remain explicit unsupported boundaries.
 
 ## Execution plan
 
-- [ ] Add focused service and synthetic native startup RED tests.
-- [ ] Implement bounded CreateSema metadata and validation; pass service GREEN.
+- [x] Add focused service RED tests and synthetic native startup regression tests.
+- [x] Implement bounded CreateSema metadata and validation; pass service GREEN.
 - [ ] Verify native resume, returned-ID store, exact syscall fault PC, and cache reuse.
-- [ ] Diagnose the next external ELF boundary using the reference model only.
+- [x] Diagnose the next external code-prefix boundary using the reference model only.
 - [ ] Update progress and validate the final working branch with Windows CI.
+
+Local verification: 38 portable tests plus the existing host-syscall regression
+pass. The Windows checks remain pending: automatic approval review denied public
+GitHub publishing without explicit user authorization. The branch must be pushed
+and its Windows checks inspected after authorization; no CI validation is claimed.
 
 No proprietary data is committed. Integration/main remain unchanged; this branch
 can be reviewed independently. No boot, playability, or game 120 FPS claim.

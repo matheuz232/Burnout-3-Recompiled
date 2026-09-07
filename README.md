@@ -4,7 +4,7 @@ Experimental native Windows x86-64 recompilation/port project for **Burnout 3: T
 
 ## Current milestone
 
-`Burnout 3 Recompiled - Test Build 0.1` now has native R5900 startup execution through the first real post-`SetupHeap` 32-bit stack stores.
+`Burnout 3 Recompiled - Test Build 0.1` includes `CreateSema` HLE after the post-`SetupHeap` stack stores, with a synthetic native continuation test and an optional external Windows startup validator.
 
 The modeled startup path includes:
 
@@ -24,13 +24,17 @@ SW          v0,0x28(sp)
 
 The project still does **not** boot the game.
 
-A lawful out-of-repository diagnostic of the user-supplied ELF shows that real execution continues through additional supported `SW` stores and a `JAL`, then reaches the next current host boundary:
+The current reference diagnostic passes two `CreateSema` calls (selector `0x40`)
+and reaches the next unsupported instruction, `LD @ 0x00114f08`. This used the
+available prefix of the external file and a modeled starting state; the local
+file is truncated and cannot pass the production ELF loader. It is **not**
+end-to-end Windows-native execution of the game.
 
-```text
-0x0010be24  SYSCALL   selector 0x40 in v1
-```
-
-That observation is **DIAGNOSTIC_VALIDATED** only. It is not a claim that this expanded path has been executed end-to-end by the external Windows-native ELF harness.
+`CreateSema` supports zero attributes, copies the guest descriptor into a bounded
+host table, and returns a distinct positive ID in `v0`. Invalid descriptors/counts
+and capacity exhaustion stop with a host fault. Waiting, signaling, deletion,
+nonzero attributes, and accurate guest kernel error returns remain outside v0.
+See [CreateSema progress and validation](docs/PROGRESS.md#r5900-createsema-hle-v0).
 
 ## Current runtime/recompiler capabilities
 
@@ -45,7 +49,7 @@ That observation is **DIAGNOSTIC_VALIDATED** only. It is not a claim that this e
 - cached native blocks with exact guest-word validation and fast replay;
 - boundary-prefix protection so a later transfer cannot execute past an earlier unsupported/faulting instruction;
 - injectable host-syscall boundary outside generated x64;
-- `SetupThread` (`0x3c`) and `SetupHeap` (`0x3d`) HLE;
+- `SetupThread` (`0x3c`), `SetupHeap` (`0x3d`), and bounded `CreateSema` (`0x40`) HLE;
 - exact guest-PC/address/width memory-fault provenance.
 
 ## `SW / Store32` contract

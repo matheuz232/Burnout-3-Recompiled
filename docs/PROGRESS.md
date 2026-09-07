@@ -1,6 +1,6 @@
 # Progress
 
-Status date: 2026-09-06
+Status date: 2026-09-07
 
 Completion rule: `implemented -> compiled -> executed/tested -> validated`.
 
@@ -31,13 +31,102 @@ This file is the active engineering snapshot. Detailed history remains in Git.
 | `SetupThread` HLE `0x3c` | CI_VALIDATED | Explicit-stack mode |
 | `SetupHeap` HLE `0x3d` | CI_VALIDATED | Automatic-size `-1` convention resolved from thread stack base |
 | Startup through `SW @ 0x00114ee0` | CI_VALIDATED | Synthetic/native startup-shaped path executes `ADDIU/ADDIU/SD/DADDU/SW` and validates stack memory/state |
-| Lawful next-boundary diagnosis | DIAGNOSTIC_VALIDATED | Legal ELF diagnosis continues beyond the first SW and reaches `SYSCALL @ 0x0010be24`, selector `0x40` in `v1`; not externally Windows-native validated |
-| Static/binary recompiler | IN_PROGRESS | Next concrete startup/HLE boundary: syscall selector `0x40 @ 0x0010be24`; semantics still need design/diagnosis |
+| Lawful next-boundary diagnosis | PARTIAL_INPUT_REFERENCE_DIAGNOSTIC | Available external code prefix and modeled state cross two CreateSema calls and stop at `LD @ 0x00114f08`; the local ELF is truncated, so this is not production-loader/native validation |
+| `CreateSema` HLE `0x40` | LOCAL_TESTED / WINDOWS_GATE_BLOCKED | Bounded, per-service semaphore IDs; copied parameters; transactional validation; native continuation/cache and optional external gates added |
+| Static/binary recompiler | IN_PROGRESS | Next concrete startup boundary: `LD @ 0x00114f08`, requiring guest Load64 support |
 | Graphics / GS / VU | TODO | No game rendering path yet |
 | IOP / SPU2 / audio | TODO | No game audio path yet |
 | Game input | TODO | Not implemented |
 | Game initialization | TODO | Not reached |
 | Menu / gameplay | TODO | Game does not boot or reach gameplay |
+
+## R5900 CreateSema HLE v0
+
+Branch `feature/r5900-createsema-v0` starts from the verified integration snapshot
+`ea46523f077d0dd1d61a0d7d71e586285679013e`. The design and checklist are in
+[the CreateSema spec](superpowers/specs/2026-09-07-r5900-createsema-v0-design.md).
+
+The public [PS2SDK selector table](https://github.com/ps2dev/ps2sdk/blob/master/ee/kernel/include/syscallnr.h)
+identifies selector `0x40`; its [EE ABI header](https://github.com/ps2dev/ps2sdk/blob/master/ee/kernel/include/kernel.h)
+defines the descriptor layout. The service reads the 24-byte little-endian
+structure through low32(a0), validates its complete range and four-byte alignment,
+then copies max_count, init_count, attr and option into host-owned metadata.
+Input count/wait_threads are status fields, not initial state. New objects start
+with count=init_count and no waiting threads. Only v0.low64 changes on success.
+
+IDs start at 1 for each service and increase independently of guest descriptor
+addresses and native cache entries. The 256-object capacity is an explicit project
+v0 limit. Null/unbacked/misaligned descriptors, invalid signed counts and capacity
+exhaustion return transactional host Fault; nonzero attributes return Unsupported.
+This is creation support, not a complete semaphore scheduler or faithful emulation
+of the kernel's negative error returns. SetupThread/SetupHeap state and guest RAM
+are preserved; another SetupThread does not reset the semaphore namespace.
+
+The host service is now a portable CMake library shared by Windows dispatch and
+focused host tests. The game runtime remains Windows x64.
+
+### Verification
+
+- Service RED: commit `a1d95e7627c3df1c4a4f05dc49939cdf9f21c284` compiled and failed
+  at `CreateSema must handle the observed startup descriptor` on the old service.
+  Additional metadata assertions then failed compilation for the missing API.
+- Implementation: `e3b55879989c189fc6014128d5e0416a2a8f6c3a`.
+- Local GCC/CMake Release: 38/38 portable tests passed after restoring execute
+  permissions on two generated test binaries; neither had failed an assertion.
+  The existing host-syscall regression also passed against the new shared service.
+- Service coverage includes full RAM/register preservation, copied parameters,
+  unique IDs, count boundaries, exact RAM-end fit, invalid ranges/alignment,
+  nonzero attributes, malformed syscall requests, exhaustion and service isolation.
+- Native synthetic acceptance selects 12 guest words / 4 blocks / 1 host call,
+  returns through JR, stores the new ID through guest SW, and checks a repeated run
+  gets a new ID with 4 cache hits (2 fast hits) and no recompilation. A bad descriptor
+  must stop at the exact syscall PC; the null-service trap contract is retained.
+- Windows CI is **NOT RUN for these commits**. Automatic approval review rejected
+  the push twice: first because the destination was unverified, then because
+  publishing to this public repository requires explicit user authorization.
+  Read-only GitHub verification confirmed repository `matheuz232/Burnout-3-Recompiled`
+  (ID 1353141757), matching origin, with authenticated admin/push permissions.
+  The second rejection remains binding. No alternate publishing path was used.
+  After authorization, push this feature branch and require both new tests and
+  the complete Windows, pacing and package gates to pass before marking CI_VALIDATED.
+
+### External input and next boundary
+
+The available local ELF copy is **3,589,632 bytes**, while its load-segment header
+requires bytes through **4,073,344**. The production loader correctly rejects it.
+No loader validation was relaxed, and no missing bytes were invented in the game
+file. A scratch-only diagnostic evaluated available instruction words with the
+production reference IR and HLE against a zero-initialized model, starting from the
+previously derived `PC=0x00114ed0`, `sp=0x01fffff0`, `ra=0x00115118` state. Every
+executed code address was checked against bytes actually present in the input.
+
+Derived results:
+
+| Observation | Result |
+|---|---|
+| First CreateSema descriptor | `0x01ffffa0`, ID 1, initial/max count 1/1 |
+| Second CreateSema descriptor | `0x01ffffc0`, ID 2, initial/max count 1/1 |
+| Attributes / option | 0 / 0 for both |
+| Next unsupported instruction | `LD @ 0x00114f08` |
+| Modeled SP / RA at that boundary | `0x01ffffa0` / `0x00114f04` |
+
+This is a **partial-input reference diagnostic**, not full external execution.
+No proprietary bytes or external-file artifacts are committed.
+
+### Optional Windows validation with a complete external ELF
+
+The new native test has an opt-in external mode:
+
+```powershell
+.\build\Release\r5900_block_dispatcher_createsema_windows_tests.exe C:\Games\Burnout3\SLUS_210.50
+```
+
+It uses the production loader and dispatcher from the ELF entry point, with a
+4,000,000-block budget and real host service. It checks SetupThread, SetupHeap,
+two CreateSema objects and the expected LD boundary, and prints only counters,
+PC and diagnostics. CI supplies no game file and runs the synthetic mode only.
+The external mode is **NOT RUN** in this environment: Windows execution and a
+complete local ELF are unavailable.
 
 ## R5900 SW / Store32 v0
 
@@ -201,13 +290,13 @@ mem32[0x01ffffa8]  0x00000001
 mem32[0x01ffffc4]  0x00000001
 ```
 
-The host syscall service currently recognizes only selectors `0x3c` (`SetupThread`) and `0x3d` (`SetupHeap`). Therefore selector `0x40` is the next empirically observed HLE boundary. Its semantics are **not** guessed here; the next milestone must diagnose/design them first.
+At the SW milestone, selector `0x40` was the next HLE boundary. The CreateSema implementation above now handles it in the reference model and supplies native validation gates; this older diagnostic is retained as historical evidence.
 
 This is `DIAGNOSTIC_VALIDATED`, not `EXTERNALLY_VALIDATED`. The existing external Windows startup harness has not yet been extended/executed end-to-end through SetupHeap/SD/DADDU/SW.
 
 ## Remaining Test Build 0.1 gates
 
-1. Diagnose and design the observed EE syscall selector `0x40` boundary.
+1. Implement R5900 `LD / Load64` at the observed `0x00114f08` boundary.
 2. Extend the external Windows-native startup harness through the newer startup path using only a user-supplied local ELF.
 3. Validate the Win32 executable interactively on a physical Windows 10/11 desktop.
 4. Run a 60-second or longer physical-desktop 120 Hz pacing capture.
@@ -216,7 +305,7 @@ This is `DIAGNOSTIC_VALIDATED`, not `EXTERNALLY_VALIDATED`. The existing externa
 
 ## Guardrails
 
-- `design/r5900-sw-v0` is the isolated milestone branch.
+- `feature/r5900-createsema-v0` is the current isolated milestone branch.
 - Base/integration branch is `feature/r5900-or-v0`.
 - Integration requires explicit user authorization after final branch verification.
 - Never commit proprietary Burnout 3 data.
