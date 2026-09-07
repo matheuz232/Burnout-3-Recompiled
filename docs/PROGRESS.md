@@ -8,10 +8,10 @@ This file is the active engineering snapshot. Detailed history remains in Git an
 
 ## Current branch
 
-- Milestone branch: `feature/win32-window-validation-v0`
-- Implementation/test head before documentation: `a5a38d04746770520f68b87be691c23ffe1f2ad9`
-- Latest validated Windows CI before documentation: run **#794** (`34096651423`)
-- CTest on #794: **67/67 PASS**
+- Milestone branch: `feature/game-input-v0`
+- Implementation/test head before documentation: `9cb0f61bd8bf6eda27905a3ae7db6024bb795c47`
+- Latest validated Windows CI before documentation: run **#809** (`34159434149`)
+- CTest on #809: **69/69 PASS**
 - Game/runtime status: the project still does **not** boot Burnout 3, render the game, reach menus, or provide gameplay.
 
 ## Current engineering status
@@ -19,8 +19,8 @@ This file is the active engineering snapshot. Detailed history remains in Git an
 | Component | Status | Evidence / next gate |
 |---|---|---|
 | Repository / CMake bootstrap | DONE | C++20, CMake 3.25+, Visual Studio 2022 / Windows x64 workflow |
-| Win32 bootstrap/window | CI_VALIDATED | #794 validates client size, windowed/fullscreen styles, WM_CLOSE, Escape, recreation, WM_QUIT and stale-handle cleanup; physical visual check remains release certification |
-| QPC / 120 Hz frame pacing | CI_VALIDATED | #794 pacing telemetry and 120-frame probe passed; long physical-desktop capture remains |
+| Win32 bootstrap/window | CI_VALIDATED | Client size, windowed/fullscreen styles, WM_CLOSE, Escape, recreation, WM_QUIT and stale-handle cleanup validated; physical visual check remains release certification |
+| QPC / 120 Hz frame pacing | CI_VALIDATED | #809 pacing telemetry and 120-frame probe passed; long physical-desktop capture remains |
 | Crash handler / minidump | CI_VALIDATED | Controlled Windows CI crash path |
 | PS2 ELF loader | CI_VALIDATED | ELF32 little-endian MIPS parsing and PT_LOAD validation |
 | EE main RAM v0 | CI_VALIDATED | Zero-filled 32 MiB `0x00000000..0x01ffffff`; PT_LOAD copied into RAM |
@@ -44,141 +44,45 @@ This file is the active engineering snapshot. Detailed history remains in Git an
 | Static/binary recompiler | IN_PROGRESS | Continue from the first boundary measured by the external probe |
 | Graphics / GS / VU | TODO | No game rendering path yet |
 | IOP / SPU2 / audio | TODO | No game audio path yet |
-| Game input | TODO | Not implemented |
+| Game input | CI_VALIDATED | Keyboard + XInput host acquisition, deterministic deadzones/merge/reconnect; PS2 PAD adapter remains pending |
 | Game initialization | TODO | Not reached |
 | Menu / gameplay | TODO | Not reached |
 
-## Win32 bootstrap/window validation v0
+## Game Input v0
 
-The existing Win32 window wrapper now has a stronger lifecycle contract suitable for continued runtime work:
+Host-side input acquisition is now available through a platform-neutral state plus a Windows backend:
 
-- windowed client areas are verified at requested dimensions;
-- windowed mode exposes `WS_OVERLAPPEDWINDOW`;
-- fullscreen mode exposes `WS_POPUP`, excludes `WS_OVERLAPPEDWINDOW`, and uses current screen dimensions;
-- `WM_CLOSE` and Escape both destroy the native window and terminate through `WM_QUIT`;
-- a `Win32Window` object can create a second native window after shutdown;
-- `handle()` is cleared to `nullptr` during `WM_NCDESTROY`, so callers cannot retain a stale HWND after destruction.
+- canonical digital buttons, two sticks, two triggers and `gamepad_connected` metadata;
+- keyboard fallback through `GetAsyncKeyState`;
+- XInput mapping for face buttons, D-pad, Start/Select, shoulders, thumb clicks and triggers;
+- radial deadzones for both sticks;
+- deterministic trigger thresholding and clamping;
+- deterministic keyboard + gamepad merge;
+- active-controller reuse, disconnect fallback and reconnect discovery;
+- injectable APIs so CI does not require physical controller/keyboard hardware;
+- exactly one `WindowsGameInput::poll()` sample per runtime frame before simulation.
 
-Implementation detail: `CreateWindowExW` receives `this`; `WM_NCCREATE` stores the object pointer in `GWLP_USERDATA`, and `WM_NCDESTROY` clears the matching `hwnd_` before the native window is fully released.
-
-TDD evidence:
-
-```text
-Win32 RED           30b636ef...  CI #793: Build PASS, 66/67 CTest PASS;
-                                     only failure was stale handle after WM_CLOSE
-Win32 GREEN         a5a38d04...  CI #794: 67/67 CTest PASS;
-                                     pacing/package gates PASS
-```
-
-Detailed evidence: `docs/validation/2026-09-07-win32-window-validation-v0.md`.
-
-## R5900 LD / Load64 v0
-
-### Semantics
-
-`LD rt, imm(rs)` is modeled as:
-
-```text
-base32  = low32(GPR[rs].low64)
-offset  = sign_extend16(imm)
-address = uint32(base32 + offset)
-value   = read64(address)
-```
-
-Contract:
-
-- 32-bit effective-address arithmetic wraps modulo 2^32;
-- effective address must be 8-byte aligned; no align-down is performed;
-- guest memory access is made through `R5900GuestRead64Fn`;
-- a successful load writes only `GPR[rt].low64` and preserves `high64`;
-- destination register zero still performs the memory access and can fault;
-- on any alignment/unmapped/callback failure, destination state is unchanged;
-- fault provenance records access kind `Load`, exact guest PC, exact address and width `8`;
-- later IR and later control-flow effects are not executed after a failing load.
-
-The Windows x64 helper returns the loaded `uint64_t` in RAX. The emitted block tests `context.memory_fault.active` before writing the destination. This deliberately avoids using `[rsp+0x30]` for the 64-bit load result because that stack slot is already used to preserve indirect-transfer targets across helper-containing delay slots.
-
-### Dispatcher integration
-
-The dispatcher now:
-
-- accepts decoded `R5900Instruction::Ld` in the v0 native subset;
-- wires `Ps2MemoryMap::read_u64` into both normal and fast-cache execution contexts;
-- retains exact guest-word validation before fast replay;
-- reports `load width 8 bytes` for Load64 faults and keeps existing `store` diagnostics for stores;
-- uses precise fault guest PC to count only the successfully completed instruction prefix.
-
-Coverage includes:
-
-- native/reference success parity;
-- signed offsets and modulo-32-bit address wrap;
-- destination high64 preservation;
-- `LD $zero` observable read semantics;
-- misaligned, missing callback and rejected callback failures;
-- transactional destination preservation;
-- `SD + LD + JAL` in one native block;
-- `SW + LD + J + NOP` in one native block;
-- cold compile and fast-cache replay;
-- exact load-fault PC/address/width;
-- startup-shaped `CreateSema -> SW -> LD` continuation past the former boundary.
-
-## TDD evidence for LD / Load64 v0
-
-```text
-Task 1 IR RED       7042d21a...  new Load64 IR contract absent
-Task 1 IR GREEN     b124e0d5...  LD lowering + validation; Windows CI #774 green
-
-Task 2 executor RED c9eae3b8...  read64/Load fault ABI absent
-Task 2 executor GREEN
-                    873dda77...  read64 ABI + reference Load64; Windows CI #776 green
-
-Task 3 x64 RED      99f0659d...  Build green, CTest red because native Load64 unsupported
-Task 3 x64 GREEN    f4af598d...  Windows x64 Load64 helper/emitter; Windows CI #778 green
-
-Task 4 dispatcher RED
-                    9bde223c...  66/67 pass; only SD+LD+JAL dispatcher gate fails
-Startup RED         273150a8...  synthetic CreateSema path still fails at LD boundary
-Task 4 dispatcher GREEN
-                    a5530320...  LD eligibility/read64 adapters/load fault diagnostics
-Test-contract cleanup
-                    f7105f1f...  old syscall tests updated from unsupported-LD assumptions
-                    ad313815...  old Store32 boundary test updated to supported SW+LD path
-Integrated CI       #783         67/67 CTest PASS; pacing/package gates PASS
-```
-
-## External next-boundary probe v0
-
-The optional external startup harness now produces one stable diagnostic record at the first controlled unsupported boundary after the validated startup prefix:
-
-```text
-BOUNDARY_PROBE reason=<reason> pc=0x<pc> raw=0x<word> instruction=<mnemonic> class=<class> opcode=0x<op> rs=<n> rt=<n> rd=<n> immediate=0x<imm> blocks=<n> instructions=<n> syscalls=<n>
-```
-
-If the stop PC is not backed by guest RAM, the raw/decoder fields are emitted as `UNMAPPED` rather than fabricating data. Only one 32-bit guest word is inspected for this report; the harness does not dump code regions.
-
-Controlled discovery reasons are deliberately limited to:
-
-- `UnsupportedInstruction`;
-- `UnsupportedSyscall`.
-
-`CompileFailure`, `AnalysisFailure`, `LoweringFailure`, `MemoryAccessFailure`, `HostSyscallFailure` and other unexpected execution failures remain failures and cannot be misreported as the next implementation boundary.
+The sample is deliberately not guest-visible yet. Burnout 3 still requires a later PS2 PAD/SIO2/libpad adapter before it can consume host controls.
 
 TDD evidence:
 
 ```text
-Formatter RED       acf0c2e5...  CI #787 failed at link: format_boundary_probe missing
-Formatter GREEN     23e1cdcc...  CI #788: 67/67 PASS; pacing/package gates PASS
-Classifier RED      c0da282a...  CI #789 failed at link: is_discovered_boundary missing
-Integrated GREEN    3c0729a4...  CI #790: 67/67 PASS; pacing/package gates PASS
+Canonical RED       19fd00c6505df6d30f65738994263e59b34f8573  CI #802 expected Configure failure
+Canonical GREEN     187590ed34e42f8ecc01242bbf6ee487830c96db  CI #803 68/68 PASS
+Windows map RED     6f8c942b7f1208c65c6987edf4a18f0fb45eb94c  CI #805 expected Configure failure
+Windows map GREEN   3d98ff2a0542ba1f402e032918bdb6e7285c4cd9  CI #806 69/69 PASS
+Reconnect RED       306ec80d37897a48c3a326eb0774ca6035450ecf  CI #807 68/69; only active-controller reuse failed
+Reconnect GREEN     8c8ef999c457047aa3222fa85f6af89d730ff25f  CI #808 69/69 PASS
+Runtime integration 9cb0f61bd8bf6eda27905a3ae7db6024bb795c47  CI #809 69/69 PASS
 ```
 
-The synthetic fixture validates the reporter with public test data only (`0x70000000` sentinel at `0x00114ef8`). No real game instruction word is committed by this milestone.
+Detailed evidence: `docs/validation/2026-09-07-game-input-v0.md`.
 
 ## Startup boundary status
 
-The synthetic startup gate uses public ISA encodings and synthetic data only. It crosses the previously observed `LD @ 0x00114f08` boundary. In the synthetic fixture, `LD ra,0x40(sp)` reloads the saved return address low64, preserves RA high64, and execution stops only at a deliberate unsupported sentinel after the LD.
+The synthetic startup gate uses public ISA encodings and synthetic data only. It crosses the previously observed `LD @ 0x00114f08` boundary. The optional external startup harness can now report the first controlled unsupported boundary after that prefix using one 32-bit guest word.
 
-The historical external input available in the development environment was incomplete:
+The historical external input available in the development environment remains incomplete:
 
 ```text
 available file size                  3,589,632 bytes
@@ -187,7 +91,7 @@ load segment requires bytes through  4,073,344 bytes
 
 The production loader correctly rejects that truncated input. Loader validation was not weakened, missing game bytes were not invented, and no proprietary game bytes are committed.
 
-Therefore the next unsupported instruction or syscall on the real Burnout 3 path is currently **unknown** and must not be guessed. The optional external Windows test now accepts a complete user-supplied lawful ELF, runs the production loader/dispatcher, requires execution to move beyond `0x00114f08`, verifies SetupThread/SetupHeap/two CreateSema calls, and emits the structured `BOUNDARY_PROBE` record for the newly measured stop.
+Therefore the next unsupported instruction or syscall on the real Burnout 3 path remains **unknown** and must not be guessed. A complete user-supplied lawful ELF is required to measure it.
 
 Example local invocation on a user's own complete ELF:
 
@@ -195,38 +99,43 @@ Example local invocation on a user's own complete ELF:
 .\build\Release\r5900_block_dispatcher_createsema_windows_tests.exe C:\Games\Burnout3\SLUS_210.50
 ```
 
-CI contains no game file and runs synthetic mode only. External mode has not been run in this environment.
+CI contains no game file and runs synthetic mode only.
 
 ## Windows CI evidence
 
-Windows CI #794 (`34096651423`) on implementation commit `a5a38d04746770520f68b87be691c23ffe1f2ad9`:
+Windows CI #809 (`34159434149`) on implementation commit `9cb0f61bd8bf6eda27905a3ae7db6024bb795c47`:
 
 ```text
-Host             Windows Server 2022
-Generator        Visual Studio 17 2022 x64
-Compiler         MSVC 19.44
-CTest            67/67 PASS
-Win32 lifecycle  PASS
-Frame telemetry  PASS
-120 Hz probe     PASS
-Analyzer package PASS
-Pacing package   PASS
+Host                 Windows Server 2022
+Generator            Visual Studio 17 2022 x64
+Compiler             MSVC 19.44
+Configure            PASS
+Build                PASS
+CTest                69/69 PASS
+windows_game_input   PASS
+Frame telemetry      PASS
+120 Hz probe         PASS
+Analyzer package     PASS
+Pacing package       PASS
 ```
 
-Hosted CI pacing and HWND tests are automated validation; a physical Windows desktop remains useful for visual/performance release certification.
+Pacing on #809 remained at a 120 Hz target: 240-sample telemetry mean 8.333 ms, P95 8.333 ms, P99 8.334 ms, zero samples above 9/10/12 ms; the 120-frame probe also averaged 8.333 ms with zero frames above those thresholds.
+
+Hosted CI validates logic and timing behavior; a physical Windows desktop remains useful for visual/performance release certification.
 
 ## Remaining Test Build 0.1 gates
 
 1. Run the external next-boundary probe with a complete user-supplied lawful ELF and record the first new real boundary after `0x00114f08`.
 2. Continue R5900 instruction/kernel/HLE coverage from that measured boundary using the same RED -> GREEN process.
-3. Run a 60-second or longer physical-desktop 120 Hz pacing capture for release certification.
-4. Implement GS/VU rendering, IOP/SPU2/audio, input and remaining game-runtime services before any boot/playability claim.
+3. Implement a guest-facing PS2 PAD/SIO2/libpad adapter so Burnout 3 can consume the now-validated host input state.
+4. Run a 60-second or longer physical-desktop 120 Hz pacing capture for release certification.
+5. Implement GS/VU rendering, IOP/SPU2/audio and remaining game-runtime services before any boot/playability claim.
 
 ## Guardrails
 
-- Milestone branch: `feature/win32-window-validation-v0`.
-- Base for this bounded milestone: validated next-boundary probe head `3fefdf1a60ef0f77c82b0ad9e6688a82c2203905`.
-- Integration/base lineage remains the existing R5900 feature stack; do not merge blindly without branch review.
+- Milestone branch: `feature/game-input-v0`.
+- Base for this bounded milestone: validated Win32 window documentation head `cb9ec4a0685271dfa0fd32837cd137a9f496975f` plus the approved Game Input design/plan lineage.
 - No PCSX2 runtime dependency is introduced by this milestone.
+- No PS2 PAD/SIO2/libpad behavior is claimed by Game Input v0.
 - Never commit proprietary Burnout 3 data.
 - Never claim boot, menu, rendering or gameplay without direct evidence.
