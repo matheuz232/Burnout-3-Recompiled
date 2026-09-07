@@ -8,10 +8,10 @@ This file is the active engineering snapshot. Detailed history remains in Git an
 
 ## Current branch
 
-- Milestone branch: `feature/r5900-next-boundary-probe-v0`
-- Implementation/test head before documentation: `3c0729a4fef7434154f215d68a5c55275f0d5af0`
-- Latest validated Windows CI before documentation: run **#790** (`34094838704`)
-- CTest on #790: **67/67 PASS**
+- Milestone branch: `feature/win32-window-validation-v0`
+- Implementation/test head before documentation: `a5a38d04746770520f68b87be691c23ffe1f2ad9`
+- Latest validated Windows CI before documentation: run **#794** (`34096651423`)
+- CTest on #794: **67/67 PASS**
 - Game/runtime status: the project still does **not** boot Burnout 3, render the game, reach menus, or provide gameplay.
 
 ## Current engineering status
@@ -19,8 +19,8 @@ This file is the active engineering snapshot. Detailed history remains in Git an
 | Component | Status | Evidence / next gate |
 |---|---|---|
 | Repository / CMake bootstrap | DONE | C++20, CMake 3.25+, Visual Studio 2022 / Windows x64 workflow |
-| Win32 bootstrap/window | READY_FOR_INTERACTIVE_VALIDATION | CI HWND smoke exists; physical Windows visual validation remains |
-| QPC / 120 Hz frame pacing | CI_VALIDATED | #790 pacing telemetry and 120-frame probe passed; long physical-desktop capture remains |
+| Win32 bootstrap/window | CI_VALIDATED | #794 validates client size, windowed/fullscreen styles, WM_CLOSE, Escape, recreation, WM_QUIT and stale-handle cleanup; physical visual check remains release certification |
+| QPC / 120 Hz frame pacing | CI_VALIDATED | #794 pacing telemetry and 120-frame probe passed; long physical-desktop capture remains |
 | Crash handler / minidump | CI_VALIDATED | Controlled Windows CI crash path |
 | PS2 ELF loader | CI_VALIDATED | ELF32 little-endian MIPS parsing and PT_LOAD validation |
 | EE main RAM v0 | CI_VALIDATED | Zero-filled 32 MiB `0x00000000..0x01ffffff`; PT_LOAD copied into RAM |
@@ -47,6 +47,30 @@ This file is the active engineering snapshot. Detailed history remains in Git an
 | Game input | TODO | Not implemented |
 | Game initialization | TODO | Not reached |
 | Menu / gameplay | TODO | Not reached |
+
+## Win32 bootstrap/window validation v0
+
+The existing Win32 window wrapper now has a stronger lifecycle contract suitable for continued runtime work:
+
+- windowed client areas are verified at requested dimensions;
+- windowed mode exposes `WS_OVERLAPPEDWINDOW`;
+- fullscreen mode exposes `WS_POPUP`, excludes `WS_OVERLAPPEDWINDOW`, and uses current screen dimensions;
+- `WM_CLOSE` and Escape both destroy the native window and terminate through `WM_QUIT`;
+- a `Win32Window` object can create a second native window after shutdown;
+- `handle()` is cleared to `nullptr` during `WM_NCDESTROY`, so callers cannot retain a stale HWND after destruction.
+
+Implementation detail: `CreateWindowExW` receives `this`; `WM_NCCREATE` stores the object pointer in `GWLP_USERDATA`, and `WM_NCDESTROY` clears the matching `hwnd_` before the native window is fully released.
+
+TDD evidence:
+
+```text
+Win32 RED           30b636ef...  CI #793: Build PASS, 66/67 CTest PASS;
+                                     only failure was stale handle after WM_CLOSE
+Win32 GREEN         a5a38d04...  CI #794: 67/67 CTest PASS;
+                                     pacing/package gates PASS
+```
+
+Detailed evidence: `docs/validation/2026-09-07-win32-window-validation-v0.md`.
 
 ## R5900 LD / Load64 v0
 
@@ -175,33 +199,33 @@ CI contains no game file and runs synthetic mode only. External mode has not bee
 
 ## Windows CI evidence
 
-Windows CI #790 (`34094838704`) on implementation commit `3c0729a4fef7434154f215d68a5c55275f0d5af0`:
+Windows CI #794 (`34096651423`) on implementation commit `a5a38d04746770520f68b87be691c23ffe1f2ad9`:
 
 ```text
 Host             Windows Server 2022
 Generator        Visual Studio 17 2022 x64
 Compiler         MSVC 19.44
 CTest            67/67 PASS
+Win32 lifecycle  PASS
 Frame telemetry  PASS
 120 Hz probe     PASS
 Analyzer package PASS
 Pacing package   PASS
 ```
 
-Hosted CI pacing is smoke evidence, not a substitute for physical Windows desktop performance certification.
+Hosted CI pacing and HWND tests are automated validation; a physical Windows desktop remains useful for visual/performance release certification.
 
 ## Remaining Test Build 0.1 gates
 
 1. Run the external next-boundary probe with a complete user-supplied lawful ELF and record the first new real boundary after `0x00114f08`.
 2. Continue R5900 instruction/kernel/HLE coverage from that measured boundary using the same RED -> GREEN process.
-3. Validate the Win32 executable interactively on a physical Windows 10/11 desktop.
-4. Run a 60-second or longer physical-desktop 120 Hz pacing capture.
-5. Implement GS/VU rendering, IOP/SPU2/audio, input and remaining game-runtime services before any boot/playability claim.
+3. Run a 60-second or longer physical-desktop 120 Hz pacing capture for release certification.
+4. Implement GS/VU rendering, IOP/SPU2/audio, input and remaining game-runtime services before any boot/playability claim.
 
 ## Guardrails
 
-- Milestone branch: `feature/r5900-next-boundary-probe-v0`.
-- Base for this bounded milestone: validated Load64 head `4b07af505302c2bfa65b841db4e65fe63eba055e`.
+- Milestone branch: `feature/win32-window-validation-v0`.
+- Base for this bounded milestone: validated next-boundary probe head `3fefdf1a60ef0f77c82b0ad9e6688a82c2203905`.
 - Integration/base lineage remains the existing R5900 feature stack; do not merge blindly without branch review.
 - No PCSX2 runtime dependency is introduced by this milestone.
 - Never commit proprietary Burnout 3 data.
