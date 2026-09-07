@@ -1,6 +1,6 @@
 # PS2 PAD Guest Bridge v0 Design
 
-Status: approved design, pre-implementation
+Status: written design, awaiting spec review
 Date: 2026-09-07
 
 ## Goal
@@ -183,7 +183,8 @@ No PADMAN data structure is fabricated in the 256-byte area in this milestone.
 For port 0 / slot 0:
 
 - closed: return `PAD_STATE_DISCONN` (`0x00`);
-- open: return `PAD_STATE_STABLE` (`0x06`).
+- open but current virtual report disconnected: return `PAD_STATE_DISCONN` (`0x00`);
+- open and current virtual report connected: return `PAD_STATE_STABLE` (`0x06`).
 
 Other port/slot values produce a controlled handler fault in v0.
 
@@ -193,18 +194,23 @@ Requires:
 
 - initialized service;
 - port 0 / slot 0;
-- port open;
+- port open.
+
+If the current virtual report is disconnected, return `0` and do not modify guest memory. This mirrors the public `libpad` behavior in which `padRead` returns the current DMA payload length and a disconnected/no-data state has no readable payload.
+
+For a connected report, additionally require:
+
 - non-zero `data`;
 - complete 32-byte destination backed by EE RAM.
 
-On success, build all 32 bytes locally before modifying guest RAM, then copy the complete structure atomically from the bridge's perspective.
+Build all 32 bytes locally before modifying guest RAM, then copy the complete structure atomically from the bridge's perspective.
 
-The layout is the public `ps2sdk` `padButtonStatus` ABI:
+The connected layout is the public `ps2sdk` `padButtonStatus` ABI:
 
 | Offset | Size | Field | v0 value |
 |---:|---:|---|---|
-| 0 | 1 | `ok` | `0` when connected/readable; non-zero neutral error marker when virtual pad is disconnected |
-| 1 | 1 | `mode` | `0x79` for connected DualShock 2 analog report; `0x00` when disconnected |
+| 0 | 1 | `ok` | `0` |
+| 1 | 1 | `mode` | `0x79` for DualShock 2 analog report |
 | 2 | 2 | `btns` | little-endian `buttons_active_low` |
 | 4 | 1 | `rjoy_h` | report `right_x` |
 | 5 | 1 | `rjoy_v` | report `right_y` |
@@ -213,9 +219,7 @@ The layout is the public `ps2sdk` `padButtonStatus` ABI:
 | 8 | 12 | pressure fields | all zero in v0 |
 | 20 | 12 | unknown/reserved | all zero in v0 |
 
-For a disconnected virtual report, the digital mask and sticks remain neutral (`0xffff`, `0x80` values) and the status fields indicate no usable connected pad.
-
-On success return `1`. Destination validation or state errors must leave guest memory unchanged.
+Connected success returns `32`, the number of bytes copied, matching the public `libpad` implementation's length-return convention. Destination validation or state errors must leave guest memory unchanged.
 
 ### `padPortClose(int port, int slot)`
 
@@ -251,6 +255,7 @@ Guest-visible writes are transactional for this v0:
 - validate the full target span before any write;
 - assemble `padButtonStatus` in host-local storage first;
 - do not partially mutate the destination if validation fails;
+- a disconnected `padRead` performs no guest-memory write;
 - `padPortOpen` state changes occur only after all argument and memory checks pass.
 
 ## Runtime integration boundary
@@ -283,14 +288,16 @@ Portable/service tests cover:
 - null, misaligned and partially out-of-RAM pad areas;
 - open-state transactionality;
 - closed `padGetState` -> `0x00`;
-- open `padGetState` -> `0x06`;
+- open/disconnected `padGetState` -> `0x00`;
+- open/connected `padGetState` -> `0x06`;
+- connected `padRead` returns `32`;
 - exact 32-byte `padRead` layout;
 - active-low buttons preserved;
 - stick order `RX, RY, LX, LY`;
 - pressure/reserved bytes zeroed;
-- disconnected neutral report behavior;
+- disconnected `padRead` returns `0` and leaves destination unchanged;
 - keyboard-originated reports work because no XInput metadata is inspected;
-- invalid `padRead` destination leaves RAM unchanged;
+- invalid connected `padRead` destination leaves RAM unchanged;
 - `padPortClose` and `padEnd` state transitions.
 
 Dispatcher tests cover:
