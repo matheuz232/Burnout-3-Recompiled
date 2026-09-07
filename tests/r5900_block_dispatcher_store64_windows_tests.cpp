@@ -196,25 +196,55 @@ int main() {
         }
     }
 
-    // Replay an SD prefix whose later unsupported LD keeps it off the fast path.
+    // SD + LD + JAL must execute as one native block and replay through fast cache.
     {
-        const auto ld = i_type(0x37u, 29u, 31u, 0u);
-        auto memory = make_memory({sd_ra_sp, ld, jal, 0u}, code_base);
+        const auto ld_saved = i_type(0x37u, 29u, 5u, 0u);
+        auto memory = make_memory({sd_ra_sp, ld_saved, jal, 0u}, code_base);
         R5900BlockDispatcher dispatcher(memory);
         for (const auto value : {0x001001f0u, 0x001001f8u}) {
             R5900IrExecutionState state{};
             state.gpr[29].low64 = 0x01fffff0u;
             state.gpr[31].low64 = value;
+            state.gpr[5] = {0xaaaaaaaaaaaaaaaaull, 0x5555666677778888ull};
             const auto result = dispatcher.run(code_base, state, 1u);
-            expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction &&
-                       result.next_pc == code_base + 4u && result.instructions_executed == 1u,
-                   "SD prefix must commit before a later unsupported load");
-            expect(state.gpr[31].low64 == value &&
-                       memory.read_u64(0x01fffff0u).value_or(0u) == value,
-                   "cached SD prefix must store current RA without executing later JAL");
-            expect(result.fast_cache_hits == 0u &&
-                       result.cache_hits == (value == 0x001001f0u ? 0u : 1u),
-                   "boundary prefix must replay through the exact cache path");
+            expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted &&
+                       result.next_pc == 0x00114ed0u && result.blocks_executed == 1u &&
+                       result.instructions_executed == 4u,
+                   "SD+LD+JAL must execute as one native block");
+            expect(memory.read_u64(0x01fffff0u).value_or(0u) == value &&
+                       state.gpr[5].low64 == value &&
+                       state.gpr[5].high64 == 0x5555666677778888ull,
+                   "dispatcher LD must read current guest RAM into low64 only");
+            expect(state.gpr[31].low64 == 0x00115118u,
+                   "JAL after LD must still publish its architectural link");
+            expect(result.cache_misses == (value == 0x001001f0u ? 1u : 0u) &&
+                       result.cache_hits == (value == 0x001001f0u ? 0u : 1u) &&
+                       result.fast_cache_hits == (value == 0x001001f0u ? 0u : 1u),
+                   "supported LD block must replay through fast cache");
+        }
+    }
+
+    // LD faults must report load semantics and preserve the destination.
+    {
+        const auto ld_saved = i_type(0x37u, 29u, 5u, 0u);
+        for (const auto address : {0x01fffff4u, 0x02000000u}) {
+            auto memory = make_memory({ld_saved, jal, 0u}, code_base);
+            R5900BlockDispatcher dispatcher(memory);
+            R5900IrExecutionState state{};
+            state.gpr[29].low64 = address;
+            state.gpr[5] = {0x123456789abcdef0ull, 0x0fedcba987654321ull};
+            const auto before = state.gpr[5];
+            const auto result = dispatcher.run(code_base, state, 1u);
+            expect(result.reason == R5900DispatchStopReason::MemoryAccessFailure &&
+                       result.next_pc == code_base && result.blocks_executed == 0u &&
+                       result.instructions_executed == 0u,
+                   "misaligned or unmapped LD must stop at its exact PC");
+            expect(state.gpr[5].low64 == before.low64 &&
+                       state.gpr[5].high64 == before.high64,
+                   "failed dispatcher LD must preserve destination transactionally");
+            expect(result.message.find("load width 8 bytes") != std::string::npos &&
+                       result.message.find(address == 0x01fffff4u ? "0x01fffff4" : "0x02000000") != std::string::npos,
+                   "LD diagnostic must include load kind, exact address and width 8");
         }
     }
 
