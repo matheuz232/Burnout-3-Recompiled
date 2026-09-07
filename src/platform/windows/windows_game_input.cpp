@@ -164,8 +164,20 @@ bool WindowsGameInput::try_controller(DWORD index,
 
 b3r::input::GameInputState WindowsGameInput::poll() noexcept {
     b3r::input::GameInputState gamepad{};
-    active_controller_ = XUSER_MAX_COUNT;
+    DWORD failed_active = XUSER_MAX_COUNT;
+
+    if (active_controller_ < XUSER_MAX_COUNT) {
+        if (try_controller(active_controller_, gamepad)) {
+            return b3r::input::merge_input_states(poll_keyboard(), gamepad);
+        }
+        failed_active = active_controller_;
+        active_controller_ = XUSER_MAX_COUNT;
+    }
+
     for (DWORD index = 0; index < XUSER_MAX_COUNT; ++index) {
+        if (index == failed_active) {
+            continue;
+        }
         if (try_controller(index, gamepad)) {
             active_controller_ = index;
             break;
