@@ -36,6 +36,17 @@ R5900IrOperand immediate(std::int64_t value) {
     return operand;
 }
 
+R5900IrInstruction store32(std::uint8_t base,
+                           std::uint8_t source,
+                           std::int16_t offset,
+                           std::uint32_t guest_pc) {
+    R5900IrInstruction ir{};
+    ir.guest_pc = guest_pc;
+    ir.opcode = R5900IrOpcode::Store32;
+    ir.inputs = {gpr(base), gpr(source), immediate(offset)};
+    return ir;
+}
+
 R5900IrInstruction store64(std::uint8_t base,
                             std::uint8_t source,
                             std::int16_t offset,
@@ -62,6 +73,10 @@ R5900IrInstruction or64(std::uint8_t destination,
 
 struct Write64Recorder {
     bool allow{true};
+    std::size_t calls32{};
+    std::uint32_t address32{};
+    std::uint32_t value32{};
+    std::uint32_t stored32{0xaabbccddu};
     std::uint32_t address{};
     std::uint64_t value{};
     std::size_t calls{};
@@ -71,6 +86,19 @@ struct Write64Recorder {
     std::uint64_t low128{};
     std::uint64_t high128{};
 };
+
+bool record_write32(void* user, std::uint32_t address,
+                    std::uint32_t value) noexcept {
+    auto& recorder = *static_cast<Write64Recorder*>(user);
+    ++recorder.calls32;
+    recorder.address32 = address;
+    recorder.value32 = value;
+    if (!recorder.allow) {
+        return false;
+    }
+    recorder.stored32 = value;
+    return true;
+}
 
 bool record_write64(void* user, std::uint32_t address,
                     std::uint64_t value) noexcept {
@@ -100,6 +128,7 @@ R5900IrExecutionContext context_for(R5900IrExecutionState& state,
     R5900IrExecutionContext context{};
     context.state = &state;
     context.memory.user = &recorder;
+    context.memory.write32 = &record_write32;
     context.memory.write64 = &record_write64;
     context.memory.write128 = &record_write128;
     return context;
@@ -123,13 +152,24 @@ void expect_same_state(const R5900IrExecutionState& before,
     for (std::size_t i = 0u; i < before.gpr.size(); ++i) {
         expect(before.gpr[i].low64 == after.gpr[i].low64 &&
                    before.gpr[i].high64 == after.gpr[i].high64,
-               "Store64 must preserve every GPR");
+               "store must preserve every GPR");
     }
     expect(before.hi == after.hi && before.lo == after.lo &&
                before.hi1 == after.hi1 && before.lo1 == after.lo1 &&
                before.sa == after.sa && before.fpr == after.fpr &&
                before.fcr31 == after.fcr31 && before.fp_acc == after.fp_acc,
-           "Store64 must preserve all special and FPU state");
+           "store must preserve all special and FPU state");
+}
+
+void expect_fault32(const R5900IrExecutionContext& context,
+                    std::uint32_t pc, std::uint32_t address) {
+    expect(context.current_memory_guest_pc == pc &&
+               context.memory_fault.active &&
+               context.memory_fault.access == R5900IrMemoryAccessKind::Store &&
+               context.memory_fault.guest_pc == pc &&
+               context.memory_fault.address == address &&
+               context.memory_fault.width_bytes == 4u,
+           "Store32 fault must retain exact PC, address and width 4");
 }
 
 void expect_fault(const R5900IrExecutionContext& context,
@@ -168,6 +208,92 @@ R5900IrBlock direct_call(std::vector<R5900IrInstruction> body,
 } // namespace
 
 int main() {
+    // Store32 native/reference success, signed offsets, low32-only and wrap.
+    struct AddressCase32 {
+        std::uint64_t base;
+        std::int16_t offset;
+        std::uint32_t address;
+    };
+    for (const auto test : {
+             AddressCase32{0x9999000001ffffa0ull, 0x28, 0x01ffffc8u},
+             AddressCase32{0x1111222200000004ull, -8, 0xfffffffcu},
+             AddressCase32{0xfffffffcu, 8, 0x00000004u},
+             AddressCase32{0x1001u, 3, 0x1004u}}) {
+        const auto block = fallthrough_block(
+            {store32(1u, 2u, test.offset, 0x00114ee0u)}, 0x00114ee4u);
+        auto compiled = compile_r5900_ir_x64(block);
+        if (!compiled.ok()) std::cerr << compiled.message << '\n';
+        expect(compiled.ok(), "native Store32 block must compile");
+        auto native_state = seeded_state();
+        native_state.gpr[1].low64 = test.base;
+        native_state.gpr[2] = {0x1122334455667788ull, 0x8877665544332211ull};
+        const auto before = native_state;
+        auto reference_state = native_state;
+        Write64Recorder native_memory{}, reference_memory{};
+        auto native_context = context_for(native_state, native_memory);
+        auto reference_context = context_for(reference_state, reference_memory);
+        native_context.memory_fault.active = true;
+        const auto native_result = compiled.block->execute(native_context);
+        const auto reference_result = execute_r5900_ir_block(block, reference_context);
+        expect(native_result.ok() && reference_result.ok() &&
+                   native_result.next_pc == reference_result.next_pc &&
+                   native_result.next_pc == 0x00114ee4u,
+               "native/reference Store32 must reach the same fallthrough");
+        expect(native_memory.calls32 == 1u && reference_memory.calls32 == 1u &&
+                   native_memory.address32 == test.address &&
+                   native_memory.address32 == reference_memory.address32 &&
+                   native_memory.stored32 == 0x55667788u &&
+                   native_memory.stored32 == reference_memory.stored32,
+               "native Store32 must match reference address and low32 write");
+        expect(!native_context.memory_fault.active &&
+                   native_context.current_memory_guest_pc == 0x00114ee0u,
+               "native Store32 success must publish PC and clear stale fault");
+        expect_same_state(before, native_state);
+        expect_same_state(reference_state, native_state);
+    }
+
+    // Store32 failure must stop before following arithmetic/call.
+    for (const auto failure : {0u, 1u, 2u, 3u}) {
+        auto block = direct_call(
+            {store32(1u, 2u, 0, 0x00114ef0u),
+             or64(6u, 6u, 0xffu, 0x00114ef4u)}, 0x00114ef8u);
+        auto compiled = compile_r5900_ir_x64(block);
+        expect(compiled.ok(), "faulting Store32 block must compile");
+        auto native_state = seeded_state();
+        const auto address = failure == 0u ? 0x1002u : 0x1004u;
+        native_state.gpr[1].low64 = address;
+        const auto before = native_state;
+        auto reference_state = native_state;
+        Write64Recorder native_memory{}, reference_memory{};
+        auto native_context = context_for(native_state, native_memory);
+        auto reference_context = context_for(reference_state, reference_memory);
+        if (failure == 1u) {
+            native_context.memory.write32 = nullptr;
+            reference_context.memory.write32 = nullptr;
+        } else if (failure == 2u) {
+            native_context.memory.user = nullptr;
+            reference_context.memory.user = nullptr;
+        } else if (failure == 3u) {
+            native_memory.allow = false;
+            reference_memory.allow = false;
+        }
+        const auto native_result = compiled.block->execute(native_context);
+        const auto reference_result = execute_r5900_ir_block(block, reference_context);
+        expect(native_result.error == R5900IrExecutionError::MemoryAccessFailure &&
+                   native_result.error == reference_result.error &&
+                   native_result.next_pc == 0u,
+               "native/reference Store32 failure must terminate the block");
+        expect_fault32(native_context, 0x00114ef0u, address);
+        expect_fault32(reference_context, 0x00114ef0u, address);
+        expect(native_memory.calls32 == (failure == 3u ? 1u : 0u) &&
+                   native_memory.calls32 == reference_memory.calls32 &&
+                   native_memory.stored32 == 0xaabbccddu &&
+                   native_memory.stored32 == reference_memory.stored32,
+               "native failed Store32 must preserve memory/callback ordering");
+        expect_same_state(before, native_state);
+        expect_same_state(reference_state, native_state);
+    }
+
     struct AddressCase {
         std::uint64_t base;
         std::int16_t offset;
