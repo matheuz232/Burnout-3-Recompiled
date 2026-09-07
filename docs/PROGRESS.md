@@ -8,10 +8,10 @@ This file is the active engineering snapshot. Detailed history remains in Git an
 
 ## Current branch
 
-- Milestone branch: `feature/r5900-ld-v0`
-- Implementation/test head before documentation: `ad31381582d865be814727fddf761eeafefdf4b3`
-- Latest validated Windows CI before documentation: run **#783** (`34092035181`)
-- CTest on #783: **67/67 PASS**
+- Milestone branch: `feature/r5900-next-boundary-probe-v0`
+- Implementation/test head before documentation: `3c0729a4fef7434154f215d68a5c55275f0d5af0`
+- Latest validated Windows CI before documentation: run **#790** (`34094838704`)
+- CTest on #790: **67/67 PASS**
 - Game/runtime status: the project still does **not** boot Burnout 3, render the game, reach menus, or provide gameplay.
 
 ## Current engineering status
@@ -20,12 +20,12 @@ This file is the active engineering snapshot. Detailed history remains in Git an
 |---|---|---|
 | Repository / CMake bootstrap | DONE | C++20, CMake 3.25+, Visual Studio 2022 / Windows x64 workflow |
 | Win32 bootstrap/window | READY_FOR_INTERACTIVE_VALIDATION | CI HWND smoke exists; physical Windows visual validation remains |
-| QPC / 120 Hz frame pacing | CI_VALIDATED | #783 pacing telemetry and 120-frame probe passed; long physical-desktop capture remains |
+| QPC / 120 Hz frame pacing | CI_VALIDATED | #790 pacing telemetry and 120-frame probe passed; long physical-desktop capture remains |
 | Crash handler / minidump | CI_VALIDATED | Controlled Windows CI crash path |
 | PS2 ELF loader | CI_VALIDATED | ELF32 little-endian MIPS parsing and PT_LOAD validation |
 | EE main RAM v0 | CI_VALIDATED | Zero-filled 32 MiB `0x00000000..0x01ffffff`; PT_LOAD copied into RAM |
 | Typed guest memory | CI_VALIDATED | Little-endian u8/u16/u32/u64/u128 reads/writes |
-| R5900 decoder / IR | CI_VALIDATED | Startup subset now includes `LD -> Load64`, `SW -> Store32`, `SD -> Store64`, `SQ -> Store128`, `DADDU -> Add64` |
+| R5900 decoder / IR | CI_VALIDATED | Startup subset includes `LD -> Load64`, `SW -> Store32`, `SD -> Store64`, `SQ -> Store128`, `DADDU -> Add64` |
 | R5900 reference executor | CI_VALIDATED | `read64`, write32/write64/write128 callbacks and precise load/store faults |
 | Windows x86-64 backend | CI_VALIDATED | Native `Load64`, Store32/64/128 plus current integer/control-flow subset; native/reference differential tests |
 | Native dispatcher/cache | CI_VALIDATED | On-demand lowering/compile, exact guest-word validation, cold/exact/fast replay, `read64` + store adapters, precise load/store fault diagnostics |
@@ -39,8 +39,9 @@ This file is the active engineering snapshot. Detailed history remains in Git an
 | `SetupHeap` HLE `0x3d` | CI_VALIDATED | Automatic-size `-1` convention resolved from thread stack base |
 | `CreateSema` HLE `0x40` | CI_VALIDATED | Per-service IDs, validated descriptor copy, transactional failures, native continuation/cache |
 | Synthetic startup through previous `LD @ 0x00114f08` boundary | CI_VALIDATED | Startup-shaped test executes the LD, restores RA low64, preserves high64, and stops only at the following synthetic sentinel |
-| Real external next boundary | PENDING_EXTERNAL_VALIDATION | Requires a complete user-supplied lawful ELF; available historical local copy is truncated and production loader correctly rejects it |
-| Static/binary recompiler | IN_PROGRESS | Continue from the next boundary measured with a complete external ELF |
+| External next-boundary probe | CI_VALIDATED | Optional external mode emits stable stop reason/PC, one 32-bit boundary word and decoder fields; only `UnsupportedInstruction`/`UnsupportedSyscall` count as discovered boundaries |
+| Real external next boundary | PENDING_EXTERNAL_VALIDATION | Run the probe with a complete user-supplied lawful ELF; historical local copy is truncated and production loader correctly rejects it |
+| Static/binary recompiler | IN_PROGRESS | Continue from the first boundary measured by the external probe |
 | Graphics / GS / VU | TODO | No game rendering path yet |
 | IOP / SPU2 / audio | TODO | No game audio path yet |
 | Game input | TODO | Not implemented |
@@ -121,9 +122,37 @@ Test-contract cleanup
 Integrated CI       #783         67/67 CTest PASS; pacing/package gates PASS
 ```
 
+## External next-boundary probe v0
+
+The optional external startup harness now produces one stable diagnostic record at the first controlled unsupported boundary after the validated startup prefix:
+
+```text
+BOUNDARY_PROBE reason=<reason> pc=0x<pc> raw=0x<word> instruction=<mnemonic> class=<class> opcode=0x<op> rs=<n> rt=<n> rd=<n> immediate=0x<imm> blocks=<n> instructions=<n> syscalls=<n>
+```
+
+If the stop PC is not backed by guest RAM, the raw/decoder fields are emitted as `UNMAPPED` rather than fabricating data. Only one 32-bit guest word is inspected for this report; the harness does not dump code regions.
+
+Controlled discovery reasons are deliberately limited to:
+
+- `UnsupportedInstruction`;
+- `UnsupportedSyscall`.
+
+`CompileFailure`, `AnalysisFailure`, `LoweringFailure`, `MemoryAccessFailure`, `HostSyscallFailure` and other unexpected execution failures remain failures and cannot be misreported as the next implementation boundary.
+
+TDD evidence:
+
+```text
+Formatter RED       acf0c2e5...  CI #787 failed at link: format_boundary_probe missing
+Formatter GREEN     23e1cdcc...  CI #788: 67/67 PASS; pacing/package gates PASS
+Classifier RED      c0da282a...  CI #789 failed at link: is_discovered_boundary missing
+Integrated GREEN    3c0729a4...  CI #790: 67/67 PASS; pacing/package gates PASS
+```
+
+The synthetic fixture validates the reporter with public test data only (`0x70000000` sentinel at `0x00114ef8`). No real game instruction word is committed by this milestone.
+
 ## Startup boundary status
 
-The synthetic startup gate uses public ISA encodings and synthetic data only. It now crosses the previously observed `LD @ 0x00114f08` boundary. In the synthetic fixture, `LD ra,0x40(sp)` reloads the saved return address low64, preserves RA high64, and execution stops only at a deliberate unsupported sentinel after the LD.
+The synthetic startup gate uses public ISA encodings and synthetic data only. It crosses the previously observed `LD @ 0x00114f08` boundary. In the synthetic fixture, `LD ra,0x40(sp)` reloads the saved return address low64, preserves RA high64, and execution stops only at a deliberate unsupported sentinel after the LD.
 
 The historical external input available in the development environment was incomplete:
 
@@ -134,7 +163,7 @@ load segment requires bytes through  4,073,344 bytes
 
 The production loader correctly rejects that truncated input. Loader validation was not weakened, missing game bytes were not invented, and no proprietary game bytes are committed.
 
-Therefore the next unsupported instruction on the real Burnout 3 path is currently **unknown** and must not be guessed. The optional external Windows test accepts a complete user-supplied lawful ELF, runs the production loader/dispatcher, requires execution to move beyond `0x00114f08`, verifies SetupThread/SetupHeap/two CreateSema calls, and prints the newly measured stop PC/diagnostic.
+Therefore the next unsupported instruction or syscall on the real Burnout 3 path is currently **unknown** and must not be guessed. The optional external Windows test now accepts a complete user-supplied lawful ELF, runs the production loader/dispatcher, requires execution to move beyond `0x00114f08`, verifies SetupThread/SetupHeap/two CreateSema calls, and emits the structured `BOUNDARY_PROBE` record for the newly measured stop.
 
 Example local invocation on a user's own complete ELF:
 
@@ -142,11 +171,11 @@ Example local invocation on a user's own complete ELF:
 .\build\Release\r5900_block_dispatcher_createsema_windows_tests.exe C:\Games\Burnout3\SLUS_210.50
 ```
 
-CI contains no game file and runs synthetic mode only.
+CI contains no game file and runs synthetic mode only. External mode has not been run in this environment.
 
 ## Windows CI evidence
 
-Windows CI #783 (`34092035181`) on commit `ad31381582d865be814727fddf761eeafefdf4b3`:
+Windows CI #790 (`34094838704`) on implementation commit `3c0729a4fef7434154f215d68a5c55275f0d5af0`:
 
 ```text
 Host             Windows Server 2022
@@ -159,19 +188,11 @@ Analyzer package PASS
 Pacing package   PASS
 ```
 
-Representative hosted pacing data from #783:
-
-```text
-frame telemetry: 240 samples, mean 8.333 ms, >9/10/12 ms = 0/0/0
-one-second probe: 120 frames, mean 8.333 ms, max 8.416 ms, >9/10/12 ms = 0/0/0
-high-resolution timer: YES
-```
-
 Hosted CI pacing is smoke evidence, not a substitute for physical Windows desktop performance certification.
 
 ## Remaining Test Build 0.1 gates
 
-1. Run the external startup harness with a complete user-supplied lawful ELF and record the first new real boundary after `0x00114f08`.
+1. Run the external next-boundary probe with a complete user-supplied lawful ELF and record the first new real boundary after `0x00114f08`.
 2. Continue R5900 instruction/kernel/HLE coverage from that measured boundary using the same RED -> GREEN process.
 3. Validate the Win32 executable interactively on a physical Windows 10/11 desktop.
 4. Run a 60-second or longer physical-desktop 120 Hz pacing capture.
@@ -179,7 +200,8 @@ Hosted CI pacing is smoke evidence, not a substitute for physical Windows deskto
 
 ## Guardrails
 
-- Milestone branch: `feature/r5900-ld-v0`.
+- Milestone branch: `feature/r5900-next-boundary-probe-v0`.
+- Base for this bounded milestone: validated Load64 head `4b07af505302c2bfa65b841db4e65fe63eba055e`.
 - Integration/base lineage remains the existing R5900 feature stack; do not merge blindly without branch review.
 - No PCSX2 runtime dependency is introduced by this milestone.
 - Never commit proprietary Burnout 3 data.
