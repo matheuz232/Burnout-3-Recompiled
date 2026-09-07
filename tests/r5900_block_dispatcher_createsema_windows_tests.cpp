@@ -3,11 +3,16 @@
 
 #include <fstream>
 #include <iterator>
+#include <string>
 
 using namespace b3r::recompiler;
 using namespace b3r::test_support::createsema;
 
 namespace {
+
+std::string format_boundary_probe(
+    b3r::runtime::Ps2MemoryMap& memory,
+    const R5900DispatchResult& result);
 
 void validate_external_startup(const char* path) {
     std::ifstream input(path, std::ios::binary);
@@ -80,6 +85,12 @@ int main(int argc, char** argv) {
         expect(result.blocks_executed == 4u && result.instructions_executed == 13u &&
                    result.syscalls_handled == 1u,
                "native instructions and host calls must be accounted separately across LD");
+        const auto boundary = format_boundary_probe(memory, result);
+        expect(boundary.find("reason=UnsupportedInstruction") != std::string::npos &&
+                   boundary.find("pc=0x00114ef8") != std::string::npos &&
+                   boundary.find("raw=0x70000000") != std::string::npos &&
+                   boundary.find("instruction=UNKNOWN") != std::string::npos,
+               "boundary probe must report stable stop, PC, raw word and mnemonic");
         expect(state.gpr[2].low64 == id && state.gpr[2].high64 == 0xfedcba9876543210ull,
                "CreateSema must return a fresh ID and preserve v0 high64");
         expect(memory.read_u32(0x01ffffd0u) == id &&
