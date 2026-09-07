@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -109,6 +110,31 @@ void set_args(b3r::recompiler::R5900IrExecutionState& state,
     state.gpr[6].low64 = a2;
 }
 
+void fill_memory(b3r::runtime::Ps2MemoryMap& memory,
+                 std::uint32_t address,
+                 std::size_t length,
+                 std::uint8_t value) {
+    const auto span = memory.translate(address, length);
+    expect(span.has_value(), "test fill span must be backed");
+    for (auto& byte : *span) {
+        byte = value;
+    }
+}
+
+void expect_memory_value(const b3r::runtime::Ps2MemoryMap& memory,
+                         std::uint32_t address,
+                         std::size_t length,
+                         std::uint8_t value,
+                         const char* message) {
+    const auto span = memory.translate(address, length);
+    expect(span.has_value(), "test inspect span must be backed");
+    for (const auto byte : *span) {
+        if (byte != value) {
+            fail(message);
+        }
+    }
+}
+
 } // namespace
 
 int main() {
@@ -119,6 +145,8 @@ int main() {
     constexpr std::uint32_t kValidPadArea = 0x00120000u;
     constexpr std::uint32_t kSecondPadArea = 0x00120400u;
     constexpr std::uint32_t kCrossingPadArea = 0x01ffff80u;
+    constexpr std::uint32_t kReadData = 0x00121000u;
+    constexpr std::uint32_t kPartialReadData = 0x01fffff0u;
 
     {
         auto memory = make_memory();
@@ -326,6 +354,129 @@ int main() {
         expect(invoke(service, kBindings.pad_get_state, state, memory).status ==
                    R5900GuestCallStatus::Handled && state.gpr[2].low64 == 6u,
                "report snapshot must survive padEnd/re-init");
+    }
+
+    {
+        auto memory = make_memory();
+        Ps2PadHleService service(kBindings);
+        R5900IrExecutionState state{};
+        b3r::input::Ps2PadReport connected{};
+        connected.connected = true;
+        service.set_report(connected);
+        fill_memory(memory, kReadData, 32u, 0xa5u);
+        set_args(state, 0u, 0u, kReadData);
+        const auto before_init = invoke(service, kBindings.pad_read, state, memory);
+        expect(before_init.status == R5900GuestCallStatus::Fault,
+               "connected padRead before padInit must fault");
+        expect_memory_value(memory, kReadData, 32u, 0xa5u,
+                            "padRead pre-init fault must not modify destination");
+
+        set_args(state, 0u);
+        expect(invoke(service, kBindings.pad_init, state, memory).status ==
+                   R5900GuestCallStatus::Handled,
+               "padRead fixture padInit must succeed");
+        set_args(state, 0u, 0u, kReadData);
+        const auto before_open = invoke(service, kBindings.pad_read, state, memory);
+        expect(before_open.status == R5900GuestCallStatus::Fault,
+               "connected padRead before padPortOpen must fault");
+        expect_memory_value(memory, kReadData, 32u, 0xa5u,
+                            "padRead closed-port fault must not modify destination");
+    }
+
+    {
+        auto memory = make_memory();
+        Ps2PadHleService service(kBindings);
+        R5900IrExecutionState state{};
+        b3r::input::Ps2PadReport disconnected{};
+        disconnected.connected = false;
+        service.set_report(disconnected);
+        set_args(state, 0u);
+        expect(invoke(service, kBindings.pad_init, state, memory).status ==
+                   R5900GuestCallStatus::Handled,
+               "disconnected read fixture padInit must succeed");
+        set_args(state, 0u, 0u, kValidPadArea);
+        expect(invoke(service, kBindings.pad_port_open, state, memory).status ==
+                   R5900GuestCallStatus::Handled,
+               "disconnected read fixture padPortOpen must succeed");
+
+        fill_memory(memory, kReadData, 32u, 0xa5u);
+        state.gpr[2].high64 = 0xababababababababull;
+        set_args(state, 0u, 0u, 0u);
+        const auto result = invoke(service, kBindings.pad_read, state, memory);
+        expect(result.status == R5900GuestCallStatus::Handled && state.gpr[2].low64 == 0u,
+               "disconnected padRead must return zero successfully");
+        expect(state.gpr[2].high64 == 0xababababababababull,
+               "disconnected padRead must preserve v0 high64");
+        expect_memory_value(memory, kReadData, 32u, 0xa5u,
+                            "disconnected padRead must not modify guest RAM");
+    }
+
+    {
+        auto memory = make_memory();
+        Ps2PadHleService service(kBindings);
+        R5900IrExecutionState state{};
+        b3r::input::Ps2PadReport report{};
+        report.connected = true;
+        report.buttons_active_low = 0xb5aau;
+        report.right_x = 0x11u;
+        report.right_y = 0x22u;
+        report.left_x = 0x33u;
+        report.left_y = 0x44u;
+        service.set_report(report);
+
+        set_args(state, 0u);
+        expect(invoke(service, kBindings.pad_init, state, memory).status ==
+                   R5900GuestCallStatus::Handled,
+               "connected read fixture padInit must succeed");
+        set_args(state, 0u, 0u, kValidPadArea);
+        expect(invoke(service, kBindings.pad_port_open, state, memory).status ==
+                   R5900GuestCallStatus::Handled,
+               "connected read fixture padPortOpen must succeed");
+
+        set_args(state, 1u, 0u, kReadData);
+        expect(invoke(service, kBindings.pad_read, state, memory).status ==
+                   R5900GuestCallStatus::Fault,
+               "connected padRead must reject port 1");
+        set_args(state, 0u, 1u, kReadData);
+        expect(invoke(service, kBindings.pad_read, state, memory).status ==
+                   R5900GuestCallStatus::Fault,
+               "connected padRead must reject slot 1");
+        set_args(state, 0u, 0u, 0u);
+        expect(invoke(service, kBindings.pad_read, state, memory).status ==
+                   R5900GuestCallStatus::Fault,
+               "connected padRead must reject null destination");
+
+        fill_memory(memory, kPartialReadData, 16u, 0xa5u);
+        set_args(state, 0u, 0u, kPartialReadData);
+        const auto partial = invoke(service, kBindings.pad_read, state, memory);
+        expect(partial.status == R5900GuestCallStatus::Fault,
+               "connected padRead must reject partially backed destination");
+        expect_memory_value(memory, kPartialReadData, 16u, 0xa5u,
+                            "failed padRead must not partially modify backed suffix");
+
+        fill_memory(memory, kReadData, 32u, 0xa5u);
+        state.gpr[2].high64 = 0xcdcdcdcdcdcdcdcdull;
+        set_args(state, 0u, 0u, kReadData);
+        const auto result = invoke(service, kBindings.pad_read, state, memory);
+        expect(result.status == R5900GuestCallStatus::Handled && state.gpr[2].low64 == 32u,
+               "connected padRead must return 32 bytes copied");
+        expect(state.gpr[2].high64 == 0xcdcdcdcdcdcdcdcdull,
+               "connected padRead must preserve v0 high64");
+
+        const auto bytes = memory.translate(kReadData, 32u);
+        expect(bytes.has_value(), "connected padRead destination must remain readable");
+        expect((*bytes)[0] == 0x00u, "padRead ok byte mismatch");
+        expect((*bytes)[1] == 0x79u, "padRead mode byte mismatch");
+        expect((*bytes)[2] == 0xaau && (*bytes)[3] == 0xb5u,
+               "padRead active-low buttons must be little-endian");
+        expect((*bytes)[4] == 0x11u && (*bytes)[5] == 0x22u &&
+                   (*bytes)[6] == 0x33u && (*bytes)[7] == 0x44u,
+               "padRead stick order must be RX RY LX LY");
+        for (std::size_t index = 8u; index < 32u; ++index) {
+            if ((*bytes)[index] != 0u) {
+                fail("padRead pressure/reserved bytes must be zero");
+            }
+        }
     }
 
     std::cout << "ps2_pad_hle_service_tests: PASS\n";
