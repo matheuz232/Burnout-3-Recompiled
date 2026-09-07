@@ -16,6 +16,16 @@ add_library(b3r_core
 )
 target_include_directories(b3r_core PUBLIC src)
 
+add_library(b3r_input
+  src/input/game_input.cpp
+)
+target_include_directories(b3r_input PUBLIC src)
+if(MSVC)
+  target_compile_options(b3r_input PRIVATE /W4 /permissive- /Zc:__cplusplus)
+else()
+  target_compile_options(b3r_input PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_library(b3r_recompiler
   src/recompiler/ps2_elf.cpp
   src/recompiler/r5900_decoder.cpp
@@ -163,6 +173,10 @@ endif()
 
 if(B3R_BUILD_TESTS)
   enable_testing()
+
+  add_executable(game_input_tests tests/game_input_tests.cpp)
+  target_link_libraries(game_input_tests PRIVATE b3r_input)
+  add_test(NAME game_input_tests COMMAND game_input_tests)
 
   add_executable(frame_schedule_tests tests/frame_schedule_tests.cpp)
   target_link_libraries(frame_schedule_tests PRIVATE b3r_core)
