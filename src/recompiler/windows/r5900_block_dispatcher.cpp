@@ -26,6 +26,13 @@ std::string format_stage_error(std::string_view stage,
     return out.str();
 }
 
+bool ps2_memory_write32_adapter(void* user,
+                                std::uint32_t address,
+                                std::uint32_t value) noexcept {
+    auto* memory = static_cast<runtime::Ps2MemoryMap*>(user);
+    return memory != nullptr && memory->write_u32(address, value);
+}
+
 bool ps2_memory_write64_adapter(void* user,
                                 std::uint32_t address,
                                 std::uint64_t value) noexcept {
@@ -73,6 +80,7 @@ bool is_dispatcher_v0_eligible(R5900Instruction instruction) noexcept {
     case R5900Instruction::Ctc1:
     case R5900Instruction::AddaS:
     case R5900Instruction::Sync:
+    case R5900Instruction::Sw:
     case R5900Instruction::Sd:
     case R5900Instruction::Sq:
         return true;
@@ -213,6 +221,7 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             R5900IrExecutionContext execution_context{};
             execution_context.state = &state;
             execution_context.memory.user = &memory_;
+            execution_context.memory.write32 = &ps2_memory_write32_adapter;
             execution_context.memory.write64 = &ps2_memory_write64_adapter;
             execution_context.memory.write128 = &ps2_memory_write128_adapter;
 
@@ -443,6 +452,7 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
         R5900IrExecutionContext execution_context{};
         execution_context.state = &state;
         execution_context.memory.user = &memory_;
+        execution_context.memory.write32 = &ps2_memory_write32_adapter;
         execution_context.memory.write64 = &ps2_memory_write64_adapter;
         execution_context.memory.write128 = &ps2_memory_write128_adapter;
 
