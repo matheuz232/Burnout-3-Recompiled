@@ -2,7 +2,9 @@
 #include "r5900_createsema_test_support.h"
 
 #include <fstream>
+#include <iomanip>
 #include <iterator>
+#include <sstream>
 #include <string>
 
 using namespace b3r::recompiler;
@@ -10,9 +12,67 @@ using namespace b3r::test_support::createsema;
 
 namespace {
 
+const char* stop_reason_name(R5900DispatchStopReason reason) noexcept {
+    switch (reason) {
+    case R5900DispatchStopReason::BlockBudgetExhausted: return "BlockBudgetExhausted";
+    case R5900DispatchStopReason::ControlFlow: return "ControlFlow";
+    case R5900DispatchStopReason::UnsupportedInstruction: return "UnsupportedInstruction";
+    case R5900DispatchStopReason::Trap: return "Trap";
+    case R5900DispatchStopReason::UnsupportedSyscall: return "UnsupportedSyscall";
+    case R5900DispatchStopReason::HostSyscallFailure: return "HostSyscallFailure";
+    case R5900DispatchStopReason::InvalidBlockBudget: return "InvalidBlockBudget";
+    case R5900DispatchStopReason::AnalysisFailure: return "AnalysisFailure";
+    case R5900DispatchStopReason::LoweringFailure: return "LoweringFailure";
+    case R5900DispatchStopReason::CompileFailure: return "CompileFailure";
+    case R5900DispatchStopReason::MemoryAccessFailure: return "MemoryAccessFailure";
+    }
+    return "UnknownStopReason";
+}
+
+const char* instruction_class_name(R5900InstructionClass instruction_class) noexcept {
+    switch (instruction_class) {
+    case R5900InstructionClass::Unknown: return "Unknown";
+    case R5900InstructionClass::Alu: return "Alu";
+    case R5900InstructionClass::Branch: return "Branch";
+    case R5900InstructionClass::Jump: return "Jump";
+    case R5900InstructionClass::Load: return "Load";
+    case R5900InstructionClass::Store: return "Store";
+    case R5900InstructionClass::System: return "System";
+    }
+    return "Unknown";
+}
+
 std::string format_boundary_probe(
     b3r::runtime::Ps2MemoryMap& memory,
-    const R5900DispatchResult& result);
+    const R5900DispatchResult& result) {
+    std::ostringstream output;
+    output << "BOUNDARY_PROBE reason=" << stop_reason_name(result.reason)
+           << " pc=0x" << std::hex << std::setfill('0') << std::setw(8) << result.next_pc;
+
+    const auto raw = memory.read_u32(result.next_pc);
+    if (raw.has_value()) {
+        const auto decoded = decode_r5900(*raw);
+        output << " raw=0x" << std::setw(8) << *raw
+               << " instruction=" << r5900_instruction_name(decoded.instruction)
+               << " class=" << instruction_class_name(decoded.instruction_class)
+               << " opcode=0x" << std::setw(2)
+               << static_cast<unsigned>(decoded.primary_opcode)
+               << std::dec
+               << " rs=" << static_cast<unsigned>(decoded.rs)
+               << " rt=" << static_cast<unsigned>(decoded.rt)
+               << " rd=" << static_cast<unsigned>(decoded.rd)
+               << " immediate=0x" << std::hex << std::setw(4) << decoded.immediate;
+    } else {
+        output << " raw=UNMAPPED instruction=UNMAPPED class=UNMAPPED"
+               << " opcode=UNMAPPED rs=UNMAPPED rt=UNMAPPED rd=UNMAPPED immediate=UNMAPPED";
+    }
+
+    output << std::dec
+           << " blocks=" << result.blocks_executed
+           << " instructions=" << result.instructions_executed
+           << " syscalls=" << result.syscalls_handled;
+    return output.str();
+}
 
 void validate_external_startup(const char* path) {
     std::ifstream input(path, std::ios::binary);
