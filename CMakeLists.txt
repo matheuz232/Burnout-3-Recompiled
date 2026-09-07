@@ -136,6 +136,7 @@ if(WIN32)
     src/platform/windows/qpc_clock.cpp
     src/platform/windows/win32_window.cpp
     src/platform/windows/windows_frame_pacer.cpp
+    src/platform/windows/windows_game_input.cpp
   )
   target_include_directories(b3r_windows_runtime PUBLIC src)
   target_compile_definitions(b3r_windows_runtime PUBLIC
@@ -146,7 +147,7 @@ if(WIN32)
     _WIN32_WINNT=0x0A00
     WINVER=0x0A00
   )
-  target_link_libraries(b3r_windows_runtime PUBLIC b3r_core dbghelp winmm)
+  target_link_libraries(b3r_windows_runtime PUBLIC b3r_core b3r_input dbghelp winmm Xinput)
   if(MSVC)
     target_compile_options(b3r_windows_runtime PRIVATE /W4 /permissive- /Zc:__cplusplus)
   endif()
@@ -525,6 +526,13 @@ if(B3R_BUILD_TESTS)
     endif()
     add_test(NAME win32_window_smoke_tests COMMAND win32_window_smoke_tests)
     set_tests_properties(win32_window_smoke_tests PROPERTIES TIMEOUT 15)
+
+    add_executable(windows_game_input_tests tests/windows_game_input_tests.cpp)
+    target_link_libraries(windows_game_input_tests PRIVATE b3r_windows_runtime)
+    if(MSVC)
+      target_compile_options(windows_game_input_tests PRIVATE /W4 /permissive- /Zc:__cplusplus)
+    endif()
+    add_test(NAME windows_game_input_tests COMMAND windows_game_input_tests)
 
     add_executable(crash_handler_probe tests/crash_handler_probe.cpp)
     target_link_libraries(crash_handler_probe PRIVATE b3r_windows_runtime)
