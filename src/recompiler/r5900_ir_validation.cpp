@@ -376,6 +376,37 @@ R5900IrValidationResult validate_add_f32_accumulator(const R5900IrInstruction& i
     return {};
 }
 
+R5900IrValidationResult validate_load64(const R5900IrInstruction& ir,
+                                        std::size_t index) {
+    const auto destination = validate_gpr_destination(
+        ir, index, R5900IrGprWriteMode::Low64PreserveUpper64);
+    if (!destination.ok()) {
+        return destination;
+    }
+    if (ir.inputs.size() != 2u ||
+        ir.inputs[0].kind != R5900IrOperandKind::Gpr ||
+        ir.inputs[1].kind != R5900IrOperandKind::Immediate) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "Load64 expects base GPR and signed immediate");
+    }
+    if (ir.inputs[0].gpr_index >= 32u) {
+        return failure(R5900IrValidationError::InvalidRegister,
+                       index,
+                       ir.guest_pc,
+                       "Load64 base GPR index out of range");
+    }
+    if (ir.inputs[1].immediate < -32768 ||
+        ir.inputs[1].immediate > 32767) {
+        return failure(R5900IrValidationError::MalformedInstruction,
+                       index,
+                       ir.guest_pc,
+                       "Load64 immediate must fit signed 16 bits");
+    }
+    return {};
+}
+
 R5900IrValidationResult validate_store32(const R5900IrInstruction& ir,
                                          std::size_t index) {
     if (ir.destination.has_value() ||
@@ -537,6 +568,9 @@ R5900IrValidationResult validate_r5900_ir_instruction(
 
     case R5900IrOpcode::AddF32ToAccumulator:
         return validate_add_f32_accumulator(instruction, instruction_index);
+
+    case R5900IrOpcode::Load64:
+        return validate_load64(instruction, instruction_index);
 
     case R5900IrOpcode::Store32:
         return validate_store32(instruction, instruction_index);
