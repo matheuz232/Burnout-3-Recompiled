@@ -70,6 +70,18 @@ b3r::recompiler::R5900IrInstruction valid_store64() {
     return ir;
 }
 
+b3r::recompiler::R5900IrInstruction valid_load64() {
+    using namespace b3r::recompiler;
+    R5900IrInstruction ir{};
+    ir.guest_pc = 0x00114f08u;
+    ir.guest_raw = i_type(0x37u, 29u, 31u, 0x0040u);
+    ir.opcode = R5900IrOpcode::Load64;
+    ir.destination = R5900IrDestination{31u};
+    ir.write_mode = R5900IrGprWriteMode::Low64PreserveUpper64;
+    ir.inputs = {gpr(29u), immediate(0x40)};
+    return ir;
+}
+
 } // namespace
 
 int main() {
@@ -292,6 +304,112 @@ int main() {
         valid.inputs[2] = immediate(offset);
         expect(validate_r5900_ir_instruction(valid, 0u).ok(),
                "Store64 must accept signed16 endpoint offsets");
+    }
+
+    // Load64 contract for LD. Decoder support already exists; lowering is the new behavior.
+    constexpr std::uint32_t ld_word = i_type(0x37u, 29u, 31u, 0x0040u);
+    const auto ld_decoded = decode_r5900(ld_word);
+    expect(ld_decoded.instruction == R5900Instruction::Ld,
+           "fixture must decode as LD");
+    expect(ld_decoded.instruction_class == R5900InstructionClass::Load &&
+               ld_decoded.memory_width == R5900MemoryWidth::Doubleword64,
+           "LD must decode as a 64-bit load");
+
+    const auto ld_lowered = lower_r5900_instruction(ld_decoded, 0x00114f08u);
+    expect(ld_lowered.ok() && ld_lowered.instructions.size() == 1u,
+           "LD must lower to one IR instruction");
+    const auto& ld_ir = ld_lowered.instructions.front();
+    expect(ld_ir.opcode == R5900IrOpcode::Load64,
+           "LD must lower to Load64");
+    expect(ld_ir.guest_pc == 0x00114f08u && ld_ir.guest_raw == ld_word,
+           "Load64 must preserve guest provenance");
+    expect(ld_ir.destination.has_value() &&
+               ld_ir.destination->kind == R5900IrDestinationKind::Gpr &&
+               ld_ir.destination->index == 31u,
+           "Load64 destination mismatch");
+    expect(ld_ir.write_mode == R5900IrGprWriteMode::Low64PreserveUpper64,
+           "Load64 write mode mismatch");
+    expect(ld_ir.inputs.size() == 2u &&
+               ld_ir.inputs[0].kind == R5900IrOperandKind::Gpr &&
+               ld_ir.inputs[0].gpr_index == 29u &&
+               ld_ir.inputs[1].kind == R5900IrOperandKind::Immediate &&
+               ld_ir.inputs[1].immediate == 0x40,
+           "Load64 operand lowering mismatch");
+    expect(validate_r5900_ir_instruction(ld_ir, 0u).ok(),
+           "lowered Load64 must validate");
+
+    constexpr std::uint32_t ld_zero_word = i_type(0x37u, 0u, 0u, 0xfff8u);
+    const auto ld_zero = lower_r5900_instruction(
+        decode_r5900(ld_zero_word), 0x00114f0cu);
+    expect(ld_zero.ok() && ld_zero.instructions.size() == 1u &&
+               ld_zero.instructions.front().opcode == R5900IrOpcode::Load64 &&
+               ld_zero.instructions.front().destination.has_value() &&
+               ld_zero.instructions.front().destination->index == 0u &&
+               ld_zero.instructions.front().inputs[0].gpr_index == 0u &&
+               ld_zero.instructions.front().inputs[1].immediate == -8,
+           "LD with rt=0 must remain an observable load");
+
+    {
+        auto malformed = valid_load64();
+        malformed.destination.reset();
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Load64 must require a destination");
+    }
+    {
+        auto malformed = valid_load64();
+        malformed.destination = R5900IrDestination{R5900IrDestinationKind::Fpr, 1u};
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Load64 destination must be a GPR");
+    }
+    {
+        auto malformed = valid_load64();
+        malformed.destination = R5900IrDestination{32u};
+        expect(validate_r5900_ir_instruction(malformed, 0u).error ==
+                   R5900IrValidationError::InvalidRegister,
+               "Load64 destination GPR index 32 must reject");
+    }
+    {
+        auto malformed = valid_load64();
+        malformed.write_mode = R5900IrGprWriteMode::None;
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Load64 must require low64-preserving write mode");
+    }
+    {
+        auto malformed = valid_load64();
+        malformed.inputs.pop_back();
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Load64 must require exactly two operands");
+    }
+    {
+        auto malformed = valid_load64();
+        malformed.inputs[0] = fpr(2u);
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Load64 FPR base must reject");
+    }
+    {
+        auto malformed = valid_load64();
+        malformed.inputs[0] = gpr(32u);
+        expect(validate_r5900_ir_instruction(malformed, 0u).error ==
+                   R5900IrValidationError::InvalidRegister,
+               "Load64 base GPR index 32 must reject");
+    }
+    {
+        auto malformed = valid_load64();
+        malformed.inputs[1] = gpr(3u);
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Load64 register offset must reject");
+    }
+    for (const auto offset : {-32768, 32767}) {
+        auto valid = valid_load64();
+        valid.inputs[1] = immediate(offset);
+        expect(validate_r5900_ir_instruction(valid, 0u).ok(),
+               "Load64 must accept signed16 endpoint offsets");
+    }
+    for (const auto offset : {-32769, 32768}) {
+        auto malformed = valid_load64();
+        malformed.inputs[1] = immediate(offset);
+        expect(!validate_r5900_ir_instruction(malformed, 0u).ok(),
+               "Load64 must reject offsets outside signed16");
     }
 
     std::cout << "r5900_ir_store64_tests: PASS\n";
