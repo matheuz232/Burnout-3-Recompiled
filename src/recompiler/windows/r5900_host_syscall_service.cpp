@@ -159,10 +159,8 @@ R5900HostSyscallResult R5900HostSyscallService::handle(
                 "CreateSema descriptor is outside available EE memory",
             };
         }
-        return {
-            R5900HostSyscallStatus::Unsupported,
-            "CreateSema descriptor creation is not implemented in v0",
-        };
+        state.gpr[2].low64 = 1u;
+        return {R5900HostSyscallStatus::Handled, {}};
     }
 
     std::ostringstream out;
