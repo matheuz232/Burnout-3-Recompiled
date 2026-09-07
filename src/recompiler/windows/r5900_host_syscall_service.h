@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace b3r::recompiler {
 
@@ -40,6 +41,14 @@ struct R5900SetupHeapContext {
     std::uint32_t heap_end{};
 };
 
+struct R5900SemaContext {
+    std::int32_t id{};
+    std::int32_t current_count{};
+    std::int32_t max_count{};
+    std::uint32_t attr{};
+    std::uint32_t option{};
+};
+
 class IR5900HostSyscallService {
 public:
     virtual ~IR5900HostSyscallService() = default;
@@ -67,9 +76,15 @@ public:
         return setup_heap_context_;
     }
 
+    [[nodiscard]] const std::vector<R5900SemaContext>&
+    sema_contexts() const noexcept {
+        return sema_contexts_;
+    }
+
 private:
     std::optional<R5900SetupThreadContext> setup_thread_context_{};
     std::optional<R5900SetupHeapContext> setup_heap_context_{};
+    std::vector<R5900SemaContext> sema_contexts_{};
     std::int32_t next_sema_id_{1};
 };
 
