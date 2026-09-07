@@ -43,9 +43,10 @@ endif()
 
 add_library(b3r_runtime
   src/runtime/ps2_memory_map.cpp
+  src/runtime/ps2_pad_hle_service.cpp
 )
 target_include_directories(b3r_runtime PUBLIC src)
-target_link_libraries(b3r_runtime PUBLIC b3r_recompiler)
+target_link_libraries(b3r_runtime PUBLIC b3r_recompiler b3r_input)
 if(MSVC)
   target_compile_options(b3r_runtime PRIVATE /W4 /permissive- /Zc:__cplusplus)
 else()
@@ -313,6 +314,10 @@ if(B3R_BUILD_TESTS)
   add_executable(ps2_memory_map_tests tests/ps2_memory_map_tests.cpp)
   target_link_libraries(ps2_memory_map_tests PRIVATE b3r_runtime)
   add_test(NAME ps2_memory_map_tests COMMAND ps2_memory_map_tests)
+
+  add_executable(ps2_pad_hle_service_tests tests/ps2_pad_hle_service_tests.cpp)
+  target_link_libraries(ps2_pad_hle_service_tests PRIVATE b3r_runtime)
+  add_test(NAME ps2_pad_hle_service_tests COMMAND ps2_pad_hle_service_tests)
 
   add_executable(r5900_control_flow_tests tests/r5900_control_flow_tests.cpp)
   target_link_libraries(r5900_control_flow_tests PRIVATE b3r_analysis)
