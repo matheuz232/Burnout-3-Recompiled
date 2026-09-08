@@ -543,6 +543,7 @@ R5900IrValidationResult validate_r5900_ir_instruction(
 
     case R5900IrOpcode::AddWordSignExtend:
     case R5900IrOpcode::Or64:
+    case R5900IrOpcode::Xor64:
         return validate_existing_integer_write(instruction, instruction_index);
 
     case R5900IrOpcode::Add64:
