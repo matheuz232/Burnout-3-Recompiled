@@ -1,11 +1,6 @@
 #pragma once
 
-#include "analysis/elf32_metadata.h"
 #include "analysis/ps2_pad_binding_discovery.h"
-#include "analysis/ps2_pad_fingerprint.h"
-#include "analysis/r5900_reachability.h"
-#include "recompiler/ps2_elf.h"
-#include "runtime/ps2_memory_map.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -57,32 +52,6 @@ namespace ps2_pad_binding_report_detail {
 }
 
 } // namespace ps2_pad_binding_report_detail
-
-[[nodiscard]] inline PadBindingDiscoveryResult discover_ps2_pad_bindings(
-    std::span<const std::uint8_t> elf_bytes,
-    const recompiler::Ps2ElfImage& image,
-    const runtime::Ps2MemoryMap& memory,
-    const R5900ReachabilityGraph& graph) {
-    const auto metadata = parse_elf32_metadata(elf_bytes);
-    const auto symbols = collect_ps2_pad_symbol_evidence(metadata, image);
-    const auto fingerprint_candidates = scan_ps2_pad_fingerprints(memory, graph);
-    const auto fingerprint_evidence = make_ps2_pad_fingerprint_evidence(fingerprint_candidates);
-
-    std::vector<PadBindingEvidence> evidence{};
-    evidence.reserve(symbols.evidence.size() + fingerprint_evidence.size());
-    evidence.insert(evidence.end(), symbols.evidence.begin(), symbols.evidence.end());
-    evidence.insert(evidence.end(), fingerprint_evidence.begin(), fingerprint_evidence.end());
-
-    std::vector<std::string> diagnostics = symbols.diagnostics;
-    if (metadata.status == Elf32MetadataStatus::Malformed) {
-        diagnostics.push_back(
-            metadata.diagnostic.empty()
-                ? "ELF32 optional metadata is malformed"
-                : std::string("ELF32 optional metadata malformed: ") + metadata.diagnostic);
-    }
-
-    return resolve_ps2_pad_binding_evidence(evidence, diagnostics);
-}
 
 [[nodiscard]] inline std::string
 render_ps2_pad_binding_report(const PadBindingDiscoveryResult& result) {
