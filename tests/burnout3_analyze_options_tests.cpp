@@ -1,6 +1,7 @@
 #include "analysis/ps2_pad_activation_report.h"
 #include "tools/burnout3_analyze_options.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -83,10 +84,24 @@ b3r::analysis::PadRuntimeConfirmationResult report_activation_runtime() {
     return runtime;
 }
 
+b3r::analysis::Ps2PadActivationDecision ready_activation_decision() {
+    return b3r::analysis::make_ps2_pad_activation_decision(
+        report_activation_discovery(), report_activation_runtime());
+}
+
+std::size_t count_occurrences(const std::string& text, std::string_view needle) {
+    std::size_t count{};
+    std::size_t position{};
+    while ((position = text.find(needle, position)) != std::string::npos) {
+        ++count;
+        position += needle.size();
+    }
+    return count;
+}
+
 void test_pad_activation_ready_report() {
     using namespace b3r::analysis;
-    const auto decision = make_ps2_pad_activation_decision(
-        report_activation_discovery(), report_activation_runtime());
+    const auto decision = ready_activation_decision();
     const std::string expected =
         "PAD_ACTIVATION_V0 readiness=ready eligible=6 required=6\n"
         "PAD_ACTIVATION function=padInit static_confidence=trusted runtime_status=runtime_confirmed eligibility=eligible pc=0x00101000 reason=eligible_runtime_confirmed\n"
@@ -103,6 +118,70 @@ void test_pad_activation_ready_report() {
            "ready activation report must match the canonical byte format");
     expect(format_ps2_pad_activation_decision(decision) == formatted,
            "activation report must be byte-identical on repeated render");
+}
+
+void test_pad_activation_report_defends_against_malformed_decisions() {
+    using namespace b3r::analysis;
+
+    auto rejected = ready_activation_decision();
+    auto& read = rejected.functions[static_cast<std::size_t>(PadBindingFunction::PadRead)];
+    read.eligibility = PadActivationEligibility::Rejected;
+    read.reason = PadActivationReason::InputMismatch;
+    read.guest_pc = 0x00abcdefu;
+    rejected.readiness = PadActivationReadiness::NotReady;
+    rejected.diagnostics = {"zeta", "alpha", "zeta"};
+    const auto rejected_text = format_ps2_pad_activation_decision(rejected);
+    expect(rejected_text.find(
+               "PAD_ACTIVATION function=padRead static_confidence=candidate runtime_status=runtime_confirmed eligibility=rejected pc=none reason=input_mismatch") !=
+               std::string::npos,
+           "rejected function must render pc=none even when copied decision carries a PC");
+    expect(rejected_text.find("PAD_ACTIVATION_BINDINGS") == std::string::npos,
+           "NotReady decision must never render bindings even when bindings are present");
+    expect(rejected_text.find("PAD_ACTIVATION_DIAGNOSTIC alpha\n") <
+               rejected_text.find("PAD_ACTIVATION_DIAGNOSTIC zeta\n") &&
+               count_occurrences(rejected_text, "PAD_ACTIVATION_DIAGNOSTIC zeta\n") == 1u,
+           "activation diagnostics must be sorted and deduplicated defensively");
+
+    auto missing_bindings = ready_activation_decision();
+    missing_bindings.bindings.reset();
+    const auto missing_bindings_text =
+        format_ps2_pad_activation_decision(missing_bindings);
+    expect(missing_bindings_text.find("PAD_ACTIVATION_BINDINGS") == std::string::npos,
+           "Ready decision without bindings must not fabricate a bindings line");
+
+    auto provenance = ready_activation_decision();
+    auto& open = provenance.functions[static_cast<std::size_t>(PadBindingFunction::PadPortOpen)];
+    open.eligibility = PadActivationEligibility::Rejected;
+    open.reason = PadActivationReason::PcNotInDiscoveryEvidence;
+    provenance.readiness = PadActivationReadiness::NotReady;
+    const auto provenance_text = format_ps2_pad_activation_decision(provenance);
+    expect(provenance_text.find("reason=pc_not_in_discovery_evidence") != std::string::npos,
+           "provenance rejection reason must use canonical report spelling");
+}
+
+void test_pad_activation_report_structure_and_exclusions() {
+    using namespace b3r::analysis;
+    const auto text = format_ps2_pad_activation_decision(ready_activation_decision());
+    expect(count_occurrences(text, "PAD_ACTIVATION function=") == 6u,
+           "activation report must contain exactly six canonical function lines");
+
+    const auto init = text.find("function=padInit ");
+    const auto open = text.find("function=padPortOpen ");
+    const auto state = text.find("function=padGetState ");
+    const auto read = text.find("function=padRead ");
+    const auto close = text.find("function=padPortClose ");
+    const auto end = text.find("function=padEnd ");
+    expect(init < open && open < state && state < read && read < close && close < end,
+           "activation function lines must remain in canonical enum order");
+
+    constexpr std::array<std::string_view, 6> forbidden{
+        "score=", "args=", "bytes=", "ram=", "code=", "hash="};
+    for (const auto token : forbidden) {
+        expect(text.find(token) == std::string::npos,
+               "activation report must exclude non-policy diagnostic payloads");
+    }
+    expect(format_ps2_pad_activation_decision(ready_activation_decision()) == text,
+           "canonical activation rendering must remain byte-identical");
 }
 
 } // namespace
@@ -186,6 +265,8 @@ int main() {
     }
 
     test_pad_activation_ready_report();
+    test_pad_activation_report_defends_against_malformed_decisions();
+    test_pad_activation_report_structure_and_exclusions();
 
     std::cout << "burnout3_analyze_options_tests: PASS\n";
     return EXIT_SUCCESS;
