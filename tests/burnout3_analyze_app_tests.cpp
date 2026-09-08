@@ -120,6 +120,7 @@ int main() {
     write_bytes(elf_path, make_break_elf());
     write_bytes(direct_call_elf_path, make_direct_call_elf());
 
+    std::string baseline_report;
     {
         Burnout3AnalyzeOptions options{};
         options.elf_path = elf_path.string();
@@ -127,10 +128,33 @@ int main() {
         std::ostringstream stdout_stream;
         const auto result = run_burnout3_analyze(options, stdout_stream);
         expect(result.ok(), "valid external ELF must analyze successfully");
-        expect(stdout_stream.str().find("ENTRY 0x00100000\n") == 0u,
+        baseline_report = stdout_stream.str();
+        expect(baseline_report.find("ENTRY 0x00100000\n") == 0u,
                "stdout report must begin with the ELF entry point");
-        expect(stdout_stream.str().find("BLOCK 0x00100000 END Trap") != std::string::npos,
+        expect(baseline_report.find("BLOCK 0x00100000 END Trap") != std::string::npos,
                "stdout report must contain the reachable BREAK block");
+        expect(baseline_report.find("PAD_BINDINGS_V0") == std::string::npos,
+               "default analyzer output must remain byte-compatible and omit PAD discovery");
+    }
+
+    {
+        Burnout3AnalyzeOptions options{};
+        options.elf_path = elf_path.string();
+        options.max_blocks = 32;
+        options.pad_bindings = true;
+        std::ostringstream stdout_stream;
+        const auto result = run_burnout3_analyze(options, stdout_stream);
+        expect(result.ok(), "opt-in PAD binding discovery on stripped ELF must remain nonfatal");
+        const auto report = stdout_stream.str();
+        expect(report.starts_with(baseline_report),
+               "--pad-bindings must preserve the existing analysis report byte-for-byte as prefix");
+        expect(report.size() > baseline_report.size() &&
+                   report.substr(baseline_report.size()).starts_with("\nPAD_BINDINGS_V0 1\n"),
+               "--pad-bindings must append one blank line followed by PAD_BINDINGS_V0");
+        expect(report.find("PAD_BINDING function=padInit confidence=unresolved pc=none") != std::string::npos,
+               "stripped ELF must report unresolved PAD bindings instead of failing");
+        expect(report.find("PAD_BINDINGS_END\n") != std::string::npos,
+               "PAD binding section must terminate deterministically");
     }
 
     {
