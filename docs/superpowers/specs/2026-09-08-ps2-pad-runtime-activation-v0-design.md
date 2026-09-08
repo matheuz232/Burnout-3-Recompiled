@@ -9,7 +9,7 @@ Branch: `design/ps2-pad-runtime-activation-v0`
 
 This milestone defines the first policy that may transform previously collected PAD binding evidence into a complete `Ps2PadHleBindings` object suitable for constructing `Ps2PadHleService`.
 
-The milestone deliberately separates three concepts:
+The milestone keeps three concepts independent:
 
 ```text
 static confidence
@@ -19,25 +19,23 @@ runtime confirmation
 HLE activation readiness
 ```
 
-A binding can remain statically `Candidate` or even `Unresolved` while becoming activation-eligible if runtime execution uniquely confirms one nonzero guest PC for that function.
+A function may remain statically `Candidate` or `Unresolved` while becoming activation-eligible if execution uniquely confirms one nonzero **evidence-backed** guest PC for that function.
 
-Activation readiness is global and atomic: v0 materializes bindings only when all six PAD-facing functions are individually eligible and their selected guest PCs are pairwise distinct.
+Activation readiness is global and atomic: v0 materializes bindings only when all six PAD-facing functions are individually eligible and all six selected PCs are pairwise distinct.
 
-## 2. Existing validated foundation
+## 2. Validated foundation
 
-The previous milestones already provide:
+Previous milestones already provide:
 
-- analysis-only PAD binding discovery;
-- exact ELF-symbol evidence and static fingerprint evidence;
-- runtime observation of completed `JAL`/`JALR` calls;
-- post-delay-slot `$a0..$a3` snapshots;
+- PAD binding discovery from exact ELF symbols and conservative static fingerprints;
+- runtime observation of completed `JAL`/`JALR` calls after the delay slot;
 - per-function ABI compatibility checks;
 - `Unobserved`, `ObservedIncompatible`, `RuntimeConfirmed`, and `RuntimeAmbiguous` states;
 - deterministic `PAD_RUNTIME_CONFIRMATION_V0` reporting;
 - synthetic dispatcher → observer → PAD confirmation integration;
-- an existing `Ps2PadHleService` that accepts a complete `Ps2PadHleBindings` structure.
+- `Ps2PadHleService`, which consumes `Ps2PadHleBindings`.
 
-`Ps2PadHleService` currently relies on lifecycle state:
+The current HLE has lifecycle dependencies:
 
 ```text
 padInit
@@ -51,52 +49,52 @@ padPortClose
 padEnd
 ```
 
-`padRead` faults when `padInit` has not completed or port 0/slot 0 is not open. Therefore unrestricted partial activation would create unsafe hybrid execution where some libpad calls execute as guest code while dependent calls are intercepted by HLE.
+`padRead` faults when initialization/open state is missing. Therefore unrestricted partial activation would create unsafe hybrid execution where dependent calls are intercepted while prerequisite calls still execute as guest code.
 
 ## 3. Goals
 
 The milestone must:
 
 1. define a pure activation-decision policy;
-2. keep static confidence unchanged;
-3. accept a uniquely runtime-confirmed guest PC regardless of whether the static confidence is `Trusted`, `Candidate`, or `Unresolved`;
-4. reject `Unobserved`, `ObservedIncompatible`, and `RuntimeAmbiguous` functions;
-5. reject missing or zero selected PCs;
-6. require all six functions to be eligible before activation readiness becomes `Ready`;
-7. require all six selected PCs to be pairwise distinct;
-8. materialize `Ps2PadHleBindings` only in the globally `Ready` state;
-9. provide deterministic diagnostics and a deterministic activation report;
-10. prove synthetic end-to-end activation through the existing real `Ps2PadHleService` and `R5900BlockDispatcher`;
-11. avoid `WinMain` wiring until the project has a real guest-execution runtime path.
+2. preserve static confidence unchanged;
+3. require every activation PC to be backed by discovery evidence for the same function;
+4. accept `Trusted`, `Candidate`, or `Unresolved` confidence when the same evidence-backed PC is uniquely runtime-confirmed;
+5. reject `Unobserved`, `ObservedIncompatible`, and `RuntimeAmbiguous` functions;
+6. reject malformed cross-input identity/confidence state;
+7. reject missing or zero selected PCs;
+8. require all six functions to be eligible;
+9. require all six selected PCs to be pairwise distinct;
+10. materialize `Ps2PadHleBindings` only in global `Ready` state;
+11. provide deterministic diagnostics/reporting;
+12. prove synthetic end-to-end activation with the existing `Ps2PadHleService` and dispatcher;
+13. avoid `WinMain` wiring until a real guest-execution runtime exists.
 
 ## 4. Non-goals
 
 This milestone does not:
 
 - identify real Burnout 3 PAD addresses;
-- claim the real game has confirmed six PAD entry points;
-- hot-swap guest-call services during a dispatcher run;
-- mutate `R5900BlockDispatcher` options after construction;
-- add a new production game-execution loop to `WinMain`;
+- claim real-game PAD confirmation;
+- hot-swap guest-call services during `R5900BlockDispatcher::run()`;
+- mutate dispatcher options after construction;
+- add a production R5900 game loop to `WinMain`;
 - add SIF/PADMAN/IOP/SIO2 emulation;
-- change `Ps2PadHleService` lifecycle semantics;
+- weaken `Ps2PadHleService` lifecycle checks;
 - add partial auto-activation;
-- promote `Candidate` or `Unresolved` static confidence to `Trusted`;
+- promote static confidence;
 - weaken ELF/PT_LOAD validation;
-- add proprietary Burnout 3 code, bytes, hashes, assets, or hardcoded game addresses;
-- claim game boot, rendering, audio, menu, or gameplay support.
+- add proprietary game bytes/assets/hashes or hardcoded game addresses;
+- claim boot, rendering, audio, menu, or gameplay support.
 
 ## 5. Activation policy model
 
-### 5.1 Function eligibility
-
-Add a pure analysis/runtime-facing activation unit, expected at:
+Expected production unit:
 
 ```text
 src/analysis/ps2_pad_activation.h
 ```
 
-The public model is:
+### 5.1 Public model
 
 ```cpp
 enum class PadActivationEligibility : std::uint8_t {
@@ -116,6 +114,8 @@ enum class PadActivationReason : std::uint8_t {
     RuntimeAmbiguous,
     MissingGuestPc,
     ZeroGuestPc,
+    InputMismatch,
+    PcNotInDiscoveryEvidence,
 };
 
 struct PadActivationFunctionDecision {
@@ -136,7 +136,7 @@ struct Ps2PadActivationDecision {
 };
 ```
 
-The primary API is:
+Primary API:
 
 ```cpp
 [[nodiscard]] Ps2PadActivationDecision
@@ -145,64 +145,97 @@ make_ps2_pad_activation_decision(
     const PadRuntimeConfirmationResult& runtime);
 ```
 
-### 5.2 Per-function decision table
+The function is pure with respect to its inputs and runtime state: it does not mutate discovery/runtime, guest RAM, dispatcher state, or HLE state.
 
-For each canonical PAD function:
+### 5.2 Cross-input provenance validation
+
+For canonical index `i`:
 
 ```text
-runtime status              guest PC          eligibility   reason
---------------------------------------------------------------------------
-Unobserved                  any               Rejected      Unobserved
-ObservedIncompatible        any               Rejected      ObservedIncompatible
-RuntimeAmbiguous            any               Rejected      RuntimeAmbiguous
-RuntimeConfirmed            absent            Rejected      MissingGuestPc
-RuntimeConfirmed            0x00000000        Rejected      ZeroGuestPc
-RuntimeConfirmed            nonzero           Eligible      EligibleRuntimeConfirmed
+expected = static_cast<PadBindingFunction>(i)
 ```
 
-The selected PC in an `Eligible` decision is the runtime-confirmed PC.
+Before evaluating runtime status, the decision maker validates:
 
-For a rejected function, `guest_pc` in the activation decision is always cleared, even if the source runtime structure is internally inconsistent and contains an optional PC.
+1. `discovery.resolutions[i].function == expected`;
+2. `runtime.functions[i].function == expected`;
+3. `runtime.functions[i].static_confidence == discovery.resolutions[i].confidence`.
 
-### 5.3 Static confidence handling
-
-Static confidence is carried through for diagnostics only.
-
-These are all individually eligible when runtime status is uniquely confirmed with one nonzero PC:
+Any failure is:
 
 ```text
-Trusted   + RuntimeConfirmed -> Eligible
-Candidate + RuntimeConfirmed -> Eligible
+eligibility = Rejected
+reason = InputMismatch
+guest_pc = none
+```
+
+and emits a deterministic diagnostic naming the canonical function and mismatch category.
+
+The decision maker must not silently correlate unrelated entries merely because array positions match.
+
+### 5.3 Evidence-backed PC requirement
+
+A runtime-confirmed PC is eligible only if the exact PC occurs in `discovery.resolutions[i].evidence` for the same canonical function.
+
+Evidence kind and score do not matter at this stage; existence of same-function evidence does.
+
+Therefore:
+
+```text
+RuntimeConfirmed(nonzero PC)
+AND same PC exists in same-function discovery evidence
+    -> eligible candidate for activation
+
+RuntimeConfirmed(nonzero PC)
+BUT PC absent from same-function discovery evidence
+    -> Rejected / PcNotInDiscoveryEvidence
+```
+
+This check prevents a manually malformed or externally fabricated runtime-result structure from authorizing an arbitrary PC.
+
+### 5.4 Per-function decision table
+
+After cross-input validation:
+
+```text
+runtime status              selected PC              result
+--------------------------------------------------------------------------------
+Unobserved                  any                      Rejected / Unobserved
+ObservedIncompatible        any                      Rejected / ObservedIncompatible
+RuntimeAmbiguous            any                      Rejected / RuntimeAmbiguous
+RuntimeConfirmed            absent                   Rejected / MissingGuestPc
+RuntimeConfirmed            0x00000000               Rejected / ZeroGuestPc
+RuntimeConfirmed            nonzero, no evidence     Rejected / PcNotInDiscoveryEvidence
+RuntimeConfirmed            nonzero, evidence-backed Eligible / EligibleRuntimeConfirmed
+```
+
+Rejected activation decisions always clear `guest_pc`, even if a malformed source object contains an optional PC.
+
+### 5.5 Static confidence
+
+Static confidence is copied from `discovery.resolutions[i].confidence` only after the cross-input consistency check succeeds.
+
+All are individually eligible when the same evidence-backed PC is uniquely runtime-confirmed:
+
+```text
+Trusted    + RuntimeConfirmed -> Eligible
+Candidate  + RuntimeConfirmed -> Eligible
 Unresolved + RuntimeConfirmed -> Eligible
 ```
 
-The last case is intentional. Runtime confirmation may uniquely resolve execution behavior that remained ambiguous during static discovery.
+The `Unresolved` case is intentional: static evidence may remain ambiguous while runtime execution uniquely identifies one evidence-backed PC.
 
-Activation must never mutate `PadBindingConfidence`.
-
-### 5.4 Canonical identity validation
-
-The decision function validates canonical function identity rather than blindly trusting array position.
-
-For index `i`:
-
-```text
-expected function = static_cast<PadBindingFunction>(i)
-```
-
-If discovery/runtime inputs contain a mismatched function identity at that canonical slot, the function is rejected and a deterministic diagnostic is produced.
-
-The implementation must not silently correlate unrelated records solely because their array indexes match.
+Activation never modifies `PadBindingConfidence`.
 
 ## 6. Global readiness
 
 ### 6.1 Atomic requirement
 
-Global activation readiness is `Ready` only when:
+Global readiness is `Ready` only when:
 
 ```text
 eligible_count == 6
-AND every eligible PC is nonzero
+AND every eligible PC != 0
 AND all six PCs are pairwise distinct
 ```
 
@@ -214,61 +247,44 @@ Otherwise readiness is `NotReady`.
 
 ```text
 NotReady -> bindings = nullopt
-Ready    -> bindings contains all six nonzero PCs
+Ready    -> bindings contains all six nonzero, distinct PCs
 ```
 
-This is forbidden in v0:
-
-```cpp
-Ps2PadHleBindings{
-    .pad_init = some_pc,
-    .pad_port_open = some_pc,
-    .pad_get_state = 0,
-    .pad_read = some_pc,
-    .pad_port_close = 0,
-    .pad_end = 0,
-};
-```
-
-No partial activation is emitted even when the individually eligible subset is large.
+A structure with only a subset populated is forbidden in v0.
 
 ### 6.3 Duplicate activation PCs
 
-Discovery/runtime analysis may legitimately contain the same numerical guest PC under different function identities while evidence remains unresolved.
+Discovery/runtime analysis may temporarily associate the same numerical PC with more than one function. Activation may not.
 
-Activation may not.
-
-If two or more eligible functions select the same guest PC:
+If two or more individually eligible functions select the same PC:
 
 ```text
-individual decisions remain Eligible
+individual eligibility remains Eligible
 readiness = NotReady
 bindings = nullopt
 ```
 
-Add one deterministic diagnostic for each duplicated PC group, for example:
+Emit one deterministic diagnostic per duplicated PC group, formatted with lowercase eight-digit hex, e.g.:
 
 ```text
 activation guest PC 0x00102000 is selected by multiple PAD functions
 ```
 
-No ordering of `if` statements inside `Ps2PadHleService` is used as a tie-breaker.
+No ordering of checks inside `Ps2PadHleService` is used to break the tie.
 
 ### 6.4 Incomplete set diagnostic
 
-When fewer than six functions are eligible, add:
+When fewer than six functions are eligible, add exactly:
 
 ```text
 incomplete_activation_set
 ```
 
-Diagnostics are sorted and deduplicated before returning the decision.
+Diagnostics are sorted and deduplicated before returning.
 
 ## 7. Two-phase activation architecture
 
 ### 7.1 Phase A — observe and decide
-
-The observation phase uses the validated runtime-confirmation path:
 
 ```text
 PadBindingDiscoveryResult
@@ -284,13 +300,13 @@ PadRuntimeConfirmationResult
 make_ps2_pad_activation_decision(...)
 ```
 
-The activation decision is a snapshot. It does not subscribe to future observations and does not mutate when new runtime evidence arrives.
+The decision is an immutable snapshot from the caller's perspective. New observations require obtaining a new runtime result and computing a new decision.
 
-To account for new observations, the caller explicitly requests a new runtime result and computes a new activation decision.
+A previously `Ready` decision is not automatically preserved if later evidence makes a newly computed runtime result ambiguous.
 
 ### 7.2 Phase B — construct active HLE service
 
-Only a `Ready` decision may construct an active service:
+Only `Ready` produces bindings:
 
 ```cpp
 const auto decision =
@@ -303,22 +319,20 @@ if (decision.bindings.has_value()) {
     options.guest_calls = &pad_service;
 
     recompiler::R5900BlockDispatcher dispatcher(memory, options);
-    // Start a new dispatch phase.
+    // Begin a new dispatch phase.
 }
 ```
 
 ### 7.3 No hot-swap
 
-`R5900BlockDispatcherOptions::guest_calls` is configured at dispatcher construction.
-
 v0 does not add:
 
 - `set_guest_call_service()`;
 - mutable guest-call swapping;
-- cache invalidation triggered by activation;
-- observer-to-HLE transitions inside a single `run()` call.
+- activation-triggered cache invalidation;
+- observer-to-HLE transition inside one `run()` call.
 
-The phase boundary is explicit:
+The boundary is explicit:
 
 ```text
 finish observation phase
@@ -327,14 +341,14 @@ freeze decision
         ↓
 construct Ps2PadHleService
         ↓
-construct a dispatcher configured with that service
+construct dispatcher with guest_calls = &service
         ↓
 start activation phase
 ```
 
 ## 8. Deterministic activation report
 
-Add a formatter, expected at:
+Expected formatter:
 
 ```text
 src/analysis/ps2_pad_activation_report.h
@@ -348,9 +362,9 @@ format_ps2_pad_activation_decision(
     const Ps2PadActivationDecision& decision);
 ```
 
-### 8.1 Canonical names
+### 8.1 Canonical strings
 
-Use canonical function names:
+Function order:
 
 ```text
 padInit
@@ -361,21 +375,21 @@ padPortClose
 padEnd
 ```
 
-Eligibility names:
+Eligibility:
 
 ```text
 eligible
 rejected
 ```
 
-Readiness names:
+Readiness:
 
 ```text
 ready
 not_ready
 ```
 
-Reason names:
+Reasons:
 
 ```text
 eligible_runtime_confirmed
@@ -384,9 +398,11 @@ observed_incompatible
 runtime_ambiguous
 missing_guest_pc
 zero_guest_pc
+input_mismatch
+pc_not_in_discovery_evidence
 ```
 
-### 8.2 Report format
+### 8.2 Format
 
 Ready example:
 
@@ -414,36 +430,28 @@ PAD_ACTIVATION_END
 
 ### 8.3 Formatting rules
 
-- exactly six `PAD_ACTIVATION function=` lines in canonical enum order;
-- lowercase hexadecimal guest PCs with exactly eight digits after `0x`;
-- rejected functions always print `pc=none`;
-- `PAD_ACTIVATION_BINDINGS` appears only when readiness is `Ready` and bindings are present;
-- bindings line fields appear in canonical function order;
-- diagnostics appear after the bindings/function lines and before `PAD_ACTIVATION_END`;
-- diagnostics are sorted and deduplicated;
-- repeated renders of the same decision are byte-identical;
-- no static score, arguments, register dumps, RAM bytes, code bytes, or proprietary data are included.
+- exactly six function lines in canonical order;
+- lowercase `0x` plus exactly eight hex digits;
+- rejected functions always render `pc=none`, even if a manually malformed decision object contains `guest_pc`;
+- bindings line appears only when readiness is `Ready` **and** complete bindings are present;
+- if readiness/bindings are internally inconsistent, formatter omits the bindings line rather than fabricating fields;
+- bindings fields are canonical-order;
+- diagnostics follow function/bindings lines and precede `PAD_ACTIVATION_END`;
+- diagnostics are sorted/deduplicated during formatting defensively as well as by the producer;
+- repeated render is byte-identical;
+- output contains no score, arguments, register dumps, RAM/code bytes, or proprietary data.
 
 ## 9. Synthetic activation integration
 
-The milestone ends with a synthetic end-to-end test using the existing real `Ps2PadHleService`.
+The final behavioral gate uses only synthetic fixtures and the existing real HLE implementation.
 
-### 9.1 Synthetic binding set
+### 9.1 Synthetic inputs
 
-Use six distinct synthetic guest PCs, for example from one executable synthetic fixture region. They must not be copied from Burnout 3.
+Use six distinct synthetic guest PCs. None may come from Burnout 3.
 
-Construct discovery/runtime result inputs such that:
+Construct discovery evidence and runtime results such that each function is uniquely confirmed at one of those evidence-backed PCs.
 
-```text
-padInit       -> RuntimeConfirmed PC A
-padPortOpen   -> RuntimeConfirmed PC B
-padGetState   -> RuntimeConfirmed PC C
-padRead       -> RuntimeConfirmed PC D
-padPortClose  -> RuntimeConfirmed PC E
-padEnd        -> RuntimeConfirmed PC F
-```
-
-Static confidence should intentionally mix `Trusted`, `Candidate`, and `Unresolved` to prove that activation eligibility depends on runtime confirmation, not confidence promotion.
+Static confidence deliberately mixes `Trusted`, `Candidate`, and `Unresolved`.
 
 ### 9.2 Materialization proof
 
@@ -452,118 +460,117 @@ The decision must produce:
 ```text
 readiness = Ready
 bindings.has_value() = true
-bindings fields == A/B/C/D/E/F exactly
+bindings fields == exact six runtime-confirmed evidence-backed PCs
 ```
 
 ### 9.3 HLE lifecycle proof
 
-Construct:
+Construct only from the decision:
 
 ```cpp
 runtime::Ps2PadHleService service(*decision.bindings);
 ```
 
-Then execute synthetic guest calls through a dispatcher configured with:
+Then use a dispatcher configured with:
 
 ```cpp
 options.guest_calls = &service;
 ```
 
-The lifecycle test must prove at minimum:
+The synthetic lifecycle must prove:
 
-1. `padInit(0)` is intercepted and returns success;
-2. `padPortOpen(0, 0, aligned_256_byte_area)` is intercepted and opens the port;
-3. `padGetState(0, 0)` returns stable when the report is connected;
-4. `padRead(0, 0, destination)` writes exactly the expected 32-byte PS2-style report and returns 32;
-5. `padPortClose(0, 0)` closes the port;
+1. `padInit(0)` intercepted and successful;
+2. `padPortOpen(0,0,aligned-256-byte-area)` intercepted and opens state;
+3. `padGetState(0,0)` returns stable for a connected report;
+4. `padRead(0,0,destination)` writes the exact expected 32-byte PS2 report and returns 32;
+5. `padPortClose(0,0)` closes state;
 6. `padEnd()` clears initialized/open state;
-7. a synthetic guest PC not present in the activation bindings is not handled by `Ps2PadHleService`.
+7. an unrelated synthetic guest PC is not handled by the PAD service.
 
-The service uses the exact six PCs materialized by the activation decision; tests must not independently construct a second hardcoded binding structure for the activation phase.
+The integration must use `decision.bindings` directly. It must not independently create a second hardcoded binding object for the activation phase.
 
 ### 9.4 No production runtime wiring
 
-The integration test is the only activation consumer required for v0.
+`src/platform/windows/win_main.cpp` remains unchanged. It currently has no R5900 guest-execution loop, so activation there would be premature architecture.
 
-`src/platform/windows/win_main.cpp` remains unchanged because it currently runs only the bootstrap window/input/frame-pacing loop and does not execute the R5900 guest runtime.
+## 10. Error handling
 
-## 10. Error handling and diagnostics
+Ordinary policy rejection does not throw.
 
-Activation policy never throws for ordinary rejection conditions.
-
-Ordinary policy failures return `NotReady` with structured per-function reasons and deterministic diagnostics.
+It returns `NotReady` plus structured reasons/diagnostics.
 
 Global diagnostics include:
 
-- `incomplete_activation_set` when fewer than six functions are eligible;
-- canonical-function identity mismatch diagnostics;
-- duplicate selected-PC diagnostics.
+- `incomplete_activation_set`;
+- canonical discovery/runtime function identity mismatch;
+- static-confidence mismatch between runtime result and discovery;
+- runtime-selected PC missing from same-function discovery evidence;
+- duplicate selected-PC groups.
 
-The decision maker does not call `Ps2PadHleService`, mutate guest RAM, or modify dispatcher state.
+The decision maker never invokes HLE, never writes guest RAM, and never modifies dispatcher state.
 
-## 11. Test strategy and TDD gates
+## 11. TDD gates
 
 ### Task 1 — Activation policy
 
-RED must first define the missing production API.
+RED defines the missing production API.
 
 Required tests:
 
-- all six `RuntimeConfirmed` with six distinct nonzero PCs -> `Ready`;
-- bindings are exactly the six selected PCs;
-- five eligible functions -> `NotReady` and `bindings == nullopt`;
-- `Unobserved` -> rejected with `Unobserved` reason;
-- `ObservedIncompatible` -> rejected with matching reason;
-- `RuntimeAmbiguous` -> rejected with matching reason;
-- `RuntimeConfirmed` with missing PC -> rejected;
-- `RuntimeConfirmed` with zero PC -> rejected;
-- `Trusted + RuntimeConfirmed` -> eligible;
-- `Candidate + RuntimeConfirmed` -> eligible;
-- `Unresolved + RuntimeConfirmed` -> eligible;
-- rejected activation decision clears inconsistent source guest PC;
-- duplicate activation PC across two eligible functions -> global `NotReady`, no bindings;
-- duplicate-PC diagnostics deterministic;
+- six evidence-backed `RuntimeConfirmed` functions with six distinct nonzero PCs -> `Ready`;
+- bindings equal the six selected PCs exactly;
+- five eligible -> `NotReady`, no bindings;
+- `Unobserved` rejected;
+- `ObservedIncompatible` rejected;
+- `RuntimeAmbiguous` rejected;
+- confirmed with missing PC rejected;
+- confirmed with zero PC rejected;
+- confirmed PC absent from discovery evidence rejected;
+- `Trusted + RuntimeConfirmed` eligible;
+- `Candidate + RuntimeConfirmed` eligible;
+- `Unresolved + RuntimeConfirmed` eligible;
+- discovery function identity mismatch rejected/diagnosed;
+- runtime function identity mismatch rejected/diagnosed;
+- runtime/discovery confidence mismatch rejected/diagnosed;
+- rejected output clears inconsistent source PC;
+- duplicate PC across eligible functions -> global `NotReady`, no bindings;
+- duplicate diagnostics deterministic;
 - fewer than six eligible -> `incomplete_activation_set`;
-- canonical-function identity mismatch is rejected/diagnosed;
-- input discovery/runtime objects remain unchanged after decision creation;
-- repeated decision creation from identical inputs is structurally identical.
-
-GREEN must be the smallest production implementation satisfying these tests.
+- input discovery/runtime objects remain unchanged;
+- identical inputs produce structurally identical decisions.
 
 ### Task 2 — Deterministic activation report
 
-RED defines the missing formatter/report contract.
+RED defines the formatter contract.
 
 Required tests:
 
-- header and end marker;
-- canonical six-function order;
+- header/end marker;
+- canonical function order;
 - readiness/eligible/required counts;
-- canonical confidence/runtime-status/eligibility/reason strings;
-- lowercase eight-digit PC format;
-- rejected function prints `pc=none` even with inconsistent source optional PC;
-- bindings line appears only for `Ready` decision;
-- bindings line exactly reflects materialized bindings;
+- canonical confidence/status/eligibility/reason strings;
+- lowercase eight-digit PC;
+- rejected decision renders `pc=none` despite malformed optional PC;
+- bindings line only for internally consistent `Ready + bindings`;
+- bindings line exactly reflects materialized fields;
 - diagnostics sorted/deduplicated;
 - duplicate render byte-identical;
-- report excludes static score/arguments/RAM/code dumps.
+- no score/args/RAM/code dump content.
 
 ### Task 3 — Synthetic HLE activation integration
 
-This task characterizes existing production components plus the new activation policy.
-
 Required coverage:
 
-- six distinct synthetic confirmed PCs -> `Ready`;
-- mixed static confidence values do not block readiness;
-- use `decision.bindings` directly to construct `Ps2PadHleService`;
-- lifecycle: init/open/get-state/read/close/end;
-- `padRead` writes the exact expected PS2 report bytes;
+- six distinct evidence-backed confirmations -> `Ready`;
+- mixed static confidence does not block readiness;
+- construct `Ps2PadHleService` from `decision.bindings` only;
+- lifecycle init/open/get-state/read/close/end;
+- `padRead` exact report bytes;
 - `$v0` results match existing HLE contract;
-- unknown/non-binding PC is not handled by the PAD service;
-- no dispatcher guest-call hot-swap API is introduced;
+- unknown PC remains not handled by PAD service;
+- no dispatcher guest-call hot-swap API added;
 - `WinMain` unchanged;
-- no proprietary data or Burnout-specific guest PC enters repository fixtures.
+- no proprietary data or Burnout-specific PC in fixtures.
 
 ### Task 4 — Documentation and exact-head CI
 
@@ -579,38 +586,37 @@ Update:
 docs/PROGRESS.md
 ```
 
-Record RED/GREEN workflow evidence.
-
 Validation sequence:
 
-1. implementation-head Windows CI must pass Configure, Build, all CTest tests, frame pacing telemetry, pacing probe, analyzer package, and pacing package;
-2. commit documentation with milestone status `PENDING_FINAL_EXACT_HEAD_CI`;
-3. run full Windows CI on that exact documentation SHA;
-4. only after that run passes, update the two status documents to `CI_VALIDATED` and record the documentation run;
-5. run full Windows CI again on the exact final status SHA;
-6. only after that final exact-head run passes may the milestone be claimed `CI_VALIDATED`.
+1. implementation-head Windows CI: Configure, Build, all CTest, frame pacing telemetry, pacing probe, analyzer package, pacing package;
+2. documentation commit with `PENDING_FINAL_EXACT_HEAD_CI`;
+3. full Windows CI on exact documentation SHA;
+4. if green, status-only update of the same two documents to `CI_VALIDATED`, recording that run;
+5. full Windows CI on exact final status SHA;
+6. only then claim milestone `CI_VALIDATED`.
 
 ## 12. Integrity audit
 
-Before completion, compare the milestone head against base `63f644a60d965eb32425dfa3a5b01aba6bc82712` and confirm:
+Compare milestone head against base `63f644a60d965eb32425dfa3a5b01aba6bc82712` and confirm:
 
-- no Burnout-specific guest PCs were added;
-- no proprietary game bytes/assets/hashes were added;
-- `Ps2PadHleService` lifecycle behavior was not weakened to accommodate activation;
-- no automatic partial binding activation exists;
-- no static confidence is promoted by activation;
-- duplicate PCs do not become active bindings;
-- `R5900BlockDispatcher` does not gain hot-swap behavior merely for activation;
-- `WinMain` remains free of premature guest-runtime activation wiring;
-- ELF/PT_LOAD validation remains unchanged;
-- no PCSX2 runtime dependency is added.
+- no Burnout-specific guest PCs;
+- no proprietary bytes/assets/hashes;
+- no weakened `Ps2PadHleService` lifecycle checks;
+- no partial activation;
+- no static confidence promotion;
+- no activation PC that lacks discovery evidence;
+- duplicate PCs never become bindings;
+- no dispatcher hot-swap API introduced solely for activation;
+- `WinMain` unchanged;
+- ELF/PT_LOAD validation unchanged;
+- no PCSX2 runtime dependency.
 
 ## 13. Completion criteria
 
-The mechanism may be marked `CI_VALIDATED` when synthetic tests prove:
+Mechanism may be `CI_VALIDATED` when synthetic tests prove:
 
 ```text
-six runtime-confirmed distinct PAD PCs
+six distinct evidence-backed RuntimeConfirmed PAD PCs
         ↓
 pure activation decision
         ↓
@@ -618,19 +624,17 @@ Ready + complete Ps2PadHleBindings
         ↓
 Ps2PadHleService constructed from those exact bindings
         ↓
-synthetic PAD lifecycle intercepted successfully
+synthetic full PAD lifecycle intercepted successfully
 ```
 
-This milestone still does not validate any real Burnout 3 PAD address.
-
-Real-game activation remains `PENDING_EXTERNAL_VALIDATION` until a complete lawful user-supplied Burnout 3 ELF executes and uniquely runtime-confirms all six evidence-backed functions under this policy.
+Real Burnout 3 activation remains `PENDING_EXTERNAL_VALIDATION` until a complete lawful user-supplied ELF executes and uniquely runtime-confirms all six evidence-backed functions under this policy.
 
 ## 14. Explicit non-claims
 
-Completion of this milestone does not mean:
+Completion does not mean:
 
 - Burnout 3 boots;
 - Burnout 3 reaches menu/gameplay;
-- Burnout 3 is consuming keyboard/XInput through PAD HLE;
-- graphics, GS, VU, IOP, SPU2, or game audio are implemented;
+- Burnout 3 consumes keyboard/XInput through this PAD HLE path;
+- graphics/GS/VU/IOP/SPU2/audio are complete;
 - any synthetic fixture address is a real game address.
