@@ -12,8 +12,11 @@ This file is the active engineering snapshot. Detailed milestone history remains
 - Milestone: **PS2 PAD Binding Discovery v0**
 - Implementation head before documentation: `2437d2be82ae7464e0b0c2c3c9456c780e258c91`
 - Implementation-head Windows CI: **#867** (`34180474186`), job `101918367155`
-- CTest on #867: **72/72 PASS**
-- Documentation-head validation: **PENDING**
+- Documentation-head Windows CI: **#871** (`34180765161`), job `101919246799`, SHA `35517939d845df23008f00e718e27fba368e5709`
+- CTest implementation gate: **72/72 PASS**
+- Documentation-head validation: **PASS**
+- Milestone status: **CI_VALIDATED**
+- Next milestone: **PS2 PAD Runtime Confirmation v0**
 - Game/runtime status: the project still does **not** boot Burnout 3, render the game, reach menus, produce game audio, or provide gameplay.
 
 ## Current engineering status
@@ -22,7 +25,7 @@ This file is the active engineering snapshot. Detailed milestone history remains
 |---|---|---|
 | Repository / CMake bootstrap | DONE | C++20, CMake, VS2022 / Windows x64 |
 | Win32 bootstrap/window | CI_VALIDATED | Window lifecycle/smoke coverage |
-| QPC / 120 Hz frame pacing | CI_VALIDATED | #867 telemetry/probe still at 120 Hz target |
+| QPC / 120 Hz frame pacing | CI_VALIDATED | #867/#871 pacing gates remain at 120 Hz target |
 | Crash handler / minidump | CI_VALIDATED | Controlled Windows CI crash path |
 | PS2 ELF loader | CI_VALIDATED | Strict ELF32 LE MIPS/PT_LOAD validation unchanged |
 | EE main RAM / typed guest memory | CI_VALIDATED | 32 MiB RAM and typed LE accesses |
@@ -35,8 +38,8 @@ This file is the active engineering snapshot. Detailed milestone history remains
 | Game input | CI_VALIDATED | Keyboard + XInput acquisition |
 | PS2 PAD report adapter v0 | CI_VALIDATED | Active-low buttons + deterministic analog bytes |
 | PS2 PAD guest bridge v0 | CI_VALIDATED | Generic guest-call HLE + minimal libpad-facing service |
-| PS2 PAD binding discovery v0 | CI_VALIDATION_PENDING | Implementation #867 is green; exact documentation-head CI still required |
-| PS2 PAD runtime confirmation v0 | NEXT | Confirm discovered candidate PCs against live guest calls before runtime activation |
+| PS2 PAD binding discovery v0 | CI_VALIDATED | #867 implementation + #871 documentation head green |
+| PS2 PAD runtime confirmation v0 | NEXT | Confirm discovered candidate PCs against observed guest calls before runtime activation |
 | Graphics / GS / VU | TODO | No game rendering path yet |
 | IOP / SPU2 / audio | TODO | No game audio path yet |
 | Game initialization | TODO | Not reached |
@@ -44,7 +47,7 @@ This file is the active engineering snapshot. Detailed milestone history remains
 
 ## PS2 PAD pipeline
 
-The validated/reviewed input stack now contains four layers:
+The validated input/discovery stack now contains four layers:
 
 1. `GameInputState`: host-neutral keyboard/XInput state.
 2. `Ps2PadReport`: portable PS2-style active-low buttons and four analog bytes.
@@ -101,7 +104,19 @@ Analyzer package validation       PASS
 Pacing package validation         PASS
 ```
 
-Pacing remained stable on #867:
+Documentation head `35517939d845df23008f00e718e27fba368e5709`, Windows CI #871 (`34180765161`), job `101919246799`:
+
+```text
+Configure                         PASS
+Build                             PASS
+Test                              PASS
+Frame pacing telemetry            PASS
+120 Hz pacing probe               PASS
+Analyzer package validation       PASS
+Pacing package validation         PASS
+```
+
+Pacing remained stable on the implementation gate:
 
 ```text
 240-sample telemetry mean/P95/P99  8.333 / 8.333 / 8.333 ms
@@ -123,18 +138,18 @@ ELF symbol score contract RED/GREEN  #861 -> #863
 Task 4 report gate                   #864 PASS
 Task 5 analyzer RED / GREEN          #865 -> #866
 Trusted-symbol end-to-end gate       #867 PASS
+Documentation-head gate              #871 PASS
 ```
 
 See `docs/validation/2026-09-07-ps2-pad-binding-discovery-v0.md` for details.
 
 ## Remaining Test Build gates
 
-1. Pass full Windows CI on the exact documentation head for this milestone.
-2. Use a complete lawful user-supplied Burnout 3 ELF to obtain real PAD binding evidence.
-3. Design and implement **PS2 PAD Runtime Confirmation v0** before activating any discovered candidate.
-4. Continue R5900/kernel/HLE coverage from measured real boundaries.
-5. Implement GS/VU rendering, IOP/SPU2/audio and remaining runtime services before any boot/playability claim.
-6. Perform longer physical Windows 120 Hz release-certification captures after the runtime reaches meaningful game execution.
+1. Use a complete lawful user-supplied Burnout 3 ELF to obtain real PAD binding evidence.
+2. Design and implement **PS2 PAD Runtime Confirmation v0** before activating any discovered candidate.
+3. Continue R5900/kernel/HLE coverage from measured real boundaries.
+4. Implement GS/VU rendering, IOP/SPU2/audio and remaining runtime services before any boot/playability claim.
+5. Perform longer physical Windows 120 Hz release-certification captures after the runtime reaches meaningful game execution.
 
 ## Guardrails
 
