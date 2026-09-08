@@ -1,4 +1,5 @@
 #include "recompiler/ps2_elf.h"
+#include "recompiler/r5900_call_observer.h"
 #include "recompiler/windows/r5900_block_dispatcher.h"
 #include "runtime/ps2_memory_map.h"
 
@@ -60,6 +61,15 @@ constexpr std::uint32_t j_type(std::uint8_t op, std::uint32_t target) {
     return (static_cast<std::uint32_t>(op) << 26u) |
            ((target >> 2u) & 0x03ffffffu);
 }
+
+class RecordingCallObserver final : public b3r::recompiler::IR5900CallObserver {
+public:
+    void observe(const b3r::recompiler::R5900CallObservation& value) noexcept override {
+        observations.push_back(value);
+    }
+
+    std::vector<b3r::recompiler::R5900CallObservation> observations{};
+};
 
 b3r::runtime::Ps2MemoryMap make_memory(const std::vector<std::uint32_t>& words,
                                        std::uint32_t code_base,
@@ -125,6 +135,38 @@ int main() {
     constexpr std::uint32_t base = 0x00110000u;
     constexpr std::uint32_t target = base + 0x20u;
     const auto bgtz_boundary = i_type(0x07u, 0u, 0u, 0u);
+
+    {
+        auto memory = make_memory({
+            j_type(0x03u, target),
+            i_type(0x0du, 0u, 7u, 0x55u),
+            0u, 0u, 0u, 0u, 0u, 0u,
+            bgtz_boundary, 0u,
+        }, base);
+        RecordingCallObserver observer{};
+        R5900BlockDispatcherOptions options{};
+        options.call_observer = &observer;
+        R5900BlockDispatcher dispatcher(memory, options);
+        R5900IrExecutionState state{};
+        state.gpr[4].low64 = 0x11u;
+        state.gpr[5].low64 = 0x22u;
+        state.gpr[6].low64 = 0x33u;
+        state.gpr[7].low64 = 0x44u;
+        const auto result = dispatcher.run(base, state, 1u);
+        expect(result.reason == R5900DispatchStopReason::BlockBudgetExhausted &&
+                   result.next_pc == target,
+               "observer JAL fixture must complete exactly one block");
+        expect(observer.observations.size() == 1u,
+               "JAL must emit exactly one call observation");
+        const auto& call = observer.observations.front();
+        expect(call.call_pc == base, "JAL observer call PC mismatch");
+        expect(call.target_pc == target, "JAL observer target mismatch");
+        expect(call.return_pc == base + 8u, "JAL observer return PC mismatch");
+        expect(!call.indirect, "JAL observer must report direct call");
+        expect(call.args[0] == 0x11u && call.args[1] == 0x22u &&
+                   call.args[2] == 0x33u && call.args[3] == 0x55u,
+               "JAL observer must capture post-delay a0-a3");
+    }
 
     {
         auto memory = make_memory({
