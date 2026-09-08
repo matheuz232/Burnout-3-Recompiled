@@ -12,19 +12,23 @@ Write the report directly to the console:
 
   .\Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50"
 
-Increase the bounded reachable-CFG worklist when needed:
-
-  .\Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --output "burnout3-analysis.txt" --max-blocks 8192
-
-Follow explicit direct-call targets for broader evidence:
+Increase the bounded reachable-CFG worklist and follow explicit direct calls:
 
   .\Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --output "burnout3-analysis-with-callees.txt" --max-blocks 8192 --follow-direct-calls
 
+Opt in to PS2 PAD binding discovery:
+
+  .\Burnout3Analyze.exe --elf "D:\Games\Burnout3\SLUS_210.50" --output "burnout3-analysis-pad.txt" --max-blocks 8192 --follow-direct-calls --pad-bindings
+
+--pad-bindings is analysis-only. Without it, the existing report is unchanged. With it, one PAD_BINDINGS_V0 section is appended.
+
+Exact accepted PAD ELF symbols may resolve as Trusted when they point into file-backed executable PT_LOAD memory. Public-semantics static fingerprints are Candidate-only and never activate HLE. pc=none means there is no unique selected PC because the binding is unresolved or the static candidates are ambiguous.
+
+No Burnout-specific guest address, proprietary byte signature or proprietary function hash is embedded in the scanner. The next milestone, PS2 PAD Runtime Confirmation v0, must confirm candidate PCs against live guest behavior before runtime binding is considered.
+
 Direct call traversal is disabled by default. When enabled, explicit direct callees share the same --max-blocks budget and remain recorded as call evidence. Indirect JR/JALR destinations are never guessed, and following a direct call does not infer a function boundary.
 
-Generated reports include UNKNOWN_PRIMARY_OPCODES plus deterministic UNKNOWN_SITES records with PC, RAW, PRIMARY, RS, RT, RD, SA and FUNCT bit positions for unresolved instructions, including reachable delay slots. These are raw diagnostic bitfields only; they do not imply decoded operand semantics.
-
-DIRECT_CALL_TARGETS groups resolved direct-call evidence by guest target address and reports static CALL_SITES counts. Indirect/unresolved calls are excluded from that aggregation but remain visible as CALL records. CALL_SITES is not runtime frequency and does not infer functions or function boundaries.
+Generated reports include UNKNOWN_PRIMARY_OPCODES, deterministic UNKNOWN_SITES and DIRECT_CALL_TARGETS. CALL_SITES is a static-reference count, not runtime frequency.
 
 Show command-line help:
 
