@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: **PENDING_FINAL_EXACT_HEAD_CI**
+Status: **CI_VALIDATED**
 
 ## Scope
 
@@ -19,6 +19,9 @@ Implementation plan:
 
 Implementation head before documentation:
 `9ddeac5983579cf40d0f444cf2269d20adf44ab8`
+
+Documentation prevalidation head:
+`cb36f5886614a954fd5cb790e3172cebef5b2669`
 
 This milestone adds a pure activation-decision layer between PAD runtime confirmation and the existing `Ps2PadHleBindings`, plus a deterministic activation report and a synthetic proof that a complete decision can drive the existing PAD HLE lifecycle.
 
@@ -163,6 +166,20 @@ six evidence-backed RuntimeConfirmed entries
 
 The fixture verifies HLE return values, lifecycle state, the 32-byte PAD report, and `NotHandled` for an unbound synthetic PC. All guest PCs are synthetic.
 
+### Documentation prevalidation
+
+- head: `cb36f5886614a954fd5cb790e3172cebef5b2669`
+- Windows CI: **#914**
+- run: `34248508910`
+- job: `102136599091`
+- Configure: PASS
+- Build: PASS
+- Test: PASS
+- frame pacing telemetry: PASS
+- 120 Hz pacing probe: PASS
+- analyzer package validation: PASS
+- pacing package validation: PASS
+
 Pacing from #913:
 
 ```text
@@ -200,6 +217,8 @@ Confirmed unchanged:
 
 No proprietary Burnout 3 data, real guest addresses, game hashes, assets, or PCSX2 runtime dependency were added. ELF/PT_LOAD validation was not weakened. Static confidence is not promoted. No dispatcher hot-swap API or partial auto-activation exists.
 
+The documentation prevalidation diff from implementation head to `cb36f588...` contains exactly two files: this validation ledger and `docs/PROGRESS.md`.
+
 ## Known baseline warnings
 
 Only pre-existing warning classes were observed:
@@ -209,18 +228,13 @@ Only pre-existing warning classes were observed:
 
 Neither warning was introduced by this milestone.
 
-## Remaining exact-head validation
+## Final exact-head requirement
 
-Before this milestone may be reported as `CI_VALIDATED`:
-
-1. this documentation commit must pass the full Windows workflow on its exact SHA;
-2. then only this ledger and `docs/PROGRESS.md` may be changed to `CI_VALIDATED`, recording that documentation prevalidation run;
-3. the resulting final status SHA must itself pass the full Windows workflow;
-4. only then is `PS2 PAD Runtime Activation v0 = CI_VALIDATED`.
+This status-only update records the successful documentation prevalidation #914. The resulting status SHA must itself pass the full Windows workflow. Only that exact-head success authorizes reporting the milestone as complete outside the repository.
 
 ## Claim boundary
 
-Even after the mechanism is CI-validated:
+Even with the activation mechanism CI-validated:
 
 - real Burnout 3 PAD bindings remain **PENDING_EXTERNAL_VALIDATION**;
 - real Burnout 3 PAD activation/input consumption is not claimed;

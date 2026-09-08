@@ -13,8 +13,10 @@ This file is the active engineering snapshot. Detailed milestone history remains
 - Base: `63f644a60d965eb32425dfa3a5b01aba6bc82712`
 - Implementation head before documentation: `9ddeac5983579cf40d0f444cf2269d20adf44ab8`
 - Implementation-head Windows CI: **#913** (`34196538933`), job `101965410971`
-- CTest gate: **73/73 PASS**
-- Milestone status: **PENDING_FINAL_EXACT_HEAD_CI**
+- Documentation prevalidation head: `cb36f5886614a954fd5cb790e3172cebef5b2669`
+- Documentation prevalidation Windows CI: **#914** (`34248508910`), job `102136599091`
+- CTest gate: **73/73 PASS** on implementation head
+- Milestone status: **CI_VALIDATED**
 - Real Burnout 3 PAD activation: **PENDING_EXTERNAL_VALIDATION** until a complete lawful user-supplied ELF produces six evidence-backed, uniquely runtime-confirmed bindings.
 - Game/runtime status: the project still does **not** boot Burnout 3, render the game, reach menus, produce game audio, or provide gameplay.
 
@@ -24,7 +26,7 @@ This file is the active engineering snapshot. Detailed milestone history remains
 |---|---|---|
 | Repository / CMake bootstrap | DONE | C++20, CMake, VS2022 / Windows x64 |
 | Win32 bootstrap/window | CI_VALIDATED | Window lifecycle/smoke coverage |
-| QPC / 120 Hz frame pacing | CI_VALIDATED | #913 remains at the 120 Hz target |
+| QPC / 120 Hz frame pacing | CI_VALIDATED | #913/#914 remain at the 120 Hz target |
 | Crash handler / minidump | CI_VALIDATED | Controlled Windows CI crash path |
 | PS2 ELF loader | CI_VALIDATED | Strict ELF32 LE MIPS/PT_LOAD validation unchanged |
 | EE main RAM / typed guest memory | CI_VALIDATED | 32 MiB RAM and typed LE accesses |
@@ -39,7 +41,7 @@ This file is the active engineering snapshot. Detailed milestone history remains
 | PS2 PAD guest bridge v0 | CI_VALIDATED | Generic guest-call HLE + minimal libpad-facing service |
 | PS2 PAD binding discovery v0 | CI_VALIDATED | Analysis-only trusted/candidate guest-PC evidence |
 | PS2 PAD runtime confirmation v0 | CI_VALIDATED | Read-only completed-call observation + ABI confirmation |
-| PS2 PAD runtime activation v0 | PENDING_FINAL_EXACT_HEAD_CI | #913 implementation head green; documentation/final exact-head gates remain |
+| PS2 PAD runtime activation v0 | CI_VALIDATED | #913 implementation + #914 documentation prevalidation green; final status SHA is subject to exact-head CI |
 | Graphics / GS / VU | TODO | No game rendering path yet |
 | IOP / SPU2 / audio | TODO | No game audio path yet |
 | Game initialization | TODO | Not reached |
@@ -47,7 +49,7 @@ This file is the active engineering snapshot. Detailed milestone history remains
 
 ## PS2 PAD pipeline
 
-The validated/implemented architecture is now:
+The validated architecture now contains six layers:
 
 1. `GameInputState`: host-neutral keyboard/XInput state.
 2. `Ps2PadReport`: portable PS2-style active-low buttons and four analog bytes.
@@ -114,12 +116,24 @@ The test verifies lifecycle return values, the 32-byte PAD report, and that an u
 Implementation head `9ddeac5983579cf40d0f444cf2269d20adf44ab8`, Windows CI #913 (`34196538933`), job `101965410971`:
 
 ```text
+Configure                                      PASS
+Build                                          PASS
+CTest                                          73/73 PASS
+ps2_pad_runtime_report_tests                   PASS
+burnout3_analyze_options_tests                 PASS
+r5900_block_dispatcher_createsema_windows_tests PASS
+Frame pacing telemetry                         PASS
+120 Hz pacing probe                            PASS
+Analyzer package validation                    PASS
+Pacing package validation                      PASS
+```
+
+Documentation prevalidation head `cb36f5886614a954fd5cb790e3172cebef5b2669`, Windows CI #914 (`34248508910`), job `102136599091`:
+
+```text
 Configure                         PASS
 Build                             PASS
-CTest                             73/73 PASS
-ps2_pad_runtime_report_tests      PASS
-burnout3_analyze_options_tests    PASS
-r5900_block_dispatcher_createsema_windows_tests PASS
+Test                              PASS
 Frame pacing telemetry            PASS
 120 Hz pacing probe               PASS
 Analyzer package validation       PASS
@@ -134,7 +148,7 @@ telemetry >9 / >10 / >12 ms            0 / 0 / 0
 high-resolution timer                   YES
 probe target / frames                   120 Hz / 120
 probe mean / P95 / P99                  8.333 / 8.333 / 8.333 ms
-probe >9 / >10 / >12 ms                0 / 0 / 0
+probe >9 / >10 / >12 ms                 0 / 0 / 0
 ```
 
 Only the pre-existing MSVC C4834 `[[nodiscard]]` warnings in existing x64 tests and the existing Node 20 deprecation warning from GitHub Actions were observed.
@@ -151,6 +165,7 @@ Task 2 activation report GREEN       #911  full workflow PASS
 Task 2 report hardening              #912  full workflow PASS
 
 Task 3 synthetic HLE activation      #913  73/73 + pacing/packages PASS
+Documentation prevalidation          #914  full workflow PASS
 ```
 
 Build-layout rulings: to keep `CMakeLists.txt` unchanged under the connector constraints, policy tests were hosted in `ps2_pad_runtime_report_tests`, activation-report tests in `burnout3_analyze_options_tests`, and the Windows HLE characterization in `r5900_block_dispatcher_createsema_windows_tests`. These are test-placement deviations only; production architecture is unchanged.
@@ -159,10 +174,9 @@ See `docs/validation/2026-09-08-ps2-pad-runtime-activation-v0.md` for exact SHAs
 
 ## Remaining engineering gates
 
-1. Run full Windows CI on the exact documentation SHA.
-2. If green, update only `docs/PROGRESS.md` and the validation ledger to `CI_VALIDATED` and run full Windows CI again on that exact status SHA.
-3. Obtain a complete lawful Burnout 3 ELF and real evidence-backed PAD call observations before any game-specific activation claim.
-4. Continue broader R5900/kernel coverage and later GS/VU, IOP/SPU2/audio and game initialization.
+1. The current status-only documentation SHA must pass full Windows CI before this milestone is reported complete outside the repository.
+2. Obtain a complete lawful Burnout 3 ELF and real evidence-backed PAD call observations before any game-specific activation claim.
+3. Continue broader R5900/kernel coverage and later GS/VU, IOP/SPU2/audio and game initialization.
 
 ## Guardrails
 
