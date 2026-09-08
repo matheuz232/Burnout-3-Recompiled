@@ -149,6 +149,15 @@ R5900IrExecutionResult execute_ir_sequence(
             break;
         }
 
+        case R5900IrOpcode::Xor64: {
+            const auto value = read_operand_value(ir.inputs[0], state) ^
+                               read_operand_value(ir.inputs[1], state);
+            if (ir.destination->index != 0u) {
+                state.gpr[ir.destination->index].low64 = value;
+            }
+            break;
+        }
+
         case R5900IrOpcode::LoadUpperImmediateSignExtend: {
             const auto immediate16 = static_cast<std::uint16_t>(ir.inputs[0].immediate);
             const auto word = static_cast<std::uint32_t>(immediate16) << 16u;
