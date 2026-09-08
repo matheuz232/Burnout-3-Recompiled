@@ -1,5 +1,6 @@
 #include "analysis/elf32_metadata.h"
 #include "analysis/ps2_elf_analysis.h"
+#include "analysis/ps2_pad_binding_report.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -224,12 +225,37 @@ void run_metadata_tests() {
     }
 }
 
+void run_pad_discovery_orchestration_red() {
+    using namespace b3r::analysis;
+
+    const auto bytes = make_break_elf();
+    const auto parsed = b3r::recompiler::parse_ps2_elf(bytes);
+    expect(parsed.ok(), "PAD discovery fixture must parse as authoritative PS2 ELF");
+    auto mapped = b3r::runtime::Ps2MemoryMap::from_elf(*parsed.image);
+    expect(mapped.ok(), "PAD discovery fixture must map into EE RAM");
+    const auto graph_result = analyze_r5900_reachability(
+        *mapped.memory, parsed.image->entry_point());
+    expect(graph_result.ok(), "PAD discovery fixture must produce a reachability graph");
+
+    const auto discovered = discover_ps2_pad_bindings(
+        bytes, *parsed.image, *mapped.memory, *graph_result.graph);
+    for (const auto& resolution : discovered.resolutions) {
+        expect(resolution.confidence == PadBindingConfidence::Unresolved,
+               "metadata-absent BREAK fixture must leave every PAD binding unresolved");
+        expect(!resolution.guest_pc.has_value(),
+               "unresolved PAD binding must not invent a guest PC");
+    }
+    expect(discovered.diagnostics.empty(),
+           "metadata absence must be silent and nonfatal");
+}
+
 } // namespace
 
 int main() {
     using namespace b3r::analysis;
 
     run_metadata_tests();
+    run_pad_discovery_orchestration_red();
 
     const std::string expected =
         "ENTRY 0x00100000\n"
