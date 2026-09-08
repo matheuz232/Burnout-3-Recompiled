@@ -296,7 +296,7 @@ struct Ps2PadRuntimePcEvidence {
 
 Only the first compatible and first incompatible observations may be retained for diagnostics. The implementation does not store every call.
 
-Counters must saturate or otherwise avoid undefined overflow behavior if practical; exact overflow policy may use checked/saturating increment because the report is diagnostic rather than guest-visible.
+All three counters use saturating increment and remain at `std::numeric_limits<std::size_t>::max()` after saturation. Counter overflow must never wrap.
 
 ## 10. Per-function runtime status
 
@@ -420,9 +420,11 @@ Formatting rules:
 
 ## 13. Runtime integration boundary
 
-This milestone may provide a runtime/probe integration path that installs the observer and emits confirmation results, but it must remain explicitly opt-in and non-activating.
+This milestone provides reusable observer, PAD confirmation, and deterministic formatter APIs plus synthetic dispatcher integration tests. It does **not** add production `WinMain` wiring, automatic analyzer-to-runtime transport, or automatic runtime activation.
 
-No code path may transform `RuntimeConfirmed` into active `Ps2PadHleBindings` automatically.
+A future external-validation probe may install the observer against a complete lawful user-supplied ELF without changing the confirmation API. That external probe is allowed to emit the formatter output, but it remains non-activating.
+
+No code path in this milestone may transform `RuntimeConfirmed` into active `Ps2PadHleBindings`.
 
 The existing `Ps2PadHleService` implementation remains functionally unchanged.
 
@@ -487,7 +489,8 @@ Tests cover:
 - static ambiguous candidate resolved by one unique runtime-compatible PC;
 - static `Trusted` PC can remain `Unobserved`;
 - static score does not break runtime ambiguity;
-- evidence aggregation remains bounded.
+- evidence aggregation remains bounded;
+- counters saturate at `std::numeric_limits<std::size_t>::max()` and never wrap.
 
 ### Gate 4 — deterministic report
 
