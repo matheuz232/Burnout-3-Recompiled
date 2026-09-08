@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Convert evidence-backed, uniquely runtime-confirmed PAD entry points into an atomic six-function `Ps2PadHleBindings` decision and prove that those exact bindings can drive the existing PAD HLE lifecycle through the R5900 dispatcher.
+**Goal:** Convert evidence-backed, uniquely runtime-confirmed PAD entry points into an atomic six-function `Ps2PadHleBindings` decision and prove those exact bindings can drive the existing PAD HLE lifecycle through the R5900 dispatcher.
 
-**Architecture:** Add a pure activation policy layer between `PadRuntimeConfirmationResult` and `Ps2PadHleBindings`, then a deterministic `PAD_ACTIVATION_V0` formatter. Activation is two-phase and snapshot-based: observe/confirm first, compute a decision, then construct a new `Ps2PadHleService` and dispatcher only when the decision is globally `Ready`. No hot-swap, no partial bindings, no `WinMain` wiring.
+**Architecture:** Add a pure activation policy between `PadRuntimeConfirmationResult` and `Ps2PadHleBindings`, plus a deterministic `PAD_ACTIVATION_V0` formatter. Activation is two-phase: observe/confirm first, compute a snapshot decision, then construct a new `Ps2PadHleService` and dispatcher only when global readiness is `Ready`. No hot-swap, no partial bindings, no `WinMain` wiring.
 
 **Tech Stack:** C++20, CMake 3.25+, Visual Studio 2022 x64, existing `b3r_analysis`, `b3r_runtime`, `b3r_recompiler_dispatcher_x64`, Windows GitHub Actions CI.
 
@@ -13,22 +13,27 @@
 ## Global Constraints
 
 - Base implementation SHA: `63f644a60d965eb32425dfa3a5b01aba6bc82712`.
-- Work on a new branch `feature/ps2-pad-runtime-activation-v0` created from the plan head.
-- Use TDD RED→GREEN for Tasks 1 and 2; Task 3 is end-to-end characterization of already-implemented units plus the Task 1 policy.
+- Create `feature/ps2-pad-runtime-activation-v0` from the final plan head.
+- Use TDD RED→GREEN for Tasks 1 and 2.
+- Task 3 is end-to-end characterization of Task 1 plus existing production components.
 - Static confidence, runtime confirmation, and activation readiness remain separate concepts.
-- `RuntimeConfirmed` is eligible only if the selected nonzero guest PC is present in discovery evidence for the same canonical function.
-- `Trusted`, `Candidate`, and `Unresolved` static confidence are all allowed when the runtime-confirmed PC is evidence-backed.
-- Any canonical-function identity mismatch between discovery/runtime slot and expected enum value is rejected and diagnosed.
-- Global activation is atomic: 6/6 eligible, all nonzero, all pairwise-distinct, or no bindings at all.
-- Duplicate PCs across functions keep individual functions eligible but force global `NotReady` and `bindings == nullopt`.
+- A runtime-confirmed PC is activation-eligible only when that exact nonzero PC exists in discovery evidence for the same canonical function.
+- `Trusted`, `Candidate`, and `Unresolved` static confidence may all be eligible when runtime confirmation and provenance checks pass.
+- Canonical function identity mismatches in discovery/runtime inputs are rejected and diagnosed.
+- Global activation is atomic: all six functions eligible, all six PCs nonzero, all six PCs pairwise-distinct, or `bindings == nullopt`.
+- Duplicate selected PCs across functions keep individual functions eligible but force global `NotReady`.
 - No partial auto-activation.
 - No hot-swap or mutable guest-call service API on `R5900BlockDispatcher`.
 - No `WinMain` integration in this milestone.
-- Do not change `Ps2PadHleService` lifecycle semantics to make tests pass.
+- Do not change `Ps2PadHleService` lifecycle semantics to satisfy activation tests.
 - Do not weaken ELF/PT_LOAD validation.
-- Use synthetic guest PCs and synthetic ELF/R5900 fixtures only; no proprietary Burnout 3 bytes, addresses, hashes, or assets.
+- Use synthetic guest PCs and synthetic ELF/R5900 fixtures only.
+- No proprietary Burnout 3 bytes, addresses, hashes, assets, or PCSX2 runtime dependency.
 - Windows CI on the exact SHA is authoritative.
-- Reuse existing test targets instead of editing the large `CMakeLists.txt`: policy tests live in `r5900_analysis_report_tests`, activation-report tests live in `ps2_pad_runtime_report_tests`, and end-to-end activation lives in `r5900_block_dispatcher_guest_call_windows_tests`.
+- Reuse existing test targets and do not edit the large `CMakeLists.txt` in this milestone:
+  - policy → `r5900_analysis_report_tests`
+  - activation formatter → `ps2_pad_runtime_report_tests`
+  - HLE integration → `r5900_block_dispatcher_guest_call_windows_tests`
 
 ---
 
@@ -38,33 +43,28 @@
 
 - `src/analysis/ps2_pad_activation.h`
   - Pure policy/model only.
-  - Owns activation enums, per-function/global decision structs, provenance checks, duplicate-PC detection, deterministic diagnostics, and `make_ps2_pad_activation_decision()`.
-  - May include `runtime/ps2_pad_hle_service.h` only for the `Ps2PadHleBindings` value type; it must never instantiate/call the service.
+  - Owns activation enums, per-function/global decisions, provenance validation, duplicate-PC validation, diagnostics, and `make_ps2_pad_activation_decision()`.
+  - Includes `runtime/ps2_pad_hle_service.h` only for `Ps2PadHleBindings`.
+  - Does not construct or call `Ps2PadHleService`.
 
 - `src/analysis/ps2_pad_activation_report.h`
-  - Pure deterministic formatter only.
-  - No decision logic beyond safe rendering rules such as rejected functions always printing `pc=none` and bindings only when readiness is `Ready`.
+  - Pure deterministic formatter.
+  - Does not compute eligibility/readiness.
 
 ### Modify
 
 - `tests/r5900_analysis_report_tests.cpp`
-  - Host the portable activation-policy RED/GREEN matrix because the existing target already links `b3r_analysis` → `b3r_runtime`.
-
 - `tests/ps2_pad_runtime_report_tests.cpp`
-  - Host deterministic activation-report RED/GREEN coverage beside the existing runtime-confirmation formatter tests.
-
 - `tests/r5900_block_dispatcher_guest_call_windows_tests.cpp`
-  - Add the synthetic `decision.bindings` → real `Ps2PadHleService` → dispatcher lifecycle characterization.
-
-- `docs/PROGRESS.md`
-  - Update only after implementation-head CI passes.
+- `docs/PROGRESS.md` only after implementation-head CI passes.
 
 ### Create during validation
 
 - `docs/validation/2026-09-08-ps2-pad-runtime-activation-v0.md`
 
-### Explicitly do not modify
+### Must remain unchanged
 
+- `CMakeLists.txt`
 - `src/platform/windows/win_main.cpp`
 - `src/runtime/ps2_pad_hle_service.h`
 - `src/runtime/ps2_pad_hle_service.cpp`
@@ -75,21 +75,13 @@
 
 ---
 
-### Task 1: Atomic PAD Activation Policy
+## Task 1: Atomic PAD Activation Policy
 
 **Files:**
 - Create: `src/analysis/ps2_pad_activation.h`
 - Modify/Test: `tests/r5900_analysis_report_tests.cpp`
 
-**Interfaces:**
-- Consumes:
-  - `analysis::PadBindingDiscoveryResult`
-  - `analysis::PadRuntimeConfirmationResult`
-  - `analysis::PadBindingFunction`
-  - `analysis::PadBindingConfidence`
-  - `analysis::PadRuntimeConfirmationStatus`
-  - `runtime::Ps2PadHleBindings`
-- Produces:
+**Produces:**
 
 ```cpp
 enum class PadActivationEligibility : std::uint8_t {
@@ -136,9 +128,37 @@ make_ps2_pad_activation_decision(
     const PadRuntimeConfirmationResult& runtime);
 ```
 
-- [ ] **Step 1: Add the first RED fixture helpers and happy-path test**
+### Fixed synthetic policy fixture
 
-At the end of `tests/r5900_analysis_report_tests.cpp`, before `main()`, add helpers that initialize all six canonical slots and attach one synthetic evidence PC per function:
+Use exactly these six PCs in portable policy/report tests:
+
+```cpp
+constexpr std::array<std::uint32_t, 6> kActivationPcs{
+    0x00101000u,
+    0x00102000u,
+    0x00103000u,
+    0x00104000u,
+    0x00105000u,
+    0x00106000u,
+};
+```
+
+Use this fixed confidence pattern:
+
+```text
+padInit       Trusted
+padPortOpen   Candidate
+padGetState   Unresolved
+padRead       Candidate
+padPortClose  Trusted
+padEnd        Trusted
+```
+
+- [ ] **Step 1: Write the first RED policy test**
+
+Add `#include "analysis/ps2_pad_activation.h"` and `<array>` to `tests/r5900_analysis_report_tests.cpp`.
+
+Add helpers:
 
 ```cpp
 b3r::analysis::PadBindingDiscoveryResult activation_discovery(
@@ -171,143 +191,142 @@ b3r::analysis::PadRuntimeConfirmationResult activation_runtime(
     using namespace b3r::analysis;
     PadRuntimeConfirmationResult runtime{};
     for (std::size_t i = 0; i < runtime.functions.size(); ++i) {
-        const auto function = static_cast<PadBindingFunction>(i);
         auto& result = runtime.functions[i];
-        result.function = function;
+        result.function = static_cast<PadBindingFunction>(i);
         result.runtime_status = PadRuntimeConfirmationStatus::RuntimeConfirmed;
         result.guest_pc = pcs[i];
-        result.compatible_calls = 1u;
         result.calls_observed = 1u;
+        result.compatible_calls = 1u;
     }
     return runtime;
 }
+```
 
+Add:
+
+```cpp
 void test_pad_activation_ready_requires_six_evidence_backed_distinct_confirmations() {
     using namespace b3r::analysis;
-    constexpr std::array<std::uint32_t, 6> pcs{
-        0x00101000u, 0x00102000u, 0x00103000u,
-        0x00104000u, 0x00105000u, 0x00106000u,
-    };
-
-    const auto discovery = activation_discovery(pcs);
-    const auto runtime = activation_runtime(pcs);
+    const auto discovery = activation_discovery(kActivationPcs);
+    const auto runtime = activation_runtime(kActivationPcs);
     const auto decision = make_ps2_pad_activation_decision(discovery, runtime);
 
     expect(decision.readiness == PadActivationReadiness::Ready,
            "six evidence-backed confirmed distinct PCs must be activation-ready");
     expect(decision.bindings.has_value(),
            "Ready activation must materialize complete bindings");
-    expect(decision.bindings->pad_init == pcs[0] &&
-               decision.bindings->pad_port_open == pcs[1] &&
-               decision.bindings->pad_get_state == pcs[2] &&
-               decision.bindings->pad_read == pcs[3] &&
-               decision.bindings->pad_port_close == pcs[4] &&
-               decision.bindings->pad_end == pcs[5],
-           "materialized bindings must match the six runtime-confirmed evidence PCs exactly");
+    expect(decision.bindings->pad_init == kActivationPcs[0] &&
+               decision.bindings->pad_port_open == kActivationPcs[1] &&
+               decision.bindings->pad_get_state == kActivationPcs[2] &&
+               decision.bindings->pad_read == kActivationPcs[3] &&
+               decision.bindings->pad_port_close == kActivationPcs[4] &&
+               decision.bindings->pad_end == kActivationPcs[5],
+           "bindings must exactly match the six confirmed evidence PCs");
 
     for (const auto& function : decision.functions) {
         expect(function.eligibility == PadActivationEligibility::Eligible,
-               "every canonical function must be individually eligible");
+               "all six functions must be individually eligible");
         expect(function.reason == PadActivationReason::EligibleRuntimeConfirmed,
                "eligible function must expose runtime-confirmed reason");
-        expect(function.guest_pc.has_value() && *function.guest_pc != 0u,
-               "eligible function must expose its selected nonzero PC");
     }
 }
 ```
 
-Include `analysis/ps2_pad_activation.h` and `<array>` as needed, then call the new test from `main()`.
+Call the new test from `main()`.
 
-- [ ] **Step 2: Run Windows CI to verify the RED**
-
-Commit only the test change first:
+- [ ] **Step 2: Commit RED and verify Windows CI fails for missing activation API**
 
 ```bash
 git add tests/r5900_analysis_report_tests.cpp
 git commit -m "test: define PS2 PAD activation policy"
 ```
 
-Push the feature branch and require the Windows CI build to fail because `analysis/ps2_pad_activation.h` or `make_ps2_pad_activation_decision` does not exist. Configure should remain green. Record run/job IDs for the validation ledger.
+Expected CI state:
 
-- [ ] **Step 3: Implement the minimal policy header**
+```text
+Configure PASS
+Build FAIL
+cause: analysis/ps2_pad_activation.h or make_ps2_pad_activation_decision missing
+```
 
-Create `src/analysis/ps2_pad_activation.h` as a header-only unit. Implement canonical identity, provenance, status and global readiness in one pure function.
+Record run ID and job ID.
 
-The per-function sequence must be exactly:
+- [ ] **Step 3: Implement `src/analysis/ps2_pad_activation.h` minimally**
+
+Required includes:
 
 ```cpp
-for (std::size_t i = 0; i < decision.functions.size(); ++i) {
-    const auto expected = static_cast<PadBindingFunction>(i);
-    const auto& static_source = discovery.resolutions[i];
-    const auto& runtime_source = runtime.functions[i];
-    auto& output = decision.functions[i];
+#pragma once
 
-    output.function = expected;
-    output.static_confidence = static_source.confidence;
-    output.runtime_status = runtime_source.runtime_status;
+#include "analysis/ps2_pad_binding_discovery.h"
+#include "analysis/ps2_pad_runtime_confirmation.h"
+#include "runtime/ps2_pad_hle_service.h"
 
-    if (static_source.function != expected || runtime_source.function != expected) {
-        output.reason = PadActivationReason::CanonicalFunctionMismatch;
-        decision.diagnostics.push_back(
-            std::string("canonical_function_mismatch function=") +
-            ps2_pad_binding_detail::function_name(expected));
-        continue;
-    }
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <iomanip>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <vector>
+```
 
-    switch (runtime_source.runtime_status) {
-    case PadRuntimeConfirmationStatus::Unobserved:
-        output.reason = PadActivationReason::Unobserved;
-        continue;
-    case PadRuntimeConfirmationStatus::ObservedIncompatible:
-        output.reason = PadActivationReason::ObservedIncompatible;
-        continue;
-    case PadRuntimeConfirmationStatus::RuntimeAmbiguous:
-        output.reason = PadActivationReason::RuntimeAmbiguous;
-        continue;
-    case PadRuntimeConfirmationStatus::RuntimeConfirmed:
-        break;
-    }
+Define the public enums/structs exactly as listed above.
 
-    if (!runtime_source.guest_pc.has_value()) {
-        output.reason = PadActivationReason::MissingGuestPc;
-        continue;
-    }
-    if (*runtime_source.guest_pc == 0u) {
-        output.reason = PadActivationReason::ZeroGuestPc;
-        continue;
-    }
+Inside `ps2_pad_activation_detail`, define exactly one private PC formatter; do not include a report header from this policy unit:
 
-    const auto selected_pc = *runtime_source.guest_pc;
-    const bool evidence_backed = std::any_of(
-        static_source.evidence.begin(), static_source.evidence.end(),
-        [&](const PadBindingEvidence& evidence) {
-            return evidence.function == expected && evidence.guest_pc == selected_pc;
-        });
-    if (!evidence_backed) {
-        output.reason = PadActivationReason::RuntimePcNotEvidenceBacked;
-        decision.diagnostics.push_back(
-            std::string("runtime_pc_not_evidence_backed function=") +
-            ps2_pad_binding_detail::function_name(expected));
-        continue;
-    }
-
-    output.eligibility = PadActivationEligibility::Eligible;
-    output.reason = PadActivationReason::EligibleRuntimeConfirmed;
-    output.guest_pc = selected_pc;
+```cpp
+[[nodiscard]] inline std::string format_activation_pc(std::uint32_t pc) {
+    std::ostringstream out;
+    out << "0x" << std::hex << std::setw(8) << std::setfill('0') << pc;
+    return out.str();
 }
 ```
 
-Then count eligible functions. If fewer than six, add exactly `incomplete_activation_set`, sort/deduplicate diagnostics, and return `NotReady`/`nullopt`.
+Implement per-function classification in canonical index order. For each index:
 
-If all six are eligible, detect duplicate PCs using a sorted copy of the six selected values. Each duplicated numerical PC group must add one deterministic diagnostic:
+1. `expected = static_cast<PadBindingFunction>(i)`.
+2. Copy static confidence and runtime status to output.
+3. If discovery or runtime slot function != expected:
+   - reject;
+   - reason `CanonicalFunctionMismatch`;
+   - clear output `guest_pc`;
+   - add `canonical_function_mismatch function=<canonical-name>`.
+4. Map non-confirmed runtime states directly to rejection reasons.
+5. `RuntimeConfirmed + guest_pc absent` → `MissingGuestPc`.
+6. `RuntimeConfirmed + guest_pc == 0` → `ZeroGuestPc`.
+7. Search `discovery.resolutions[i].evidence` for an item with both:
+   - `evidence.function == expected`
+   - `evidence.guest_pc == selected_pc`
+8. If no exact same-function evidence item exists:
+   - reject;
+   - reason `RuntimePcNotEvidenceBacked`;
+   - clear output PC;
+   - diagnostic `runtime_pc_not_evidence_backed function=<canonical-name>`.
+9. Otherwise set `Eligible`, `EligibleRuntimeConfirmed`, and selected PC.
 
-```text
-activation guest PC 0x00102000 is selected by multiple PAD functions
+After per-function classification:
+
+```cpp
+const auto eligible_count = std::count_if(
+    decision.functions.begin(), decision.functions.end(),
+    [](const PadActivationFunctionDecision& item) {
+        return item.eligibility == PadActivationEligibility::Eligible;
+    });
 ```
 
-Use the existing lowercase eight-digit formatter from `ps2_pad_binding_report_detail::format_pc()` or reproduce the exact formatting in a private detail helper if including the report header would create a dependency cycle.
+If `eligible_count != 6`, add `incomplete_activation_set`, sort/dedup diagnostics, return `NotReady` with `bindings == nullopt`.
 
-Only if all six are eligible and distinct set:
+If 6/6 eligible, copy the six selected PCs into a local array, sort a copy, and detect duplicate groups. For each duplicated numerical value add exactly one diagnostic:
+
+```text
+activation guest PC 0x???????? is selected by multiple PAD functions
+```
+
+Use `format_activation_pc()` for the value. If any duplicate exists, return `NotReady` with `bindings == nullopt`.
+
+Only when all six PCs are eligible, nonzero, evidence-backed, canonical and pairwise-distinct:
 
 ```cpp
 decision.readiness = PadActivationReadiness::Ready;
@@ -321,78 +340,72 @@ decision.bindings = runtime::Ps2PadHleBindings{
 };
 ```
 
-Sort and deduplicate diagnostics before return in every path.
+Sort/dedup diagnostics before every return.
 
-- [ ] **Step 4: Run the focused test target and full Windows CI GREEN**
-
-Build/run `r5900_analysis_report_tests` on Windows CI. The full workflow must pass; do not accept only the focused executable as completion evidence.
-
-Commit:
+- [ ] **Step 4: Commit GREEN and require full Windows CI PASS**
 
 ```bash
 git add src/analysis/ps2_pad_activation.h
 git commit -m "feat: add atomic PS2 PAD activation policy"
 ```
 
-- [ ] **Step 5: Add the complete policy hardening matrix**
+Do not start hardening until the complete Windows workflow is green.
 
-Add these cases to `tests/r5900_analysis_report_tests.cpp` and call them from `main()`:
+- [ ] **Step 5: Add the full policy hardening matrix**
+
+Add and call these exact tests:
 
 ```cpp
 void test_pad_activation_rejects_nonconfirmed_states();
 void test_pad_activation_rejects_missing_and_zero_pc();
-void test_pad_activation_accepts_trusted_candidate_and_unresolved_confidence();
-void test_pad_activation_requires_runtime_pc_to_be_evidence_backed();
+void test_pad_activation_accepts_all_static_confidence_levels();
+void test_pad_activation_requires_same_function_evidence_provenance();
 void test_pad_activation_rejects_canonical_identity_mismatch();
 void test_pad_activation_duplicate_pc_blocks_global_readiness();
-void test_pad_activation_five_of_six_never_materializes_partial_bindings();
+void test_pad_activation_incomplete_set_never_materializes_partial_bindings();
 void test_pad_activation_is_pure_and_deterministic();
 ```
 
-Required assertions:
+Required cases:
 
 ```text
-Unobserved             -> Rejected / Unobserved / pc cleared
-ObservedIncompatible   -> Rejected / ObservedIncompatible / pc cleared
-RuntimeAmbiguous       -> Rejected / RuntimeAmbiguous / pc cleared
+Unobserved             -> Rejected / Unobserved / pc none
+ObservedIncompatible   -> Rejected / ObservedIncompatible / pc none
+RuntimeAmbiguous       -> Rejected / RuntimeAmbiguous / pc none
 RuntimeConfirmed+none  -> Rejected / MissingGuestPc
 RuntimeConfirmed+0     -> Rejected / ZeroGuestPc
 Trusted+confirmed      -> Eligible
 Candidate+confirmed    -> Eligible
 Unresolved+confirmed   -> Eligible
-confirmed PC not in same-function discovery evidence -> Rejected / RuntimePcNotEvidenceBacked
-mismatched discovery slot function -> Rejected / CanonicalFunctionMismatch
-mismatched runtime slot function -> Rejected / CanonicalFunctionMismatch
-same numerical PC for two eligible functions -> both remain Eligible, global NotReady, bindings nullopt
-5/6 eligible -> NotReady, bindings nullopt, incomplete_activation_set
-identical inputs -> structurally identical outputs
-input discovery/runtime objects retain all original confidence/status/PC/evidence values after decision creation
+confirmed PC absent from same-function evidence -> RuntimePcNotEvidenceBacked
+same numerical PC present only under another function's evidence -> RuntimePcNotEvidenceBacked
+mismatched discovery slot identity -> CanonicalFunctionMismatch
+mismatched runtime slot identity -> CanonicalFunctionMismatch
+two functions select same PC -> both individually Eligible, global NotReady, no bindings
+three functions select same PC -> exactly one duplicate-group diagnostic
+5/6 eligible -> NotReady, no bindings, incomplete_activation_set
+same inputs twice -> same readiness, functions, bindings, diagnostics
+source discovery/runtime objects retain original confidence/status/PC/evidence after decision creation
 ```
 
-For duplicate diagnostics, assert the exact string and assert it appears only once even if the duplicate group contains three functions.
-
-- [ ] **Step 6: Run full Windows CI on the hardened Task 1 head**
-
-Commit only test changes:
+- [ ] **Step 6: Commit hardening and require full Windows CI PASS**
 
 ```bash
 git add tests/r5900_analysis_report_tests.cpp
 git commit -m "test: harden PS2 PAD activation policy"
 ```
 
-Require complete Windows CI PASS before starting Task 2.
+Record exact Task 1 hardened SHA and CI evidence.
 
 ---
 
-### Task 2: Deterministic PAD Activation Report
+## Task 2: Deterministic PAD Activation Report
 
 **Files:**
 - Create: `src/analysis/ps2_pad_activation_report.h`
 - Modify/Test: `tests/ps2_pad_runtime_report_tests.cpp`
 
-**Interfaces:**
-- Consumes: `const Ps2PadActivationDecision&`
-- Produces:
+**Produces:**
 
 ```cpp
 [[nodiscard]] std::string
@@ -400,9 +413,17 @@ format_ps2_pad_activation_decision(
     const Ps2PadActivationDecision& decision);
 ```
 
-- [ ] **Step 1: Write the RED canonical report test**
+- [ ] **Step 1: Write RED canonical report test**
 
-Include `analysis/ps2_pad_activation_report.h` and add a fixture that calls the real Task 1 decision maker with six synthetic evidence-backed confirmed PCs. Expected output must be byte-exact:
+Include:
+
+```cpp
+#include "analysis/ps2_pad_activation_report.h"
+```
+
+Reuse the same six fixed PCs and confidence pattern from Task 1. Build the ready decision by calling the real Task 1 policy.
+
+Expected byte-exact output:
 
 ```text
 PAD_ACTIVATION_V0 readiness=ready eligible=6 required=6
@@ -416,151 +437,129 @@ PAD_ACTIVATION_BINDINGS padInit=0x00101000 padPortOpen=0x00102000 padGetState=0x
 PAD_ACTIVATION_END
 ```
 
-Also assert formatting the same decision twice is byte-identical.
+Also assert rendering the same decision twice is byte-identical.
 
-- [ ] **Step 2: Run Windows CI to verify RED**
-
-Commit the report test only:
+- [ ] **Step 2: Commit RED and verify Windows CI fails for missing formatter**
 
 ```bash
 git add tests/ps2_pad_runtime_report_tests.cpp
 git commit -m "test: define PS2 PAD activation report"
 ```
 
-Expected failure: Build fails because `analysis/ps2_pad_activation_report.h` or the formatter API does not exist. Record run/job IDs.
-
-- [ ] **Step 3: Implement the formatter header**
-
-Create `src/analysis/ps2_pad_activation_report.h`.
-
-Add private name helpers with these exact strings:
+Expected CI:
 
 ```text
-PadActivationEligibility::Eligible -> eligible
-PadActivationEligibility::Rejected -> rejected
-PadActivationReadiness::Ready       -> ready
-PadActivationReadiness::NotReady    -> not_ready
-EligibleRuntimeConfirmed            -> eligible_runtime_confirmed
-Unobserved                          -> unobserved
-ObservedIncompatible                -> observed_incompatible
-RuntimeAmbiguous                    -> runtime_ambiguous
-MissingGuestPc                      -> missing_guest_pc
-ZeroGuestPc                         -> zero_guest_pc
-CanonicalFunctionMismatch           -> canonical_function_mismatch
-RuntimePcNotEvidenceBacked          -> runtime_pc_not_evidence_backed
+Configure PASS
+Build FAIL
+cause: analysis/ps2_pad_activation_report.h or formatter API missing
 ```
 
-Formatting algorithm:
+- [ ] **Step 3: Implement `src/analysis/ps2_pad_activation_report.h`**
+
+Include:
 
 ```cpp
-std::size_t eligible_count{};
-for (const auto& function : decision.functions) {
-    if (function.eligibility == PadActivationEligibility::Eligible) {
-        ++eligible_count;
-    }
-}
+#pragma once
 
-out << "PAD_ACTIVATION_V0 readiness=" << readiness_name(decision.readiness)
-    << " eligible=" << eligible_count << " required=6\n";
+#include "analysis/ps2_pad_activation.h"
+#include "analysis/ps2_pad_binding_report.h"
+#include "analysis/ps2_pad_runtime_report.h"
 
-for (std::size_t i = 0; i < decision.functions.size(); ++i) {
-    const auto expected = static_cast<PadBindingFunction>(i);
-    const auto& source = decision.functions[i];
-    out << "PAD_ACTIVATION function="
-        << ps2_pad_binding_detail::function_name(expected)
-        << " static_confidence=" << confidence_name(source.static_confidence)
-        << " runtime_status=" << status_name(source.runtime_status)
-        << " eligibility=" << eligibility_name(source.eligibility)
-        << " pc=";
-
-    if (source.eligibility == PadActivationEligibility::Eligible &&
-        source.guest_pc.has_value()) {
-        out << format_pc(*source.guest_pc);
-    } else {
-        out << "none";
-    }
-    out << " reason=" << reason_name(source.reason) << '\n';
-}
+#include <algorithm>
+#include <cstddef>
+#include <sstream>
+#include <string>
+#include <vector>
 ```
 
-Emit `PAD_ACTIVATION_BINDINGS` only when both conditions are true:
+Define exact names:
+
+```text
+Eligible                    eligible
+Rejected                    rejected
+Ready                       ready
+NotReady                    not_ready
+EligibleRuntimeConfirmed    eligible_runtime_confirmed
+Unobserved                  unobserved
+ObservedIncompatible        observed_incompatible
+RuntimeAmbiguous            runtime_ambiguous
+MissingGuestPc              missing_guest_pc
+ZeroGuestPc                 zero_guest_pc
+CanonicalFunctionMismatch   canonical_function_mismatch
+RuntimePcNotEvidenceBacked  runtime_pc_not_evidence_backed
+```
+
+Use existing canonical helpers:
 
 ```cpp
-decision.readiness == PadActivationReadiness::Ready &&
-decision.bindings.has_value()
+ps2_pad_binding_detail::function_name(...)
+ps2_pad_binding_report_detail::confidence_name(...)
+ps2_pad_binding_report_detail::format_pc(...)
+ps2_pad_runtime_report_detail::status_name(...)
 ```
 
-Copy/sort/deduplicate `decision.diagnostics` before rendering each as:
+Render:
 
-```text
-PAD_ACTIVATION_DIAGNOSTIC <diagnostic>
-```
+1. header with readiness, actual eligible count, `required=6`;
+2. exactly six function lines in canonical enum order;
+3. `pc=<hex>` only if `eligibility == Eligible && guest_pc.has_value()`; otherwise `pc=none`;
+4. `PAD_ACTIVATION_BINDINGS` only if `readiness == Ready && bindings.has_value()`;
+5. a sorted/deduplicated copy of diagnostics;
+6. exactly one `PAD_ACTIVATION_END\n` terminator.
 
-Always terminate with exactly:
+Do not render scores, arguments, register dumps, RAM bytes or code bytes.
 
-```text
-PAD_ACTIVATION_END
-```
-
-- [ ] **Step 4: Run full Windows CI GREEN**
-
-Commit:
+- [ ] **Step 4: Commit GREEN and require full Windows CI PASS**
 
 ```bash
 git add src/analysis/ps2_pad_activation_report.h
 git commit -m "feat: add deterministic PS2 PAD activation report"
 ```
 
-Require complete workflow PASS.
+- [ ] **Step 5: Harden formatter against inconsistent copied decisions**
 
-- [ ] **Step 5: Harden formatter behavior against inconsistent input objects**
-
-Add tests that manually mutate a copied `Ps2PadActivationDecision` after Task 1 produced it, proving the formatter does not expose unsafe data:
+Add exact tests for:
 
 ```text
 Rejected function carrying guest_pc -> pc=none
-NotReady decision carrying bindings -> no PAD_ACTIVATION_BINDINGS line
-Ready decision without bindings -> no PAD_ACTIVATION_BINDINGS line
-unsorted duplicate diagnostics -> sorted/deduplicated output
-report contains no "score=", "args=", "bytes=", "ram=", or "code="
+NotReady decision carrying bindings -> no PAD_ACTIVATION_BINDINGS
+Ready decision with bindings reset -> no PAD_ACTIVATION_BINDINGS
+unsorted duplicate diagnostics -> sorted and deduplicated
 exactly six PAD_ACTIVATION function= lines
-canonical function order is padInit, padPortOpen, padGetState, padRead, padPortClose, padEnd
+canonical order padInit/padPortOpen/padGetState/padRead/padPortClose/padEnd
+no "score=", "args=", "bytes=", "ram=", "code="
+repeat render byte-identical
 ```
 
-- [ ] **Step 6: Run full Windows CI on the hardened Task 2 head**
+- [ ] **Step 6: Commit Task 2 hardening and require full Windows CI PASS**
 
-Commit test-only hardening and require complete workflow PASS before Task 3.
+```bash
+git add tests/ps2_pad_runtime_report_tests.cpp
+git commit -m "test: harden PS2 PAD activation report"
+```
+
+Record exact Task 2 hardened SHA and CI evidence.
 
 ---
 
-### Task 3: Synthetic Activation Through the Real PAD HLE Service
+## Task 3: Synthetic Activation Through the Real PAD HLE Service
 
 **Files:**
 - Modify/Test: `tests/r5900_block_dispatcher_guest_call_windows_tests.cpp`
-- Production code changes: none expected.
+- Production code changes: none.
 
-**Interfaces:**
-- Consumes:
-  - `make_ps2_pad_activation_decision()` from Task 1
-  - `decision.bindings`
-  - existing `runtime::Ps2PadHleService`
-  - existing `recompiler::R5900BlockDispatcher`
-- Produces: end-to-end characterization proving materialized bindings are usable without hot-swap or production wiring changes.
+**Consumes:**
+- `make_ps2_pad_activation_decision()`
+- `decision.bindings`
+- existing `runtime::Ps2PadHleService`
+- existing `recompiler::R5900BlockDispatcher`
 
-- [ ] **Step 1: Add activation/discovery/runtime helpers using six distinct synthetic PCs**
+### Fixed integration PCs
 
-At the top of `tests/r5900_block_dispatcher_guest_call_windows_tests.cpp`, include:
+Use exactly these six synthetic binding PCs:
 
 ```cpp
-#include "analysis/ps2_pad_activation.h"
-#include "input/ps2_pad_report.h"
-#include "runtime/ps2_pad_hle_service.h"
-```
-
-Add a helper whose six PCs are all in the synthetic ELF executable region and do not overlap the caller PCs. The exact values may be, for a synthetic base of `0x00100000`:
-
-```cpp
-constexpr std::array<std::uint32_t, 6> pad_pcs{
+constexpr std::array<std::uint32_t, 6> kSyntheticActivePadPcs{
     0x00100100u,
     0x00100120u,
     0x00100140u,
@@ -570,21 +569,39 @@ constexpr std::array<std::uint32_t, 6> pad_pcs{
 };
 ```
 
-Create discovery/runtime results with mixed `Trusted`, `Candidate`, and `Unresolved` confidence, each runtime result `RuntimeConfirmed`, and each PC present as evidence for the matching function.
+Use exactly this unknown PC for the negative service check:
 
-Call the real policy and assert:
+```cpp
+constexpr std::uint32_t kUnknownPadPc = 0x001001c0u;
+```
+
+- [ ] **Step 1: Add activation includes and fixture helpers**
+
+Add:
+
+```cpp
+#include "analysis/ps2_pad_activation.h"
+#include "input/ps2_pad_report.h"
+#include "runtime/ps2_pad_hle_service.h"
+
+#include <array>
+```
+
+Build discovery/runtime results with the fixed PCs. Every runtime result is `RuntimeConfirmed`; every selected PC exists as same-function discovery evidence. Use the fixed mixed confidence pattern from Task 1.
+
+Then:
 
 ```cpp
 const auto decision = make_ps2_pad_activation_decision(discovery, runtime);
 expect(decision.readiness == PadActivationReadiness::Ready,
-       "synthetic six-function PAD activation must be ready");
+       "synthetic six-function PAD activation must be Ready");
 expect(decision.bindings.has_value(),
-       "ready activation must supply bindings for the HLE service");
+       "Ready activation must supply bindings");
 ```
 
-Do not construct a second independent `Ps2PadHleBindings` literal anywhere in the activation test.
+The test must not construct any second independent `Ps2PadHleBindings` literal.
 
-- [ ] **Step 2: Construct the real service directly from `decision.bindings`**
+- [ ] **Step 2: Construct the real PAD service from `decision.bindings`**
 
 ```cpp
 b3r::runtime::Ps2PadHleService service(*decision.bindings);
@@ -597,220 +614,224 @@ report.left_y = 0x34u;
 report.right_x = 0x56u;
 report.right_y = 0x78u;
 service.set_report(report);
-```
 
-Use one dispatcher constructed with:
-
-```cpp
 R5900BlockDispatcherOptions options{};
 options.guest_calls = &service;
 R5900BlockDispatcher dispatcher(memory, options);
 ```
 
-There must be no setter/hot-swap API added to the dispatcher.
+No observer→HLE swap occurs inside this dispatcher. This dispatcher starts already configured for activation phase B.
 
-- [ ] **Step 3: Execute the six-call lifecycle in separate explicit dispatch phases**
+- [ ] **Step 3: Execute lifecycle calls through the dispatcher using the exact decision PCs**
 
-For each synthetic bound PC, seed `$ra` to a synthetic unsupported return PC so the HLE call is intercepted first and dispatcher then stops deterministically when execution resumes.
+For each call, set `$ra` to one fixed synthetic unsupported return PC backed by the ELF fixture so the HLE call is handled first and dispatch then stops deterministically after resuming.
 
-Call sequence and required assertions:
+Call sequence and assertions:
 
 ```text
 padInit(0)
+  start_pc = decision.bindings->pad_init
   guest_calls_handled == 1
   v0 == 1
-  service.initialized() == true
+  initialized == true
 
 padPortOpen(0,0,pad_area)
-  pad_area is 64-byte aligned and 256 bytes backed
+  start_pc = decision.bindings->pad_port_open
+  pad_area != 0
+  pad_area % 64 == 0
+  complete 256-byte span backed by EE RAM
   guest_calls_handled == 1
   v0 == 1
-  service.port_open() == true
-  service.pad_area_address() == pad_area
+  port_open == true
+  pad_area_address == pad_area
 
 padGetState(0,0)
+  start_pc = decision.bindings->pad_get_state
   guest_calls_handled == 1
-  v0 == 0x06 while connected/open
+  v0 == 0x06
 
 padRead(0,0,destination)
-  destination is 32 bytes backed
+  start_pc = decision.bindings->pad_read
+  complete 32-byte destination backed by EE RAM
   guest_calls_handled == 1
   v0 == 32
-  destination bytes equal the existing HLE report layout:
-    byte[0] = 0x00
-    byte[1] = 0x79
-    byte[2] = low8(buttons_active_low)
-    byte[3] = high8(buttons_active_low)
-    byte[4] = right_x
-    byte[5] = right_y
-    byte[6] = left_x
-    byte[7] = left_y
-    bytes[8..31] = 0
+  byte[0] == 0x00
+  byte[1] == 0x79
+  byte[2] == 0xef
+  byte[3] == 0xff
+  byte[4] == 0x56
+  byte[5] == 0x78
+  byte[6] == 0x12
+  byte[7] == 0x34
+  byte[8..31] == 0
 
 padPortClose(0,0)
+  start_pc = decision.bindings->pad_port_close
   guest_calls_handled == 1
   v0 == 1
-  service.port_open() == false
-  service.pad_area_address() == 0
+  port_open == false
+  pad_area_address == 0
 
 padEnd()
+  start_pc = decision.bindings->pad_end
   guest_calls_handled == 1
   v0 == 1
-  service.initialized() == false
-  service.port_open() == false
+  initialized == false
+  port_open == false
 ```
 
-Use the materialized activation PCs for every `dispatcher.run()` start PC.
+- [ ] **Step 4: Prove the fixed unknown PC is not handled by the PAD service**
 
-- [ ] **Step 4: Prove unknown PC remains outside PAD HLE**
+Use the service directly for this negative boundary; do not create a second dispatcher path for it:
 
-Use a synthetic executable PC not present in any binding. Either call `service.try_handle()` directly and require `NotHandled`, or run a dispatcher block at that PC and prove zero PAD guest calls are handled before normal/unsupported execution proceeds. The test must not modify the binding object.
+```cpp
+R5900IrExecutionState unknown_state{};
+const auto unknown = service.try_handle(
+    R5900GuestCallRequest{kUnknownPadPc}, unknown_state, memory);
+expect(unknown.status == R5900GuestCallStatus::NotHandled,
+       "unbound synthetic PC must not be handled by activated PAD HLE");
+```
 
-- [ ] **Step 5: Run full Windows CI for Task 3**
+Also assert `kUnknownPadPc` differs from all six `decision.bindings` fields.
 
-Commit:
+- [ ] **Step 5: Commit Task 3 and require full Windows CI PASS**
 
 ```bash
 git add tests/r5900_block_dispatcher_guest_call_windows_tests.cpp
 git commit -m "test: activate synthetic PAD HLE from runtime decision"
 ```
 
-Require complete Windows workflow PASS.
+If the integration fails, debug the fixture/production boundary systematically. Do not change `Ps2PadHleService`, add partial activation, or add dispatcher hot-swap to make it pass.
 
-If Task 3 fails, debug the test/production boundary systematically. Do not weaken `Ps2PadHleService` lifecycle requirements, do not add partial activation, and do not add dispatcher hot-swap merely to satisfy the fixture.
+- [ ] **Step 6: Perform the implementation-scope audit**
 
-- [ ] **Step 6: Audit implementation scope before documentation**
+Compare feature head to base `63f644a60d965eb32425dfa3a5b01aba6bc82712`.
 
-Compare feature head to base `63f644a60d965eb32425dfa3a5b01aba6bc82712` and require:
+Allowed production additions only:
 
 ```text
-allowed production additions:
-  src/analysis/ps2_pad_activation.h
-  src/analysis/ps2_pad_activation_report.h
-
-allowed test modifications:
-  tests/r5900_analysis_report_tests.cpp
-  tests/ps2_pad_runtime_report_tests.cpp
-  tests/r5900_block_dispatcher_guest_call_windows_tests.cpp
-
-forbidden modifications:
-  src/runtime/ps2_pad_hle_service.*
-  src/platform/windows/win_main.cpp
-  src/recompiler/windows/r5900_block_dispatcher.*
-  src/recompiler/ps2_elf.*
+src/analysis/ps2_pad_activation.h
+src/analysis/ps2_pad_activation_report.h
 ```
 
-Also inspect added fixture literals and confirm they are synthetic only.
+Allowed test changes only:
+
+```text
+tests/r5900_analysis_report_tests.cpp
+tests/ps2_pad_runtime_report_tests.cpp
+tests/r5900_block_dispatcher_guest_call_windows_tests.cpp
+```
+
+Require no changes to:
+
+```text
+CMakeLists.txt
+src/runtime/ps2_pad_hle_service.h
+src/runtime/ps2_pad_hle_service.cpp
+src/platform/windows/win_main.cpp
+src/recompiler/windows/r5900_block_dispatcher.h
+src/recompiler/windows/r5900_block_dispatcher.cpp
+src/recompiler/ps2_elf.h
+src/recompiler/ps2_elf.cpp
+```
+
+Inspect every added PC literal and confirm it belongs only to synthetic fixtures.
 
 ---
 
-### Task 4: Validation Ledger and Exact-Head CI
+## Task 4: Validation Ledger and Exact-Head CI
 
 **Files:**
 - Create: `docs/validation/2026-09-08-ps2-pad-runtime-activation-v0.md`
 - Modify: `docs/PROGRESS.md`
 
-**Interfaces:**
-- Consumes all RED/GREEN run IDs, job IDs, exact SHAs, test counts, pacing evidence, and integrity audit from Tasks 1–3.
-- Produces the authoritative milestone status only after two documentation-head CI gates.
-
 - [ ] **Step 1: Verify implementation-head Windows CI completely**
 
-On the exact implementation head after Task 3, require all of:
+On the exact Task 3 head require:
 
 ```text
-Configure                         PASS
-Build                             PASS
-CTest                             all tests PASS
-r5900_analysis_report_tests       PASS
-ps2_pad_runtime_report_tests      PASS
-r5900 guest-call dispatcher tests PASS
-Frame pacing telemetry            PASS
-120 Hz pacing probe               PASS
-Analyzer package validation       PASS
-Pacing package validation         PASS
+Configure                              PASS
+Build                                  PASS
+CTest                                  all tests PASS
+r5900_analysis_report_tests            PASS
+ps2_pad_runtime_report_tests           PASS
+r5900_block_dispatcher_guest_call...   PASS
+Frame pacing telemetry                 PASS
+120 Hz pacing probe                    PASS
+Analyzer package validation            PASS
+Pacing package validation              PASS
 ```
 
-Record exact SHA, CI run number/ID and job ID.
+Record exact implementation SHA, workflow run number/ID and job ID.
 
-- [ ] **Step 2: Create the validation ledger with status `PENDING_FINAL_EXACT_HEAD_CI`**
+- [ ] **Step 2: Create validation ledger with `PENDING_FINAL_EXACT_HEAD_CI`**
 
-The ledger must document:
+Document:
 
 - base SHA;
 - feature branch;
-- design/spec and plan paths;
-- Task 1 RED/GREEN/hardening SHAs + CI evidence;
-- Task 2 RED/GREEN/hardening SHAs + CI evidence;
-- Task 3 characterization SHA + CI evidence;
-- policy matrix including evidence provenance and duplicate-PC rejection;
-- activation report determinism;
-- complete synthetic HLE lifecycle;
-- implementation-head CTest count;
-- pacing telemetry and probe values from CI;
+- spec and plan paths;
+- Task 1 RED/GREEN/hardening SHAs and CI evidence;
+- Task 2 RED/GREEN/hardening SHAs and CI evidence;
+- Task 3 SHA and CI evidence;
+- evidence-provenance rejection;
+- canonical identity mismatch rejection;
+- duplicate-PC rejection;
+- no partial bindings;
+- deterministic activation report;
+- synthetic HLE lifecycle results;
+- CTest count;
+- pacing/probe evidence;
 - integrity audit;
-- no real-game activation claims;
-- explicit note that real Burnout activation remains `PENDING_EXTERNAL_VALIDATION`.
+- real Burnout activation remains `PENDING_EXTERNAL_VALIDATION`.
 
 - [ ] **Step 3: Update `docs/PROGRESS.md` conservatively**
 
-Set current milestone to `PS2 PAD Runtime Activation v0` and status to:
+Set:
 
 ```text
-PENDING_FINAL_EXACT_HEAD_CI
+Milestone: PS2 PAD Runtime Activation v0
+Status: PENDING_FINAL_EXACT_HEAD_CI
+Real Burnout PAD activation: PENDING_EXTERNAL_VALIDATION
 ```
 
-Do not mark `CI_VALIDATED` yet. Keep these non-claims explicit:
+Keep explicit non-claims that boot/render/audio/menu/gameplay are not implemented.
 
-```text
-real Burnout PAD activation: PENDING_EXTERNAL_VALIDATION
-game boot/render/audio/menu/gameplay: not implemented
-```
-
-- [ ] **Step 4: Commit exactly the two documentation files and run documentation-head CI**
-
-Commit:
+- [ ] **Step 4: Commit exactly the two documentation files and validate that exact SHA**
 
 ```bash
 git add docs/PROGRESS.md docs/validation/2026-09-08-ps2-pad-runtime-activation-v0.md
 git commit -m "docs: record PS2 PAD runtime activation validation"
 ```
 
-Verify the diff from implementation head contains exactly those two files. Require complete Windows CI PASS on that exact documentation SHA.
+Compare against implementation head and require exactly two changed files. Run full Windows CI on this exact documentation SHA and require all gates PASS.
 
-- [ ] **Step 5: Mark the two status documents `CI_VALIDATED` only after Step 4 CI passes**
+- [ ] **Step 5: Change only the same two documents to `CI_VALIDATED` after Step 4 passes**
 
-Update only:
-
-```text
-docs/PROGRESS.md
-docs/validation/2026-09-08-ps2-pad-runtime-activation-v0.md
-```
-
-Record the successful documentation-head run and exact SHA. Commit:
+Record the successful pending-status documentation run and SHA in the ledger. Commit:
 
 ```bash
 git add docs/PROGRESS.md docs/validation/2026-09-08-ps2-pad-runtime-activation-v0.md
 git commit -m "docs: mark PS2 PAD runtime activation CI validated"
 ```
 
-Verify the status-only diff contains exactly those two files.
+Compare against the prior documentation head and require exactly those two files changed.
 
 - [ ] **Step 6: Run final exact-head Windows CI**
 
 On the exact status commit require:
 
 ```text
-Configure                         PASS
-Build                             PASS
-CTest                             all tests PASS
-Frame pacing telemetry            PASS
-120 Hz pacing probe               PASS
-Analyzer package validation       PASS
-Pacing package validation         PASS
+Configure                    PASS
+Build                        PASS
+CTest                        all tests PASS
+Frame pacing telemetry       PASS
+120 Hz pacing probe          PASS
+Analyzer package validation  PASS
+Pacing package validation    PASS
 ```
 
-Also verify the branch head still equals the tested SHA after the run completes.
+After completion, verify the branch head still equals the tested SHA.
 
 Only then report:
 
@@ -818,34 +839,33 @@ Only then report:
 PS2 PAD Runtime Activation v0 = CI_VALIDATED
 ```
 
-Do not add another commit merely to record the final run ID; that would create a new unvalidated head. Report the final run ID in chat and leave the status commit as the exact tested head.
+Do not make another commit merely to record the final run ID, because that would create a new unvalidated head.
 
 ---
 
 ## Completion Checklist
 
-Before claiming completion, re-read the spec and verify every item below against the exact final head:
-
-- [ ] Six evidence-backed `RuntimeConfirmed` nonzero distinct PCs produce `Ready`.
-- [ ] `Trusted`, `Candidate`, and `Unresolved` confidence remain unchanged and may all be eligible.
+- [ ] Six same-function evidence-backed `RuntimeConfirmed` nonzero distinct PCs produce `Ready`.
+- [ ] `Trusted`, `Candidate`, and `Unresolved` confidence are preserved and may all be eligible.
 - [ ] `Unobserved`, `ObservedIncompatible`, and `RuntimeAmbiguous` are rejected.
 - [ ] Missing and zero runtime PCs are rejected.
 - [ ] Runtime PC absent from same-function discovery evidence is rejected.
-- [ ] Canonical discovery/runtime function identity mismatch is rejected and diagnosed.
-- [ ] Duplicate activation PCs force global `NotReady` with no bindings.
-- [ ] Any incomplete set produces no partial `Ps2PadHleBindings`.
-- [ ] `PAD_ACTIVATION_V0` output is canonical and byte-deterministic.
+- [ ] Canonical discovery/runtime function mismatch is rejected and diagnosed.
+- [ ] Duplicate selected PCs force global `NotReady` and no bindings.
+- [ ] Incomplete set produces no partial `Ps2PadHleBindings`.
+- [ ] `PAD_ACTIVATION_V0` is canonical and byte-deterministic.
 - [ ] Rejected functions always render `pc=none`.
-- [ ] Bindings line is emitted only for `Ready + bindings`.
-- [ ] The real `Ps2PadHleService` is constructed from `decision.bindings`, not an independent test literal.
-- [ ] Synthetic init/open/get-state/read/close/end lifecycle passes through dispatcher guest-call interception.
-- [ ] Unknown PC remains unhandled by PAD HLE.
+- [ ] Bindings line appears only for `Ready + bindings`.
+- [ ] Real `Ps2PadHleService` is constructed directly from `decision.bindings`.
+- [ ] Synthetic init/open/get-state/read/close/end lifecycle is intercepted successfully.
+- [ ] Fixed unknown PC is `NotHandled` by PAD HLE.
 - [ ] `Ps2PadHleService` production behavior is unchanged.
-- [ ] `R5900BlockDispatcher` has no hot-swap API/change.
+- [ ] `R5900BlockDispatcher` production code is unchanged and gains no hot-swap API.
 - [ ] `WinMain` is unchanged.
+- [ ] `CMakeLists.txt` is unchanged.
 - [ ] ELF/PT_LOAD validation is unchanged.
 - [ ] No proprietary game data or Burnout-specific guest PC was added.
 - [ ] Full Windows CI passes on implementation head.
 - [ ] Full Windows CI passes on pending-status documentation head.
-- [ ] Full Windows CI passes on exact final `CI_VALIDATED` status head.
+- [ ] Full Windows CI passes on exact final `CI_VALIDATED` head.
 - [ ] Real Burnout 3 activation remains `PENDING_EXTERNAL_VALIDATION`.
