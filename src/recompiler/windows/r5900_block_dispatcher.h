@@ -1,6 +1,7 @@
 #pragma once
 
 #include "analysis/r5900_control_flow.h"
+#include "recompiler/r5900_call_observer.h"
 #include "recompiler/r5900_guest_call_service.h"
 #include "recompiler/r5900_ir_executor.h"
 #include "recompiler/windows/r5900_host_syscall_service.h"
@@ -9,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -48,6 +50,7 @@ struct R5900BlockDispatcherOptions {
     analysis::R5900ControlFlowOptions block_options{};
     IR5900HostSyscallService* host_syscalls{};
     IR5900GuestCallService* guest_calls{};
+    IR5900CallObserver* call_observer{};
 };
 
 class R5900BlockDispatcher {
@@ -63,6 +66,12 @@ public:
     [[nodiscard]] std::size_t cache_size() const noexcept;
 
 private:
+    struct CachedCallMetadata {
+        std::uint32_t call_pc{};
+        std::uint32_t return_pc{};
+        bool indirect{};
+    };
+
     struct CachedBlock {
         std::uint32_t start_pc{};
         std::uint32_t end_pc_exclusive{};
@@ -70,8 +79,14 @@ private:
         std::vector<std::uint32_t> guest_words{};
         std::size_t guest_instruction_count{};
         bool fast_replay_eligible{};
+        std::optional<CachedCallMetadata> call_metadata{};
         R5900X64CompiledBlock native_block{};
     };
+
+    void observe_completed_call(
+        const std::optional<CachedCallMetadata>& metadata,
+        std::uint32_t target_pc,
+        const R5900IrExecutionState& state) const noexcept;
 
     runtime::Ps2MemoryMap& memory_;
     R5900BlockDispatcherOptions options_{};
