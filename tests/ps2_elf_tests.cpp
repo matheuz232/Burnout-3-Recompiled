@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -61,6 +62,13 @@ Bytes make_valid_elf(std::uint16_t program_header_count = 1) {
     return bytes;
 }
 
+Bytes make_binding_elf() {
+    auto bytes = make_valid_elf();
+    put_u32(bytes, 52u + 16u, 0x20u);
+    put_u32(bytes, 52u + 20u, 0x20u);
+    return bytes;
+}
+
 [[noreturn]] void fail(const char* message) {
     std::cerr << "ps2_elf_tests: FAIL: " << message << '\n';
     std::exit(EXIT_FAILURE);
@@ -82,22 +90,178 @@ void expect_error(const Bytes& bytes, b3r::recompiler::Ps2ElfError expected, con
     }
 }
 
-void run_pad_binding_merge_red() {
+void run_pad_binding_resolution_tests() {
     using namespace b3r::analysis;
 
-    const std::vector<PadBindingEvidence> evidence{
-        {PadBindingFunction::PadRead,
-         PadBindingEvidenceKind::StaticFingerprint,
-         0x00101234u,
-         120u,
-         "copies_32_bytes,port_bound_2"},
-    };
-    const auto result = resolve_ps2_pad_binding_evidence(evidence);
-    const auto& read = result.resolutions[static_cast<std::size_t>(PadBindingFunction::PadRead)];
-    expect(read.confidence == PadBindingConfidence::Candidate,
-           "static fingerprint alone must resolve only as candidate");
-    expect(read.guest_pc == 0x00101234u,
-           "single static fingerprint candidate must retain its PC");
+    const auto parsed = b3r::recompiler::parse_ps2_elf(make_binding_elf());
+    expect(parsed.ok(), "binding fixture ELF must parse");
+    const auto& image = *parsed.image;
+
+    {
+        Elf32MetadataResult metadata{};
+        metadata.status = Elf32MetadataStatus::Available;
+        metadata.symbols = {
+            {"padInit", 0x00100000u, 4u, 1u, kSttFunc, 1u},
+            {"padPortOpen", 0x00100004u, 4u, 1u, kSttFunc, 1u},
+            {"padGetState", 0x00100008u, 4u, 1u, kSttFunc, 1u},
+            {"padRead", 0x0010000cu, 4u, 1u, kSttFunc, 1u},
+            {"padPortClose", 0x00100010u, 4u, 1u, kSttFunc, 1u},
+            {"padEnd", 0x00100014u, 4u, 1u, kSttFunc, 1u},
+        };
+        const auto collected = collect_ps2_pad_symbol_evidence(metadata, image);
+        expect(collected.evidence.size() == 6u,
+               "all six canonical PAD symbols must produce evidence");
+        for (std::size_t index = 0; index < collected.evidence.size(); ++index) {
+            expect(static_cast<std::size_t>(collected.evidence[index].function) == index,
+                   "canonical symbols must map in PAD function enum order");
+            expect(collected.evidence[index].kind == PadBindingEvidenceKind::ElfSymbol,
+                   "exact symbol evidence must be tagged ElfSymbol");
+            expect(collected.evidence[index].score == 1000u,
+                   "exact symbol evidence must use score 1000");
+        }
+    }
+
+    {
+        Elf32MetadataResult metadata{};
+        metadata.status = Elf32MetadataStatus::Available;
+        metadata.symbols = {
+            {"_padInit", 0x00100000u, 4u, 1u, kSttNotype, 1u},
+            {"_padPortOpen", 0x00100004u, 4u, 1u, kSttFunc, 1u},
+            {"_padGetState", 0x00100008u, 4u, 1u, kSttFunc, 1u},
+            {"_padRead", 0x0010000cu, 4u, 1u, kSttFunc, 1u},
+            {"_padPortClose", 0x00100010u, 4u, 1u, kSttFunc, 1u},
+            {"_padEnd", 0x00100014u, 4u, 1u, kSttFunc, 1u},
+        };
+        const auto collected = collect_ps2_pad_symbol_evidence(metadata, image);
+        expect(collected.evidence.size() == 6u,
+               "all six leading-underscore aliases must be accepted");
+        expect(collected.evidence.front().detail == "_padInit",
+               "symbol evidence detail must preserve exact spelling");
+    }
+
+    {
+        Elf32MetadataResult metadata{};
+        metadata.status = Elf32MetadataStatus::Available;
+        metadata.symbols = {
+            {"PadRead", 0x00100000u, 4u, 1u, kSttFunc, 1u},
+            {"padRead_extra", 0x00100004u, 4u, 1u, kSttFunc, 1u},
+            {"xpadRead", 0x00100008u, 4u, 1u, kSttFunc, 1u},
+            {"padRead", 0u, 4u, 1u, kSttFunc, 1u},
+            {"padEnd", 0x0010000cu, 4u, 1u, 1u, 1u},
+        };
+        const auto collected = collect_ps2_pad_symbol_evidence(metadata, image);
+        expect(collected.evidence.empty(),
+               "fuzzy, zero-valued, or non-function PAD symbols must be rejected");
+    }
+
+    {
+        Elf32MetadataResult metadata{};
+        metadata.status = Elf32MetadataStatus::Available;
+        metadata.symbols = {
+            {"padRead", 0x00100020u, 4u, 1u, kSttFunc, 1u},
+        };
+        const auto collected = collect_ps2_pad_symbol_evidence(metadata, image);
+        expect(collected.evidence.empty(),
+               "PAD symbol outside file-backed executable range must be rejected");
+        expect(collected.diagnostics.size() == 1u,
+               "non-executable exact PAD symbol must emit one diagnostic");
+    }
+
+    {
+        const std::vector<PadBindingEvidence> evidence{
+            {PadBindingFunction::PadRead, PadBindingEvidenceKind::StaticFingerprint,
+             0x00101234u, 120u, "copies_32_bytes,port_bound_2"},
+        };
+        const auto result = resolve_ps2_pad_binding_evidence(evidence);
+        const auto& read = result.resolutions[static_cast<std::size_t>(PadBindingFunction::PadRead)];
+        expect(read.confidence == PadBindingConfidence::Candidate,
+               "static fingerprint alone must resolve only as candidate");
+        expect(read.guest_pc == 0x00101234u,
+               "single static fingerprint candidate must retain its PC");
+    }
+
+    {
+        const std::vector<PadBindingEvidence> evidence{
+            {PadBindingFunction::PadRead, PadBindingEvidenceKind::ElfSymbol,
+             0x0010000cu, 1000u, "padRead"},
+            {PadBindingFunction::PadRead, PadBindingEvidenceKind::ElfSymbol,
+             0x0010000cu, 1000u, "padRead"},
+        };
+        const auto result = resolve_ps2_pad_binding_evidence(evidence);
+        const auto& read = result.resolutions[static_cast<std::size_t>(PadBindingFunction::PadRead)];
+        expect(read.confidence == PadBindingConfidence::Trusted,
+               "duplicate same-PC exact symbols must remain trusted");
+        expect(read.guest_pc == 0x0010000cu,
+               "duplicate same-PC exact symbols must retain the single PC");
+        expect(read.evidence.size() == 1u,
+               "byte-identical duplicate evidence may be collapsed deterministically");
+    }
+
+    {
+        const std::vector<PadBindingEvidence> evidence{
+            {PadBindingFunction::PadRead, PadBindingEvidenceKind::ElfSymbol,
+             0x0010000cu, 1000u, "padRead"},
+            {PadBindingFunction::PadRead, PadBindingEvidenceKind::ElfSymbol,
+             0x00100010u, 1000u, "_padRead"},
+        };
+        const auto result = resolve_ps2_pad_binding_evidence(evidence);
+        const auto& read = result.resolutions[static_cast<std::size_t>(PadBindingFunction::PadRead)];
+        expect(read.confidence == PadBindingConfidence::Unresolved,
+               "different exact-symbol PCs must be unresolved");
+        expect(!read.guest_pc.has_value(),
+               "different exact-symbol PCs must never choose a winner");
+        expect(!result.diagnostics.empty(),
+               "different exact-symbol PCs must produce an ambiguity diagnostic");
+    }
+
+    {
+        const std::vector<PadBindingEvidence> evidence{
+            {PadBindingFunction::PadRead, PadBindingEvidenceKind::ElfSymbol,
+             0x0010000cu, 1000u, "padRead"},
+            {PadBindingFunction::PadRead, PadBindingEvidenceKind::StaticFingerprint,
+             0x0010000cu, 120u, "copies_32_bytes,port_bound_2"},
+        };
+        const auto result = resolve_ps2_pad_binding_evidence(evidence);
+        const auto& read = result.resolutions[static_cast<std::size_t>(PadBindingFunction::PadRead)];
+        expect(read.confidence == PadBindingConfidence::Trusted,
+               "matching symbol and fingerprint must remain trusted");
+        expect(read.guest_pc == 0x0010000cu,
+               "matching symbol and fingerprint must select the symbol PC");
+        expect(result.diagnostics.empty(),
+               "matching symbol and fingerprint must not invent a conflict");
+    }
+
+    {
+        const std::vector<PadBindingEvidence> evidence{
+            {PadBindingFunction::PadRead, PadBindingEvidenceKind::ElfSymbol,
+             0x0010000cu, 1000u, "padRead"},
+            {PadBindingFunction::PadRead, PadBindingEvidenceKind::StaticFingerprint,
+             0x00100010u, 120u, "copies_32_bytes,port_bound_2"},
+        };
+        const auto result = resolve_ps2_pad_binding_evidence(evidence);
+        const auto& read = result.resolutions[static_cast<std::size_t>(PadBindingFunction::PadRead)];
+        expect(read.confidence == PadBindingConfidence::Trusted,
+               "trusted exact symbol must dominate conflicting static candidate");
+        expect(read.guest_pc == 0x0010000cu,
+               "conflicting static candidate must not replace trusted symbol PC");
+        expect(!result.diagnostics.empty(),
+               "symbol/fingerprint conflict must remain visible");
+    }
+
+    {
+        const std::vector<PadBindingEvidence> evidence{
+            {PadBindingFunction::PadRead, PadBindingEvidenceKind::StaticFingerprint,
+             0x0010000cu, 120u, "copies_32_bytes,port_bound_2"},
+            {PadBindingFunction::PadRead, PadBindingEvidenceKind::StaticFingerprint,
+             0x00100010u, 140u, "copies_32_bytes,port_bound_2,slot_bound_8"},
+        };
+        const auto result = resolve_ps2_pad_binding_evidence(evidence);
+        const auto& read = result.resolutions[static_cast<std::size_t>(PadBindingFunction::PadRead)];
+        expect(read.confidence == PadBindingConfidence::Candidate,
+               "multiple fingerprint PCs remain candidate-only");
+        expect(!read.guest_pc.has_value(),
+               "multiple fingerprint PCs must render as ambiguous rather than selecting one");
+    }
 }
 
 } // namespace
@@ -105,7 +269,7 @@ void run_pad_binding_merge_red() {
 int main() {
     using namespace b3r::recompiler;
 
-    run_pad_binding_merge_red();
+    run_pad_binding_resolution_tests();
 
     {
         const auto result = parse_ps2_elf(make_valid_elf());
