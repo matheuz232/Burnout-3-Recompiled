@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -65,22 +66,252 @@ template <typename T, typename Pred>
 bool any_of(const std::vector<T>& items, Pred pred) {
     return std::any_of(items.begin(), items.end(), pred);
 }
+
+b3r::analysis::R5900InstructionSite site(std::uint32_t pc, std::uint32_t word) {
+    return {pc, b3r::recompiler::decode_r5900(word)};
+}
+
+b3r::analysis::R5900BasicBlock block(
+    std::uint32_t start_pc,
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> words,
+    std::vector<b3r::analysis::R5900ControlFlowEdge> edges = {}) {
+    b3r::analysis::R5900BasicBlock result{};
+    result.start_pc = start_pc;
+    for (const auto& [pc, word] : words) {
+        result.instructions.push_back(site(pc, word));
+    }
+    result.edges = std::move(edges);
+    return result;
+}
+
+const b3r::analysis::PadFingerprintCandidate* find_candidate(
+    const std::vector<b3r::analysis::PadFingerprintCandidate>& candidates,
+    b3r::analysis::PadBindingFunction function,
+    std::uint32_t pc) {
+    const auto it = std::find_if(candidates.begin(), candidates.end(),
+        [function, pc](const auto& candidate) {
+            return candidate.function == function && candidate.guest_pc == pc;
+        });
+    return it == candidates.end() ? nullptr : &*it;
+}
+
+void test_pad_fingerprint_scores() {
+    using namespace b3r::analysis;
+
+    PadFingerprintFeatures init{};
+    init.rpc_bind_new_1 = true;
+    init.rpc_bind_new_2 = true;
+    init.command_init = true;
+    init.direct_call_count = 2u;
+    expect(score_pad_init(init) == 170u, "padInit score must match fixed weights");
+
+    PadFingerprintFeatures open{};
+    open.command_open = true;
+    open.alignment_mask_0x3f = true;
+    open.port_bound_2 = true;
+    open.slot_bound_8 = true;
+    expect(score_pad_port_open(open) == 170u, "padPortOpen score must match fixed weights");
+
+    PadFingerprintFeatures state{};
+    state.state_stable_6 = true;
+    state.port_bound_2 = true;
+    state.slot_bound_8 = true;
+    expect(score_pad_get_state(state) == 120u, "padGetState score must match fixed weights");
+
+    PadFingerprintFeatures read{};
+    read.copies_32_bytes = true;
+    read.port_bound_2 = true;
+    read.slot_bound_8 = true;
+    expect(score_pad_read(read) == 120u, "padRead score must match fixed weights");
+
+    PadFingerprintFeatures close{};
+    close.command_close = true;
+    close.port_bound_2 = true;
+    close.slot_bound_8 = true;
+    expect(score_pad_port_close(close) == 140u, "padPortClose score must match fixed weights");
+
+    PadFingerprintFeatures end{};
+    end.command_end = true;
+    expect(score_pad_end(end) == 120u, "padEnd command must produce fixed score 120");
+
+    PadFingerprintFeatures weak{};
+    weak.port_bound_2 = true;
+    expect(score_pad_get_state(weak) < kPadFingerprintThreshold,
+           "below-threshold state evidence must remain weak");
+}
+
+void test_pad_fingerprint_function_views_and_features() {
+    using namespace b3r::analysis;
+
+    auto memory = make_memory({0u});
+
+    {
+        R5900ReachabilityGraph graph{};
+        graph.entry_pc = 0x1000u;
+        graph.blocks.push_back(block(0x1000u, {}, {{R5900EdgeKind::DirectJump, 0x1010u}}));
+        graph.blocks.push_back(block(0x1010u, {{0x1010u, i_type(0x0d, 0, 8, 0x000fu)}}));
+        const auto candidates = scan_ps2_pad_fingerprints(memory, graph);
+        expect(find_candidate(candidates, PadBindingFunction::PadEnd, 0x1000u) != nullptr,
+               "function view must follow direct jump edges");
+    }
+
+    {
+        R5900ReachabilityGraph graph{};
+        graph.entry_pc = 0x1000u;
+        graph.blocks.push_back(block(0x1000u, {}, {{R5900EdgeKind::DirectCall, 0x1100u}}));
+        graph.blocks.push_back(block(0x1100u, {{0x1100u, i_type(0x0d, 0, 8, 0x000fu)}}));
+        graph.calls.push_back({0x1000u, 0x1000u, false, 0x1100u});
+        const auto candidates = scan_ps2_pad_fingerprints(memory, graph);
+        expect(find_candidate(candidates, PadBindingFunction::PadEnd, 0x1000u) == nullptr,
+               "function view must stop at direct-call roots");
+        expect(find_candidate(candidates, PadBindingFunction::PadEnd, 0x1100u) != nullptr,
+               "direct-call target present in graph must become its own root");
+    }
+
+    {
+        R5900ReachabilityGraph graph{};
+        graph.entry_pc = 0x1000u;
+        graph.blocks.push_back(block(0x1000u, {{0x1000u, i_type(0x0d, 0, 8, 0x0006u)}}));
+        const auto candidates = scan_ps2_pad_fingerprints(memory, graph);
+        expect(find_candidate(candidates, PadBindingFunction::PadGetState, 0x1000u) == nullptr,
+               "score below 100 must not emit a candidate");
+    }
+
+    {
+        R5900ReachabilityGraph graph{};
+        graph.entry_pc = 0x1000u;
+        graph.blocks.push_back(block(0x1000u, {
+            {0x1000u, i_type(0x0f, 0, 8, 0x8000u)},
+            {0x1004u, i_type(0x0d, 8, 8, 0x0100u)},
+            {0x1008u, i_type(0x0d, 0, 9, 0x0010u)},
+        }));
+        const auto candidates = scan_ps2_pad_fingerprints(memory, graph);
+        const auto* candidate = find_candidate(candidates, PadBindingFunction::PadInit, 0x1000u);
+        expect(candidate != nullptr && candidate->score == 110u,
+               "public PAD RPC id plus init command must reach padInit threshold");
+    }
+
+    {
+        R5900ReachabilityGraph graph{};
+        graph.entry_pc = 0x1000u;
+        graph.blocks.push_back(block(0x1000u, {
+            {0x1000u, i_type(0x0d, 0, 8, 0x0001u)},
+            {0x1004u, i_type(0x0c, 4, 9, 0x003fu)},
+            {0x1008u, i_type(0x0b, 4, 10, 0x0002u)},
+            {0x100cu, i_type(0x0b, 5, 11, 0x0008u)},
+        }));
+        const auto candidates = scan_ps2_pad_fingerprints(memory, graph);
+        const auto* candidate = find_candidate(candidates, PadBindingFunction::PadPortOpen, 0x1000u);
+        expect(candidate != nullptr && candidate->score == 170u,
+               "padPortOpen public command, alignment and bounds must reach threshold");
+    }
+
+    {
+        R5900ReachabilityGraph graph{};
+        graph.entry_pc = 0x1000u;
+        graph.blocks.push_back(block(0x1000u, {
+            {0x1000u, i_type(0x0d, 0, 8, 0x0006u)},
+            {0x1004u, i_type(0x0b, 4, 9, 0x0002u)},
+            {0x1008u, i_type(0x0b, 5, 10, 0x0008u)},
+        }));
+        const auto candidates = scan_ps2_pad_fingerprints(memory, graph);
+        const auto* candidate = find_candidate(candidates, PadBindingFunction::PadGetState, 0x1000u);
+        expect(candidate != nullptr && candidate->score == 120u,
+               "stable state plus port/slot bounds must identify padGetState candidate");
+    }
+
+    {
+        R5900ReachabilityGraph graph{};
+        graph.entry_pc = 0x1000u;
+        graph.blocks.push_back(block(0x1000u, {
+            {0x1000u, i_type(0x0d, 0, 8, 32u)},
+            {0x1004u, i_type(0x0b, 4, 9, 2u)},
+            {0x1008u, i_type(0x0b, 5, 10, 8u)},
+            {0x100cu, i_type(0x23, 6, 11, 0u)},
+            {0x1010u, i_type(0x2b, 7, 11, 0u)},
+            {0x1014u, i_type(0x09, 8, 8, 0xfffcu)},
+            {0x1018u, i_type(0x05, 8, 0, 0xfffcu)},
+        }));
+        const auto candidates = scan_ps2_pad_fingerprints(memory, graph);
+        const auto* candidate = find_candidate(candidates, PadBindingFunction::PadRead, 0x1000u);
+        expect(candidate != nullptr && candidate->score == 120u && candidate->features.copies_32_bytes,
+               "copy loop plus port/slot bounds must identify padRead candidate");
+    }
+
+    {
+        R5900ReachabilityGraph graph{};
+        graph.entry_pc = 0x1000u;
+        graph.blocks.push_back(block(0x1000u, {{0x1000u, i_type(0x0d, 0, 8, 32u)}}));
+        const auto candidates = scan_ps2_pad_fingerprints(memory, graph);
+        expect(find_candidate(candidates, PadBindingFunction::PadRead, 0x1000u) == nullptr,
+               "bare immediate 32 must not imply a copy loop");
+    }
+
+    {
+        R5900ReachabilityGraph graph{};
+        graph.entry_pc = 0x1000u;
+        graph.blocks.push_back(block(0x1000u, {{0x1000u, i_type(0x0d, 0, 8, 0x000eu)}}));
+        const auto candidates = scan_ps2_pad_fingerprints(memory, graph);
+        const auto* candidate = find_candidate(candidates, PadBindingFunction::PadPortClose, 0x1000u);
+        expect(candidate != nullptr && candidate->score == 100u,
+               "public close command alone must meet its fixed candidate threshold");
+    }
+
+    {
+        R5900ReachabilityGraph graph{};
+        graph.entry_pc = 0x1000u;
+        graph.blocks.push_back(block(0x1000u, {{0x1000u, i_type(0x0d, 0, 8, 0x000fu)}}));
+        const auto candidates = scan_ps2_pad_fingerprints(memory, graph);
+        const auto* candidate = find_candidate(candidates, PadBindingFunction::PadEnd, 0x1000u);
+        expect(candidate != nullptr && candidate->score == 120u,
+               "public end command must identify padEnd candidate");
+    }
+
+    {
+        R5900ReachabilityGraph graph{};
+        graph.entry_pc = 0x1000u;
+        graph.blocks.push_back(block(0x1000u, {{0x1000u, i_type(0x0d, 0, 8, 0x000fu)}}));
+        graph.blocks.push_back(block(0x1100u, {{0x1100u, i_type(0x0d, 0, 8, 0x000fu)}}));
+        graph.calls.push_back({0x1000u, 0x1000u, false, 0x1100u});
+        const auto candidates = scan_ps2_pad_fingerprints(memory, graph);
+        const auto count = static_cast<std::size_t>(std::count_if(
+            candidates.begin(), candidates.end(), [](const auto& candidate) {
+                return candidate.function == PadBindingFunction::PadEnd;
+            }));
+        expect(count == 2u, "multiple candidates for the same PAD function must be preserved");
+    }
+
+    {
+        R5900ReachabilityGraph graph{};
+        graph.entry_pc = 0x1000u;
+        graph.blocks.push_back(block(0x1000u, {}));
+        graph.blocks.push_back(block(0x1200u, {{0x1200u, i_type(0x0d, 0, 8, 0x000fu)}}));
+        const auto candidates = scan_ps2_pad_fingerprints(memory, graph);
+        expect(candidates.empty(), "unreachable graph blocks must not be scanned as function roots");
+    }
+
+    {
+        PadFingerprintCandidate candidate{};
+        candidate.function = PadBindingFunction::PadRead;
+        candidate.guest_pc = 0x1000u;
+        candidate.score = 120u;
+        candidate.features.port_bound_2 = true;
+        candidate.features.slot_bound_8 = true;
+        candidate.features.copies_32_bytes = true;
+        const auto evidence = make_ps2_pad_fingerprint_evidence({&candidate, 1u});
+        expect(evidence.size() == 1u &&
+               evidence[0].detail == "port_bound_2,slot_bound_8,copies_32_bytes",
+               "fingerprint evidence detail must follow feature declaration order");
+    }
+}
+
 } // namespace
 
 int main() {
     using namespace b3r::analysis;
 
-    {
-        PadFingerprintFeatures features{};
-        features.command_end = true;
-        expect(score_pad_end(features) == 120u,
-               "public PAD END command must produce fixed score 120");
-
-        PadFingerprintFeatures weak{};
-        weak.port_bound_2 = true;
-        expect(score_pad_get_state(weak) < 100u,
-               "below-threshold state evidence must remain weak");
-    }
+    test_pad_fingerprint_scores();
+    test_pad_fingerprint_function_views_and_features();
 
     {
         // 1000: BEQ -> 1010, fallthrough 1008; 1008: JAL 1100, continuation 1010; 1010: JR ra.
