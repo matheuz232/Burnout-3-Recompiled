@@ -26,6 +26,7 @@ parse_burnout3_analyze_options(std::span<const std::string_view> args) {
     bool saw_output = false;
     bool saw_max_blocks = false;
     bool saw_follow_direct_calls = false;
+    bool saw_pad_bindings = false;
 
     for (std::size_t i = 0; i < args.size(); ++i) {
         const auto arg = args[i];
@@ -106,6 +107,16 @@ parse_burnout3_analyze_options(std::span<const std::string_view> args) {
             continue;
         }
 
+        if (arg == "--pad-bindings") {
+            if (saw_pad_bindings) {
+                return fail(Burnout3AnalyzeOptionError::DuplicateOption,
+                            "--pad-bindings may only be specified once");
+            }
+            options.pad_bindings = true;
+            saw_pad_bindings = true;
+            continue;
+        }
+
         return fail(Burnout3AnalyzeOptionError::UnknownOption,
                     "unknown Burnout3Analyze option: " + std::string(arg));
     }
@@ -122,11 +133,12 @@ parse_burnout3_analyze_options(std::span<const std::string_view> args) {
 
 const char* burnout3_analyze_usage() noexcept {
     return
-        "Usage: Burnout3Analyze --elf <path> [--output <path>] [--max-blocks <count>] [--follow-direct-calls]\n"
+        "Usage: Burnout3Analyze --elf <path> [--output <path>] [--max-blocks <count>] [--follow-direct-calls] [--pad-bindings]\n"
         "       Burnout3Analyze --help\n\n"
         "Analyzes an externally supplied PS2 ELF without executing guest code.\n"
         "If --output is omitted, the deterministic analysis report is written to stdout.\n"
         "Direct call targets remain evidence-only unless --follow-direct-calls is specified.\n"
+        "--pad-bindings appends opt-in analysis-only PS2 PAD binding evidence; it never activates runtime HLE.\n"
         "Default --max-blocks: 4096.\n";
 }
 
