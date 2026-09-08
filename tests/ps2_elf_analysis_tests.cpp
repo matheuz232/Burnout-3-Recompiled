@@ -228,6 +228,19 @@ void run_metadata_tests() {
 void run_pad_discovery_orchestration_red() {
     using namespace b3r::analysis;
 
+    {
+        const auto bytes = make_break_elf();
+        const auto parsed = b3r::recompiler::parse_ps2_elf(bytes);
+        expect(parsed.ok(), "trusted PAD symbol fixture must parse");
+        Elf32MetadataResult metadata{};
+        metadata.status = Elf32MetadataStatus::Available;
+        metadata.symbols.push_back({"padInit", 0x00100000u, 4u, 1u, kSttFunc, 1u});
+        const auto symbols = collect_ps2_pad_symbol_evidence(metadata, *parsed.image);
+        expect(symbols.evidence.size() == 1u, "exact executable PAD symbol must emit evidence");
+        expect(symbols.evidence.front().score == 1000u,
+               "trusted ELF symbol evidence must use fixed score 1000");
+    }
+
     const auto bytes = make_break_elf();
     const auto parsed = b3r::recompiler::parse_ps2_elf(bytes);
     expect(parsed.ok(), "PAD discovery fixture must parse as authoritative PS2 ELF");
