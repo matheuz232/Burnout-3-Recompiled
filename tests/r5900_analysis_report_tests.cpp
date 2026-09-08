@@ -402,9 +402,8 @@ void test_pad_runtime_evidence_aggregation() {
                                        "higher-score-runtime-tie"});
     Ps2PadRuntimeConfirmation ambiguous_confirmation(ambiguous, memory);
     ambiguous_confirmation.observe(observation_for(read_pc, 0u, 0u, valid_read));
-    auto one_compatible = observation_for(second_pc, 1u, 0u, valid_read);
-    ambiguous_confirmation.observe(one_compatible);
-    auto unique = ambiguous_confirmation.result();
+    ambiguous_confirmation.observe(observation_for(second_pc, 1u, 0u, valid_read));
+    const auto unique = ambiguous_confirmation.result();
     const auto& unique_read = unique.functions[
         static_cast<std::size_t>(PadBindingFunction::PadRead)];
     expect(unique_read.runtime_status == PadRuntimeConfirmationStatus::RuntimeConfirmed &&
@@ -429,8 +428,7 @@ void test_pad_runtime_evidence_aggregation() {
                trusted_result.runtime_status == PadRuntimeConfirmationStatus::Unobserved,
            "trusted static evidence may remain runtime-unobserved");
 
-    auto shared{};
-    shared = discovery_for(PadBindingFunction::PadInit, 0x0012c000u);
+    auto shared = discovery_for(PadBindingFunction::PadInit, 0x0012c000u);
     auto& end = shared.resolutions[static_cast<std::size_t>(PadBindingFunction::PadEnd)];
     end.function = PadBindingFunction::PadEnd;
     end.confidence = PadBindingConfidence::Candidate;
