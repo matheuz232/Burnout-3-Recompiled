@@ -1,4 +1,5 @@
 #include "recompiler/ps2_elf.h"
+#include "recompiler/r5900_call_observer.h"
 #include "recompiler/windows/r5900_block_dispatcher.h"
 #include "runtime/ps2_memory_map.h"
 
@@ -55,6 +56,15 @@ constexpr std::uint32_t i_type(std::uint8_t op,
            (static_cast<std::uint32_t>(rt) << 16u) |
            imm;
 }
+
+class RecordingCallObserver final : public b3r::recompiler::IR5900CallObserver {
+public:
+    void observe(const b3r::recompiler::R5900CallObservation& value) noexcept override {
+        observations.push_back(value);
+    }
+
+    std::vector<b3r::recompiler::R5900CallObservation> observations{};
+};
 
 b3r::runtime::Ps2MemoryMap make_memory(const std::vector<std::uint32_t>& words,
                                        std::uint32_t code_base,
@@ -137,7 +147,10 @@ int main() {
 
     {
         auto memory = make_memory(jr_fixture(base), base);
-        R5900BlockDispatcher dispatcher(memory);
+        RecordingCallObserver observer{};
+        R5900BlockDispatcherOptions options{};
+        options.call_observer = &observer;
+        R5900BlockDispatcher dispatcher(memory, options);
         R5900IrExecutionState state{};
         state.gpr[5] = {target_a, 0xfeedfacefeedfaceull};
         const auto result = dispatcher.run(base, state, 1u);
@@ -148,6 +161,8 @@ int main() {
                "entry JR must count terminator plus delay");
         expect(state.gpr[8].low64 == 0x11u,
                "JR delay must execute exactly once");
+        expect(observer.observations.empty(),
+               "JR must not emit a call observation");
     }
 
     {
@@ -174,9 +189,14 @@ int main() {
         words[8] = i_type(0x05u, 0u, 0u, 0u);            // BNE target boundary
         words[9] = 0u;
         auto memory = make_memory(words, base);
-        R5900BlockDispatcher dispatcher(memory);
+        RecordingCallObserver observer{};
+        R5900BlockDispatcherOptions options{};
+        options.call_observer = &observer;
+        R5900BlockDispatcher dispatcher(memory, options);
         R5900IrExecutionState state{};
+        state.gpr[4].low64 = 0x44u;
         state.gpr[5] = {target_a, 0x0123456789abcdefull};
+        state.gpr[7].low64 = 0x77u;
         const auto result = dispatcher.run(base, state, 1u);
         expect(result.next_pc == target_a && result.blocks_executed == 1u &&
                    result.instructions_executed == 2u,
@@ -186,6 +206,15 @@ int main() {
                "dispatcher JALR link/high64 mismatch");
         expect(state.gpr[6].low64 == base + 8u,
                "JALR delay must observe new link");
+        expect(observer.observations.size() == 1u,
+               "JALR must emit exactly one call observation");
+        const auto& call = observer.observations.front();
+        expect(call.call_pc == base && call.target_pc == target_a &&
+                   call.return_pc == base + 8u && call.indirect,
+               "JALR observation metadata mismatch");
+        expect(call.args[0] == 0x44u && call.args[1] == base + 8u &&
+                   call.args[2] == base + 8u && call.args[3] == 0x77u,
+               "JALR observer must use pre-delay target and post-delay arguments");
     }
 
     {
