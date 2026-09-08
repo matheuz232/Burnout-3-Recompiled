@@ -1,14 +1,22 @@
 #include "analysis/ps2_pad_binding_report.h"
 #include "analysis/ps2_pad_runtime_confirmation.h"
 #include "analysis/r5900_analysis_report.h"
+#include "recompiler/ps2_elf.h"
 #include "runtime/ps2_memory_map.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
+
+using Bytes = std::vector<std::uint8_t>;
 
 [[noreturn]] void fail(const char* message) {
     std::cerr << "r5900_analysis_report_tests: FAIL: " << message << '\n';
@@ -19,6 +27,49 @@ void expect(bool condition, const char* message) {
     if (!condition) {
         fail(message);
     }
+}
+
+void put_u16(Bytes& bytes, std::size_t offset, std::uint16_t value) {
+    bytes[offset + 0u] = static_cast<std::uint8_t>(value & 0xffu);
+    bytes[offset + 1u] = static_cast<std::uint8_t>((value >> 8u) & 0xffu);
+}
+
+void put_u32(Bytes& bytes, std::size_t offset, std::uint32_t value) {
+    bytes[offset + 0u] = static_cast<std::uint8_t>(value & 0xffu);
+    bytes[offset + 1u] = static_cast<std::uint8_t>((value >> 8u) & 0xffu);
+    bytes[offset + 2u] = static_cast<std::uint8_t>((value >> 16u) & 0xffu);
+    bytes[offset + 3u] = static_cast<std::uint8_t>((value >> 24u) & 0xffu);
+}
+
+b3r::runtime::Ps2MemoryMap make_pad_runtime_memory() {
+    constexpr std::uint32_t phoff = 52u;
+    constexpr std::uint32_t payload_offset = 0x100u;
+    constexpr std::uint32_t base = 0x00100000u;
+    Bytes bytes(payload_offset + 4u, 0u);
+    bytes[0] = 0x7fu; bytes[1] = 'E'; bytes[2] = 'L'; bytes[3] = 'F';
+    bytes[4] = 1u; bytes[5] = 1u; bytes[6] = 1u;
+    put_u16(bytes, 16u, 2u);
+    put_u16(bytes, 18u, 8u);
+    put_u32(bytes, 20u, 1u);
+    put_u32(bytes, 24u, base);
+    put_u32(bytes, 28u, phoff);
+    put_u16(bytes, 40u, 52u);
+    put_u16(bytes, 42u, 32u);
+    put_u16(bytes, 44u, 1u);
+    put_u32(bytes, phoff + 0u, 1u);
+    put_u32(bytes, phoff + 4u, payload_offset);
+    put_u32(bytes, phoff + 8u, base);
+    put_u32(bytes, phoff + 12u, base);
+    put_u32(bytes, phoff + 16u, 4u);
+    put_u32(bytes, phoff + 20u, 4u);
+    put_u32(bytes, phoff + 24u, 5u);
+    put_u32(bytes, phoff + 28u, 0x1000u);
+
+    auto parsed = b3r::recompiler::parse_ps2_elf(bytes);
+    expect(parsed.ok(), "PAD runtime synthetic ELF must parse");
+    auto built = b3r::runtime::Ps2MemoryMap::from_elf(*parsed.image);
+    expect(built.ok(), "PAD runtime synthetic ELF must map");
+    return std::move(*built.memory);
 }
 
 b3r::analysis::R5900InstructionSite site(std::uint32_t pc,
@@ -141,44 +192,279 @@ void test_pad_binding_report() {
            "PAD diagnostics must render in lexical order");
 }
 
-void test_pad_runtime_confirmation_contract() {
+b3r::analysis::PadBindingDiscoveryResult discovery_for(
+    b3r::analysis::PadBindingFunction function,
+    std::uint32_t pc,
+    b3r::analysis::PadBindingConfidence confidence =
+        b3r::analysis::PadBindingConfidence::Candidate) {
     using namespace b3r::analysis;
-
-    constexpr std::uint32_t pad_init_pc = 0x00128000u;
     PadBindingDiscoveryResult discovery{};
     for (std::size_t i = 0; i < discovery.resolutions.size(); ++i) {
         discovery.resolutions[i].function = static_cast<PadBindingFunction>(i);
     }
-    auto& init = discovery.resolutions[static_cast<std::size_t>(PadBindingFunction::PadInit)];
-    init.confidence = PadBindingConfidence::Candidate;
-    init.guest_pc = pad_init_pc;
-    init.evidence.push_back({PadBindingFunction::PadInit,
-                             PadBindingEvidenceKind::StaticFingerprint,
-                             pad_init_pc,
-                             100u,
-                             "synthetic-padInit"});
+    auto& resolution = discovery.resolutions[static_cast<std::size_t>(function)];
+    resolution.confidence = confidence;
+    resolution.guest_pc = pc;
+    resolution.evidence.push_back({function,
+                                   PadBindingEvidenceKind::StaticFingerprint,
+                                   pc,
+                                   100u,
+                                   "synthetic-runtime"});
+    return discovery;
+}
 
-    const b3r::runtime::Ps2MemoryMap memory{};
-    Ps2PadRuntimeConfirmation confirmation(discovery, memory);
+b3r::recompiler::R5900CallObservation observation_for(
+    std::uint32_t target,
+    std::uint64_t a0 = 0u,
+    std::uint64_t a1 = 0u,
+    std::uint64_t a2 = 0u,
+    std::uint64_t a3 = 0u,
+    std::uint32_t call_pc = 0x00120000u) {
     b3r::recompiler::R5900CallObservation observation{};
-    observation.call_pc = 0x00120000u;
-    observation.target_pc = pad_init_pc;
-    observation.return_pc = 0x00120008u;
-    observation.args[0] = 0u;
-    confirmation.observe(observation);
+    observation.call_pc = call_pc;
+    observation.target_pc = target;
+    observation.return_pc = call_pc + 8u;
+    observation.args = {a0, a1, a2, a3};
+    return observation;
+}
 
-    const auto result = confirmation.result();
-    const auto& resolved = result.functions[
-        static_cast<std::size_t>(PadBindingFunction::PadInit)];
+b3r::analysis::PadRuntimeFunctionResult classify_one(
+    b3r::analysis::PadBindingFunction function,
+    std::uint32_t pc,
+    const b3r::recompiler::R5900CallObservation& observation,
+    const b3r::runtime::Ps2MemoryMap& memory) {
+    using namespace b3r::analysis;
+    const auto discovery = discovery_for(function, pc);
+    Ps2PadRuntimeConfirmation confirmation(discovery, memory);
+    confirmation.observe(observation);
+    return confirmation.result().functions[static_cast<std::size_t>(function)];
+}
+
+void test_pad_runtime_confirmation_contract() {
+    using namespace b3r::analysis;
+
+    constexpr std::uint32_t pc = 0x00128000u;
+    const b3r::runtime::Ps2MemoryMap empty_memory{};
+    const auto resolved = classify_one(
+        PadBindingFunction::PadInit, pc, observation_for(pc, 0u), empty_memory);
     expect(resolved.static_confidence == PadBindingConfidence::Candidate,
            "runtime confirmation must preserve static confidence");
     expect(resolved.runtime_status == PadRuntimeConfirmationStatus::RuntimeConfirmed,
            "compatible evidence-backed padInit call must runtime-confirm");
-    expect(resolved.guest_pc.has_value() && *resolved.guest_pc == pad_init_pc,
+    expect(resolved.guest_pc.has_value() && *resolved.guest_pc == pc,
            "runtime-confirmed padInit must expose the unique compatible PC");
     expect(resolved.calls_observed == 1u && resolved.compatible_calls == 1u &&
                resolved.incompatible_calls == 0u,
            "runtime-confirmed padInit counters mismatch");
+
+    const auto low32_zero = classify_one(
+        PadBindingFunction::PadInit,
+        pc,
+        observation_for(pc, 0x100000000ull),
+        empty_memory);
+    expect(low32_zero.runtime_status == PadRuntimeConfirmationStatus::RuntimeConfirmed,
+           "PAD ABI must interpret arguments through low32 like the HLE service");
+
+    const auto bad_init = classify_one(
+        PadBindingFunction::PadInit, pc, observation_for(pc, 1u), empty_memory);
+    expect(bad_init.runtime_status ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible &&
+               bad_init.incompatible_calls == 1u,
+           "padInit nonzero mode must classify incompatible");
+}
+
+void test_pad_runtime_abi_matrix() {
+    using namespace b3r::analysis;
+    auto memory = make_pad_runtime_memory();
+    constexpr std::uint32_t pc = 0x00129000u;
+    constexpr std::uint32_t valid_area = 0x00120000u;
+    constexpr std::uint32_t valid_read = 0x00121000u;
+    constexpr std::uint32_t crossing_area = 0x01ffff80u;
+    constexpr std::uint32_t crossing_read = 0x01fffff0u;
+
+    auto status = [&](PadBindingFunction function,
+                      std::uint64_t a0,
+                      std::uint64_t a1,
+                      std::uint64_t a2,
+                      std::uint64_t a3 = 0u) {
+        return classify_one(function, pc,
+                            observation_for(pc, a0, a1, a2, a3),
+                            memory).runtime_status;
+    };
+
+    expect(status(PadBindingFunction::PadPortOpen, 0u, 0u, valid_area) ==
+               PadRuntimeConfirmationStatus::RuntimeConfirmed,
+           "valid padPortOpen ABI must confirm");
+    expect(status(PadBindingFunction::PadPortOpen, 1u, 0u, valid_area) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padPortOpen port 1 must reject");
+    expect(status(PadBindingFunction::PadPortOpen, 0u, 1u, valid_area) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padPortOpen slot 1 must reject");
+    expect(status(PadBindingFunction::PadPortOpen, 0u, 0u, 0u) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padPortOpen null area must reject");
+    expect(status(PadBindingFunction::PadPortOpen, 0u, 0u, valid_area + 1u) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padPortOpen misaligned area must reject");
+    expect(status(PadBindingFunction::PadPortOpen, 0u, 0u, crossing_area) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padPortOpen 256-byte range crossing RAM end must reject");
+
+    expect(status(PadBindingFunction::PadGetState, 0u, 0u, 0u) ==
+               PadRuntimeConfirmationStatus::RuntimeConfirmed,
+           "valid padGetState ABI must confirm");
+    expect(status(PadBindingFunction::PadGetState, 1u, 0u, 0u) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padGetState port 1 must reject");
+    expect(status(PadBindingFunction::PadGetState, 0u, 1u, 0u) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padGetState slot 1 must reject");
+
+    expect(status(PadBindingFunction::PadRead, 0u, 0u, valid_read) ==
+               PadRuntimeConfirmationStatus::RuntimeConfirmed,
+           "valid padRead ABI must confirm");
+    expect(status(PadBindingFunction::PadRead, 1u, 0u, valid_read) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padRead port 1 must reject");
+    expect(status(PadBindingFunction::PadRead, 0u, 1u, valid_read) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padRead slot 1 must reject");
+    expect(status(PadBindingFunction::PadRead, 0u, 0u, 0u) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padRead null destination must reject");
+    expect(status(PadBindingFunction::PadRead, 0u, 0u, crossing_read) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padRead 32-byte range crossing RAM end must reject");
+
+    expect(status(PadBindingFunction::PadPortClose, 0u, 0u, 0u) ==
+               PadRuntimeConfirmationStatus::RuntimeConfirmed,
+           "valid padPortClose ABI must confirm");
+    expect(status(PadBindingFunction::PadPortClose, 1u, 0u, 0u) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padPortClose port 1 must reject");
+    expect(status(PadBindingFunction::PadPortClose, 0u, 1u, 0u) ==
+               PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "padPortClose slot 1 must reject");
+
+    expect(status(PadBindingFunction::PadEnd, 0x11u, 0x22u, 0x33u, 0x44u) ==
+               PadRuntimeConfirmationStatus::RuntimeConfirmed,
+           "padEnd must accept arbitrary v0 arguments");
+}
+
+void test_pad_runtime_evidence_aggregation() {
+    using namespace b3r::analysis;
+    auto memory = make_pad_runtime_memory();
+    constexpr std::uint32_t read_pc = 0x0012a000u;
+    constexpr std::uint32_t second_pc = 0x0012a100u;
+    constexpr std::uint32_t valid_read = 0x00121000u;
+
+    auto discovery = discovery_for(PadBindingFunction::PadRead, read_pc);
+    auto& read = discovery.resolutions[static_cast<std::size_t>(PadBindingFunction::PadRead)];
+    read.evidence.push_back({PadBindingFunction::PadRead,
+                             PadBindingEvidenceKind::ElfSymbol,
+                             read_pc,
+                             1000u,
+                             "duplicate-same-pc"});
+    Ps2PadRuntimeConfirmation confirmation(discovery, memory);
+    auto initial = confirmation.result();
+    expect(initial.functions[static_cast<std::size_t>(PadBindingFunction::PadRead)]
+                   .pc_evidence.size() == 1u,
+           "duplicate static evidence for one function/PC must deduplicate");
+
+    confirmation.observe(observation_for(read_pc, 1u, 0u, valid_read,
+                                         0u, 0x00120010u));
+    confirmation.observe(observation_for(read_pc, 0u, 0u, valid_read,
+                                         0u, 0x00120020u));
+    confirmation.observe(observation_for(read_pc, 1u, 0u, valid_read,
+                                         0u, 0x00120030u));
+    confirmation.observe(observation_for(read_pc, 0u, 0u, valid_read,
+                                         0u, 0x00120040u));
+    const auto mixed = confirmation.result();
+    const auto& read_result = mixed.functions[
+        static_cast<std::size_t>(PadBindingFunction::PadRead)];
+    expect(read_result.runtime_status == PadRuntimeConfirmationStatus::RuntimeConfirmed &&
+               read_result.calls_observed == 4u && read_result.compatible_calls == 2u &&
+               read_result.incompatible_calls == 2u,
+           "mixed observations at one compatible PC must remain RuntimeConfirmed");
+    expect(read_result.pc_evidence.front().first_incompatible->call_pc == 0x00120010u &&
+               read_result.pc_evidence.front().first_compatible->call_pc == 0x00120020u,
+           "first compatible/incompatible observations must not be replaced");
+
+    auto ambiguous = discovery_for(PadBindingFunction::PadRead, read_pc);
+    auto& ambiguous_read = ambiguous.resolutions[
+        static_cast<std::size_t>(PadBindingFunction::PadRead)];
+    ambiguous_read.guest_pc.reset();
+    ambiguous_read.evidence.push_back({PadBindingFunction::PadRead,
+                                       PadBindingEvidenceKind::StaticFingerprint,
+                                       second_pc,
+                                       999u,
+                                       "higher-score-runtime-tie"});
+    Ps2PadRuntimeConfirmation ambiguous_confirmation(ambiguous, memory);
+    ambiguous_confirmation.observe(observation_for(read_pc, 0u, 0u, valid_read));
+    auto one_compatible = observation_for(second_pc, 1u, 0u, valid_read);
+    ambiguous_confirmation.observe(one_compatible);
+    auto unique = ambiguous_confirmation.result();
+    const auto& unique_read = unique.functions[
+        static_cast<std::size_t>(PadBindingFunction::PadRead)];
+    expect(unique_read.runtime_status == PadRuntimeConfirmationStatus::RuntimeConfirmed &&
+               unique_read.guest_pc == read_pc,
+           "one compatible PC plus incompatible alternate must resolve uniquely");
+
+    ambiguous_confirmation.observe(observation_for(second_pc, 0u, 0u, valid_read));
+    const auto tied = ambiguous_confirmation.result();
+    const auto& tied_read = tied.functions[
+        static_cast<std::size_t>(PadBindingFunction::PadRead)];
+    expect(tied_read.runtime_status == PadRuntimeConfirmationStatus::RuntimeAmbiguous &&
+               !tied_read.guest_pc.has_value(),
+           "two compatible PCs must remain RuntimeAmbiguous regardless of static score");
+
+    auto trusted = discovery_for(PadBindingFunction::PadInit,
+                                 0x0012b000u,
+                                 PadBindingConfidence::Trusted);
+    Ps2PadRuntimeConfirmation trusted_confirmation(trusted, memory);
+    const auto trusted_result = trusted_confirmation.result().functions[
+        static_cast<std::size_t>(PadBindingFunction::PadInit)];
+    expect(trusted_result.static_confidence == PadBindingConfidence::Trusted &&
+               trusted_result.runtime_status == PadRuntimeConfirmationStatus::Unobserved,
+           "trusted static evidence may remain runtime-unobserved");
+
+    auto shared{};
+    shared = discovery_for(PadBindingFunction::PadInit, 0x0012c000u);
+    auto& end = shared.resolutions[static_cast<std::size_t>(PadBindingFunction::PadEnd)];
+    end.function = PadBindingFunction::PadEnd;
+    end.confidence = PadBindingConfidence::Candidate;
+    end.guest_pc = 0x0012c000u;
+    end.evidence.push_back({PadBindingFunction::PadEnd,
+                            PadBindingEvidenceKind::StaticFingerprint,
+                            0x0012c000u,
+                            100u,
+                            "shared-pc"});
+    Ps2PadRuntimeConfirmation shared_confirmation(shared, memory);
+    shared_confirmation.observe(observation_for(0x0012c000u, 1u));
+    const auto shared_result = shared_confirmation.result();
+    expect(shared_result.functions[static_cast<std::size_t>(PadBindingFunction::PadInit)]
+                   .runtime_status == PadRuntimeConfirmationStatus::ObservedIncompatible,
+           "same numeric PC must classify padInit independently");
+    expect(shared_result.functions[static_cast<std::size_t>(PadBindingFunction::PadEnd)]
+                   .runtime_status == PadRuntimeConfirmationStatus::RuntimeConfirmed,
+           "same numeric PC must classify padEnd independently");
+
+    const auto unrelated_discovery = discovery_for(PadBindingFunction::PadRead, read_pc);
+    Ps2PadRuntimeConfirmation unrelated(unrelated_discovery, memory);
+    unrelated.observe(observation_for(0x0012ffffu, 0u, 0u, valid_read));
+    expect(unrelated.result().functions[static_cast<std::size_t>(PadBindingFunction::PadRead)]
+                   .runtime_status == PadRuntimeConfirmationStatus::Unobserved,
+           "unrelated call target must be ignored completely");
+
+    std::size_t saturated = std::numeric_limits<std::size_t>::max();
+    ps2_pad_runtime_confirmation_detail::saturating_increment(saturated);
+    expect(saturated == std::numeric_limits<std::size_t>::max(),
+           "saturating increment must not wrap");
+    expect(ps2_pad_runtime_confirmation_detail::saturating_add(
+               std::numeric_limits<std::size_t>::max() - 1u, 2u) ==
+               std::numeric_limits<std::size_t>::max(),
+           "saturating add must clamp at size_t max");
 }
 
 } // namespace
@@ -236,6 +522,8 @@ int main() {
 
     test_pad_binding_report();
     test_pad_runtime_confirmation_contract();
+    test_pad_runtime_abi_matrix();
+    test_pad_runtime_evidence_aggregation();
 
     std::cout << "r5900_analysis_report_tests: PASS\n";
     return EXIT_SUCCESS;
