@@ -1,4 +1,5 @@
 #include "analysis/ps2_pad_activation.h"
+#include "analysis/ps2_pad_activation_report.h"
 #include "analysis/ps2_pad_runtime_report.h"
 
 #include <algorithm>
@@ -401,6 +402,93 @@ void test_pad_activation_is_pure_and_deterministic() {
     }
 }
 
+void test_pad_activation_report_canonical_ready() {
+    using namespace b3r::analysis;
+    const auto decision = make_ps2_pad_activation_decision(
+        activation_discovery(kActivationPcs), activation_runtime(kActivationPcs));
+    const std::string expected =
+        "PAD_ACTIVATION_V0 readiness=ready eligible=6 required=6\n"
+        "PAD_ACTIVATION function=padInit static_confidence=trusted runtime_status=runtime_confirmed eligibility=eligible pc=0x00101000 reason=eligible_runtime_confirmed\n"
+        "PAD_ACTIVATION function=padPortOpen static_confidence=candidate runtime_status=runtime_confirmed eligibility=eligible pc=0x00102000 reason=eligible_runtime_confirmed\n"
+        "PAD_ACTIVATION function=padGetState static_confidence=unresolved runtime_status=runtime_confirmed eligibility=eligible pc=0x00103000 reason=eligible_runtime_confirmed\n"
+        "PAD_ACTIVATION function=padRead static_confidence=candidate runtime_status=runtime_confirmed eligibility=eligible pc=0x00104000 reason=eligible_runtime_confirmed\n"
+        "PAD_ACTIVATION function=padPortClose static_confidence=trusted runtime_status=runtime_confirmed eligibility=eligible pc=0x00105000 reason=eligible_runtime_confirmed\n"
+        "PAD_ACTIVATION function=padEnd static_confidence=trusted runtime_status=runtime_confirmed eligibility=eligible pc=0x00106000 reason=eligible_runtime_confirmed\n"
+        "PAD_ACTIVATION_BINDINGS padInit=0x00101000 padPortOpen=0x00102000 padGetState=0x00103000 padRead=0x00104000 padPortClose=0x00105000 padEnd=0x00106000\n"
+        "PAD_ACTIVATION_END\n";
+    const auto formatted = format_ps2_pad_activation_decision(decision);
+    expect(formatted == expected,
+           "Ready activation report must match canonical byte format");
+    expect(format_ps2_pad_activation_decision(decision) == formatted,
+           "activation report repeated rendering must be byte-identical");
+}
+
+void test_pad_activation_report_hardening() {
+    using namespace b3r::analysis;
+    auto decision = make_ps2_pad_activation_decision(
+        activation_discovery(kActivationPcs), activation_runtime(kActivationPcs));
+
+    auto rejected_with_pc = decision;
+    auto& read = rejected_with_pc.functions[activation_index(PadBindingFunction::PadRead)];
+    read.eligibility = PadActivationEligibility::Rejected;
+    read.reason = PadActivationReason::PcNotInDiscoveryEvidence;
+    read.guest_pc = 0x00abcde0u;
+    rejected_with_pc.readiness = PadActivationReadiness::NotReady;
+    rejected_with_pc.diagnostics = {"z diagnostic", "a diagnostic", "a diagnostic"};
+    const auto rejected_text = format_ps2_pad_activation_decision(rejected_with_pc);
+    expect(rejected_text.find("function=padRead static_confidence=candidate runtime_status=runtime_confirmed eligibility=rejected pc=none reason=pc_not_in_discovery_evidence") != std::string::npos,
+           "rejected activation function must always render pc=none");
+    expect(rejected_text.find("PAD_ACTIVATION_BINDINGS") == std::string::npos,
+           "NotReady decision must omit bindings even when copied bindings are present");
+    expect(rejected_text.find("PAD_ACTIVATION_DIAGNOSTIC a diagnostic") <
+               rejected_text.find("PAD_ACTIVATION_DIAGNOSTIC z diagnostic") &&
+               rejected_text.find("PAD_ACTIVATION_DIAGNOSTIC a diagnostic") ==
+                   rejected_text.rfind("PAD_ACTIVATION_DIAGNOSTIC a diagnostic"),
+           "formatter must sort and deduplicate diagnostics defensively");
+
+    auto ready_without_bindings = decision;
+    ready_without_bindings.bindings.reset();
+    const auto no_bindings_text = format_ps2_pad_activation_decision(ready_without_bindings);
+    expect(no_bindings_text.find("PAD_ACTIVATION_BINDINGS") == std::string::npos,
+           "Ready decision without bindings must not fabricate binding fields");
+
+    auto input_mismatch = decision;
+    auto& init = input_mismatch.functions[activation_index(PadBindingFunction::PadInit)];
+    init.eligibility = PadActivationEligibility::Rejected;
+    init.reason = PadActivationReason::InputMismatch;
+    init.guest_pc = 0x00101000u;
+    input_mismatch.readiness = PadActivationReadiness::NotReady;
+    input_mismatch.bindings.reset();
+    const auto mismatch_text = format_ps2_pad_activation_decision(input_mismatch);
+    expect(mismatch_text.find("function=padInit static_confidence=trusted runtime_status=runtime_confirmed eligibility=rejected pc=none reason=input_mismatch") != std::string::npos,
+           "InputMismatch reason must render canonical snake-case name");
+
+    std::size_t function_line_count = 0u;
+    std::size_t cursor = 0u;
+    const std::string marker = "PAD_ACTIVATION function=";
+    while ((cursor = rejected_text.find(marker, cursor)) != std::string::npos) {
+        ++function_line_count;
+        cursor += marker.size();
+    }
+    expect(function_line_count == 6u,
+           "activation formatter must emit exactly six canonical function lines");
+    expect(rejected_text.find("function=padInit") < rejected_text.find("function=padPortOpen") &&
+               rejected_text.find("function=padPortOpen") < rejected_text.find("function=padGetState") &&
+               rejected_text.find("function=padGetState") < rejected_text.find("function=padRead") &&
+               rejected_text.find("function=padRead") < rejected_text.find("function=padPortClose") &&
+               rejected_text.find("function=padPortClose") < rejected_text.find("function=padEnd"),
+           "activation formatter must preserve canonical function order");
+    expect(rejected_text.find("score=") == std::string::npos &&
+               rejected_text.find("args=") == std::string::npos &&
+               rejected_text.find("bytes=") == std::string::npos &&
+               rejected_text.find("ram=") == std::string::npos &&
+               rejected_text.find("code=") == std::string::npos &&
+               rejected_text.find("hash=") == std::string::npos,
+           "activation report must exclude forbidden diagnostic payloads");
+    expect(format_ps2_pad_activation_decision(rejected_with_pc) == rejected_text,
+           "malformed copied decision must still render byte-deterministically");
+}
+
 } // namespace
 
 int main() {
@@ -415,6 +503,8 @@ int main() {
     test_pad_activation_duplicate_pc_blocks_global_readiness();
     test_pad_activation_incomplete_set_never_materializes_partial_bindings();
     test_pad_activation_is_pure_and_deterministic();
+    test_pad_activation_report_canonical_ready();
+    test_pad_activation_report_hardening();
     std::cout << "ps2_pad_runtime_report_tests: PASS\n";
     return EXIT_SUCCESS;
 }
