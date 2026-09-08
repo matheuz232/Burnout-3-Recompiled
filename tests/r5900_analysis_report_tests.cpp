@@ -1,5 +1,7 @@
 #include "analysis/ps2_pad_binding_report.h"
+#include "analysis/ps2_pad_runtime_confirmation.h"
 #include "analysis/r5900_analysis_report.h"
+#include "runtime/ps2_memory_map.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -139,6 +141,46 @@ void test_pad_binding_report() {
            "PAD diagnostics must render in lexical order");
 }
 
+void test_pad_runtime_confirmation_contract() {
+    using namespace b3r::analysis;
+
+    constexpr std::uint32_t pad_init_pc = 0x00128000u;
+    PadBindingDiscoveryResult discovery{};
+    for (std::size_t i = 0; i < discovery.resolutions.size(); ++i) {
+        discovery.resolutions[i].function = static_cast<PadBindingFunction>(i);
+    }
+    auto& init = discovery.resolutions[static_cast<std::size_t>(PadBindingFunction::PadInit)];
+    init.confidence = PadBindingConfidence::Candidate;
+    init.guest_pc = pad_init_pc;
+    init.evidence.push_back({PadBindingFunction::PadInit,
+                             PadBindingEvidenceKind::StaticFingerprint,
+                             pad_init_pc,
+                             100u,
+                             "synthetic-padInit"});
+
+    const b3r::runtime::Ps2MemoryMap memory{};
+    Ps2PadRuntimeConfirmation confirmation(discovery, memory);
+    b3r::recompiler::R5900CallObservation observation{};
+    observation.call_pc = 0x00120000u;
+    observation.target_pc = pad_init_pc;
+    observation.return_pc = 0x00120008u;
+    observation.args[0] = 0u;
+    confirmation.observe(observation);
+
+    const auto result = confirmation.result();
+    const auto& resolved = result.functions[
+        static_cast<std::size_t>(PadBindingFunction::PadInit)];
+    expect(resolved.static_confidence == PadBindingConfidence::Candidate,
+           "runtime confirmation must preserve static confidence");
+    expect(resolved.runtime_status == PadRuntimeConfirmationStatus::RuntimeConfirmed,
+           "compatible evidence-backed padInit call must runtime-confirm");
+    expect(resolved.guest_pc.has_value() && *resolved.guest_pc == pad_init_pc,
+           "runtime-confirmed padInit must expose the unique compatible PC");
+    expect(resolved.calls_observed == 1u && resolved.compatible_calls == 1u &&
+               resolved.incompatible_calls == 0u,
+           "runtime-confirmed padInit counters mismatch");
+}
+
 } // namespace
 
 int main() {
@@ -193,6 +235,7 @@ int main() {
            "direct-call target aggregation must remain deterministic regardless of graph container order");
 
     test_pad_binding_report();
+    test_pad_runtime_confirmation_contract();
 
     std::cout << "r5900_analysis_report_tests: PASS\n";
     return EXIT_SUCCESS;
