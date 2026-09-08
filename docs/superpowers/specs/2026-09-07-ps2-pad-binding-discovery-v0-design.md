@@ -108,17 +108,22 @@ struct PadBindingDiscoveryResult {
 
 Exact type names may be adjusted for repository consistency; semantics are fixed.
 
+`PadBindingResolution::guest_pc` means one uniquely selected PC. It is empty whenever evidence is absent or ambiguous. Individual candidate PCs remain available in `evidence`.
+
 ### 4.1 Confidence rules
 
 For v0:
 
-- exact accepted ELF symbol -> `Trusted`;
-- static fingerprint only -> `Candidate`;
-- no evidence -> `Unresolved`;
-- multiple different exact symbol PCs for the same logical PAD function -> `Unresolved` with ambiguity diagnostic;
-- exact symbol plus fingerprint at the same PC -> `Trusted` with both evidence records;
-- exact symbol plus conflicting fingerprint elsewhere -> exact symbol remains `Trusted`, but the conflict is reported;
-- fingerprint collisions remain `Candidate`; they are never promoted to `Trusted` in v0.
+- one unique exact accepted ELF symbol PC -> `Trusted`, with that `guest_pc` selected;
+- one unique static-fingerprint PC and no exact symbol -> `Candidate`, with that `guest_pc` selected;
+- no evidence -> `Unresolved`, `guest_pc = nullopt`;
+- multiple different exact symbol PCs for the same logical PAD function -> `Unresolved`, `guest_pc = nullopt`, with ambiguity diagnostic;
+- multiple different static-fingerprint PCs and no exact symbol -> `Candidate`, `guest_pc = nullopt`, with ambiguity diagnostic;
+- exact symbol plus fingerprint at the same PC -> `Trusted`, selecting the symbol PC and retaining both evidence records;
+- exact symbol plus conflicting fingerprint elsewhere -> exact symbol remains `Trusted`; the symbol PC is selected and the conflict is reported;
+- fingerprint collisions are never promoted to `Trusted` in v0.
+
+`ElfSymbol` trust is rule-based rather than score-based; its evidence score is always `0`. `StaticFingerprint` uses the integer score defined below.
 
 Runtime trace confirmation is intentionally not part of this enum in v0; it belongs to `PAD Runtime Confirmation v0`.
 
@@ -152,6 +157,8 @@ enum class Elf32MetadataStatus {
     Malformed,
 };
 ```
+
+V0 interprets `e_shoff == 0` or `e_shnum == 0` as `Absent`. ELF extended section numbering / `SHN_XINDEX` is not required in v0; encountering metadata that requires unsupported extended numbering produces `Malformed` plus a deterministic diagnostic rather than guessing.
 
 `Absent` is normal for stripped retail ELFs. `Malformed` produces a discovery diagnostic but does not retroactively change the already-established loader result.
 
@@ -239,7 +246,7 @@ Use an integer score for diagnostics, not probability.
 100+    emit Candidate evidence
 ```
 
-The exact feature weights are fixed in implementation tests and documented in the implementation plan. Score thresholds must not be tuned against proprietary Burnout bytes during CI.
+The implementation plan must assign explicit integer weights to every v0 fingerprint feature before implementation begins. Those weights are then fixed by synthetic tests. They must be derived from public PS2SDK semantics, not tuned against proprietary Burnout bytes.
 
 A function cannot become `Trusted` solely from its static score, regardless of score magnitude.
 
@@ -281,20 +288,26 @@ When selected, append a stable machine-readable section to the normal analysis r
 
 ```text
 PAD_BINDINGS_V0 1
-PAD_BINDING function=padInit confidence=trusted pc=0x00123456 evidence=elf_symbol score=1000
-PAD_BINDING function=padPortOpen confidence=candidate pc=0x00124500 evidence=static_fingerprint score=160
-PAD_BINDING function=padGetState confidence=unresolved pc=none evidence=none score=0
-...
+PAD_BINDING function=padInit confidence=trusted pc=0x00123456
+PAD_BINDING_EVIDENCE function=padInit kind=elf_symbol pc=0x00123456 score=0
+PAD_BINDING function=padPortOpen confidence=candidate pc=0x00124500
+PAD_BINDING_EVIDENCE function=padPortOpen kind=static_fingerprint pc=0x00124500 score=160
+PAD_BINDING function=padRead confidence=candidate pc=none
+PAD_BINDING_EVIDENCE function=padRead kind=static_fingerprint pc=0x00125000 score=130
+PAD_BINDING_EVIDENCE function=padRead kind=static_fingerprint pc=0x00126000 score=125
+PAD_BINDING_DIAGNOSTIC function=padRead code=ambiguous_static_candidates
+PAD_BINDING function=padGetState confidence=unresolved pc=none
 PAD_BINDINGS_END
 ```
 
 Formatting rules:
 
 - canonical function order is fixed;
+- each `PAD_BINDING` line is followed immediately by its evidence lines, sorted by evidence kind then guest PC;
 - guest PCs are lowercase 8-digit hexadecimal with `0x` prefix;
-- unresolved PC is literal `none`;
-- diagnostics are separate `PAD_BINDING_DIAGNOSTIC` lines;
-- no guest instruction bytes or memory dumps are emitted;
+- missing/ambiguous selected PC is literal `none`;
+- diagnostic codes are stable lowercase snake_case tokens;
+- diagnostics must not contain guest instruction bytes or memory dumps;
 - repeated runs on identical input/options produce byte-identical PAD-binding sections.
 
 The existing report remains unchanged when `--pad-bindings` is absent.
@@ -365,6 +378,7 @@ Synthetic ELF fixtures cover:
 - invalid section-name index;
 - invalid linked string table;
 - invalid symbol entry size;
+- unsupported extended section numbering;
 - multiplication/addition overflow guards;
 - duplicate symbols;
 - function and NOTYPE accepted only under the exact-name rules.
@@ -387,8 +401,8 @@ Synthetic executable segments cover all six PAD names independently:
 Use synthetic R5900 instruction/control-flow fixtures built from public constants only:
 
 - below-threshold feature set is ignored;
-- threshold candidate emitted;
-- collisions remain candidate/ambiguous;
+- one threshold candidate is selected as candidate;
+- multiple candidate PCs produce `Candidate` with `guest_pc = nullopt`;
 - a high static score never becomes trusted;
 - no proprietary function bytes appear in fixtures.
 
@@ -398,6 +412,7 @@ Use synthetic R5900 instruction/control-flow fixtures built from public constant
 - fingerprint alone -> candidate;
 - symbol + matching fingerprint -> trusted;
 - symbol + conflicting fingerprint -> trusted symbol plus diagnostic;
+- ambiguous static candidates serialize with `pc=none` plus all evidence lines;
 - deterministic canonical ordering;
 - byte-identical repeated output;
 - analyzer output unchanged without `--pad-bindings`.
