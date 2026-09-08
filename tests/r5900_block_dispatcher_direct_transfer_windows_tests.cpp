@@ -71,6 +71,26 @@ public:
     std::vector<b3r::recompiler::R5900CallObservation> observations{};
 };
 
+class TargetGuestCallService final : public b3r::recompiler::IR5900GuestCallService {
+public:
+    explicit TargetGuestCallService(std::uint32_t target) noexcept : target_(target) {}
+
+    b3r::recompiler::R5900GuestCallResult try_handle(
+        const b3r::recompiler::R5900GuestCallRequest& request,
+        b3r::recompiler::R5900IrExecutionState& state,
+        b3r::runtime::Ps2MemoryMap& memory) override {
+        (void)state;
+        (void)memory;
+        if (request.guest_pc == target_) {
+            return {b3r::recompiler::R5900GuestCallStatus::Handled, {}};
+        }
+        return {b3r::recompiler::R5900GuestCallStatus::NotHandled, {}};
+    }
+
+private:
+    std::uint32_t target_{};
+};
+
 b3r::runtime::Ps2MemoryMap make_memory(const std::vector<std::uint32_t>& words,
                                        std::uint32_t code_base,
                                        std::uint32_t data_base = 0x00220000u) {
@@ -169,6 +189,80 @@ int main() {
     }
 
     {
+        const std::vector<std::uint32_t> words{
+            j_type(0x03u, target),
+            i_type(0x0du, 0u, 7u, 0x66u),
+            0u, 0u, 0u, 0u, 0u, 0u,
+            bgtz_boundary, 0u,
+        };
+        auto memory = make_memory(words, base);
+        RecordingCallObserver observer{};
+        R5900BlockDispatcherOptions options{};
+        options.call_observer = &observer;
+        R5900BlockDispatcher dispatcher(memory, options);
+
+        R5900IrExecutionState first_state{};
+        first_state.gpr[4].low64 = 0x10u;
+        const auto first = dispatcher.run(base, first_state, 1u);
+        expect(first.cache_misses == 1u && first.fast_cache_hits == 0u,
+               "first observed JAL run must compile once");
+        expect(observer.observations.size() == 1u,
+               "cold JAL must emit one event");
+
+        R5900IrExecutionState second_state{};
+        second_state.gpr[4].low64 = 0x20u;
+        const auto second = dispatcher.run(base, second_state, 1u);
+        expect(second.cache_hits == 1u && second.fast_cache_hits == 1u,
+               "second observed JAL run must use fast cache");
+        expect(observer.observations.size() == 2u,
+               "fast-cache JAL must emit exactly one additional event");
+        expect(observer.observations.back().args[0] == 0x20u &&
+                   observer.observations.back().args[3] == 0x66u,
+               "fast-cache observer must capture current post-delay arguments");
+
+        auto baseline_memory = make_memory(words, base);
+        R5900BlockDispatcher baseline_dispatcher(baseline_memory);
+        R5900IrExecutionState baseline_state{};
+        baseline_state.gpr[4].low64 = 0x10u;
+        const auto baseline = baseline_dispatcher.run(base, baseline_state, 1u);
+        expect(first.blocks_executed == baseline.blocks_executed &&
+                   first.instructions_executed == baseline.instructions_executed &&
+                   first.cache_hits == baseline.cache_hits &&
+                   first.fast_cache_hits == baseline.fast_cache_hits &&
+                   first.cache_misses == baseline.cache_misses &&
+                   first.recompilations == baseline.recompilations &&
+                   first.syscalls_handled == baseline.syscalls_handled &&
+                   first.guest_calls_handled == baseline.guest_calls_handled,
+               "observer must not alter dispatcher counters");
+    }
+
+    {
+        auto memory = make_memory({
+            j_type(0x03u, target),
+            0u,
+            bgtz_boundary,
+            0u, 0u, 0u, 0u, 0u,
+            0u, 0u,
+        }, base);
+        RecordingCallObserver observer{};
+        TargetGuestCallService guest_service(target);
+        R5900BlockDispatcherOptions options{};
+        options.guest_calls = &guest_service;
+        options.call_observer = &observer;
+        R5900BlockDispatcher dispatcher(memory, options);
+        R5900IrExecutionState state{};
+        const auto result = dispatcher.run(base, state, 2u);
+        expect(result.reason == R5900DispatchStopReason::ControlFlow &&
+                   result.next_pc == base + 8u,
+               "handled HLE target must resume at JAL return and stop on boundary");
+        expect(result.guest_calls_handled == 1u,
+               "HLE target must be handled once");
+        expect(observer.observations.size() == 1u &&
+                   observer.observations.front().target_pc == target,
+               "JAL caller must be observed once and HLE intercept must add no event");
+    }
+
+    {
         auto memory = make_memory({
             j_type(0x02u, target),
             i_type(0x09u, 0u, 7u, 5u),
@@ -176,7 +270,10 @@ int main() {
             0u, 0u, 0u, 0u, 0u,
             bgtz_boundary, 0u,
         }, base);
-        R5900BlockDispatcher dispatcher(memory);
+        RecordingCallObserver observer{};
+        R5900BlockDispatcherOptions options{};
+        options.call_observer = &observer;
+        R5900BlockDispatcher dispatcher(memory, options);
         R5900IrExecutionState state{};
         state.gpr[31] = {0x1111222233334444ull, 0xaaaabbbbccccddddull};
         const auto result = dispatcher.run(base, state, 2u);
@@ -190,6 +287,8 @@ int main() {
         expect(state.gpr[31].low64 == 0x1111222233334444ull &&
                    state.gpr[31].high64 == 0xaaaabbbbccccddddull,
                "J must preserve r31");
+        expect(observer.observations.empty(),
+               "J must not emit a call observation");
     }
 
     {
