@@ -221,6 +221,28 @@ std::size_t R5900BlockDispatcher::cache_size() const noexcept {
     return cache_.size();
 }
 
+void R5900BlockDispatcher::observe_completed_call(
+    const std::optional<CachedCallMetadata>& metadata,
+    std::uint32_t target_pc,
+    const R5900IrExecutionState& state) const noexcept {
+    if (options_.call_observer == nullptr || !metadata.has_value()) {
+        return;
+    }
+
+    R5900CallObservation observation{};
+    observation.call_pc = metadata->call_pc;
+    observation.target_pc = target_pc;
+    observation.return_pc = metadata->return_pc;
+    observation.indirect = metadata->indirect;
+    observation.args = {
+        state.gpr[4].low64,
+        state.gpr[5].low64,
+        state.gpr[6].low64,
+        state.gpr[7].low64,
+    };
+    options_.call_observer->observe(observation);
+}
+
 R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                                               R5900IrExecutionState& state,
                                               std::size_t max_blocks) {
@@ -299,6 +321,11 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                     "x64 execute", current_pc, native_execution.message);
                 return result;
             }
+
+            observe_completed_call(
+                fast_cached->second.call_metadata,
+                native_execution.next_pc,
+                state);
 
             ++result.blocks_executed;
             result.instructions_executed += fast_cached->second.guest_instruction_count;
@@ -502,11 +529,13 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
 
         R5900X64ExecutionResult native_execution{};
         std::size_t executed_instruction_count = guest_words.size();
+        const CachedBlock* executed_cached_block = nullptr;
 
         if (exact_cache_hit) {
             ++result.cache_hits;
             native_execution = cached->second.native_block.execute(execution_context);
             executed_instruction_count = cached->second.guest_instruction_count;
+            executed_cached_block = &cached->second;
         } else {
             const bool cache_miss = cached == cache_.end();
 
@@ -656,6 +685,19 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
             replacement.guest_words = guest_words;
             replacement.guest_instruction_count = guest_words.size();
             replacement.fast_replay_eligible = has_supported_transfer;
+            if (transfer_site != nullptr && has_supported_jal) {
+                replacement.call_metadata = CachedCallMetadata{
+                    transfer_site->pc,
+                    transfer_site->pc + 8u,
+                    false,
+                };
+            } else if (transfer_site != nullptr && has_supported_jalr) {
+                replacement.call_metadata = CachedCallMetadata{
+                    transfer_site->pc,
+                    transfer_site->pc + 8u,
+                    true,
+                };
+            }
             replacement.native_block = std::move(*compiled.block);
 
             if (cache_miss) {
@@ -664,11 +706,13 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
                 (void)did_insert;
                 native_execution = inserted->second.native_block.execute(execution_context);
                 executed_instruction_count = inserted->second.guest_instruction_count;
+                executed_cached_block = &inserted->second;
             } else {
                 ++result.recompilations;
                 cached->second = std::move(replacement);
                 native_execution = cached->second.native_block.execute(execution_context);
                 executed_instruction_count = cached->second.guest_instruction_count;
+                executed_cached_block = &cached->second;
             }
         }
 
@@ -700,6 +744,12 @@ R5900DispatchResult R5900BlockDispatcher::run(std::uint32_t start_pc,
         }
 
         const auto native_next_pc = native_execution.next_pc;
+        if (executed_cached_block != nullptr) {
+            observe_completed_call(
+                executed_cached_block->call_metadata,
+                native_next_pc,
+                state);
+        }
         ++result.blocks_executed;
         result.instructions_executed += executed_instruction_count;
         current_pc = native_next_pc;
