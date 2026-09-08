@@ -88,10 +88,30 @@ void test_complete_canonical_report() {
            "report must exclude non-runtime confirmation details");
 }
 
+void test_nonconfirmed_status_never_exposes_pc() {
+    using namespace b3r::analysis;
+
+    PadRuntimeConfirmationResult result{};
+    for (std::size_t index = 0; index < result.functions.size(); ++index) {
+        result.functions[index].function = static_cast<PadBindingFunction>(index);
+    }
+
+    auto& read = result.functions[static_cast<std::size_t>(PadBindingFunction::PadRead)];
+    read.runtime_status = PadRuntimeConfirmationStatus::RuntimeAmbiguous;
+    read.guest_pc = 0x0012aaaau;
+
+    const auto formatted = format_ps2_pad_runtime_confirmation(result);
+    expect(formatted.find(
+               "PAD_RUNTIME function=padRead static_confidence=unresolved runtime_status=runtime_ambiguous pc=none") !=
+               std::string::npos,
+           "non-confirmed runtime statuses must always render pc=none");
+}
+
 } // namespace
 
 int main() {
     test_complete_canonical_report();
+    test_nonconfirmed_status_never_exposes_pc();
     std::cout << "ps2_pad_runtime_report_tests: PASS\n";
     return EXIT_SUCCESS;
 }
