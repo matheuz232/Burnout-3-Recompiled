@@ -335,6 +335,12 @@ if(B3R_BUILD_TESTS)
   target_link_libraries(r5900_analysis_report_tests PRIVATE b3r_analysis)
   add_test(NAME r5900_analysis_report_tests COMMAND r5900_analysis_report_tests)
 
+  add_executable(ps2_pad_runtime_report_tests
+    tests/ps2_pad_runtime_report_tests.cpp
+  )
+  target_link_libraries(ps2_pad_runtime_report_tests PRIVATE b3r_analysis)
+  add_test(NAME ps2_pad_runtime_report_tests COMMAND ps2_pad_runtime_report_tests)
+
   add_executable(ps2_elf_analysis_tests tests/ps2_elf_analysis_tests.cpp)
   target_link_libraries(ps2_elf_analysis_tests PRIVATE b3r_analysis)
   add_test(NAME ps2_elf_analysis_tests COMMAND ps2_elf_analysis_tests)
