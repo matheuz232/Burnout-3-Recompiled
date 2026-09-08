@@ -1,6 +1,10 @@
+#include "analysis/ps2_pad_activation.h"
+#include "input/ps2_pad_report.h"
 #include "recompiler/windows/r5900_block_dispatcher.h"
 #include "r5900_createsema_test_support.h"
+#include "runtime/ps2_pad_hle_service.h"
 
+#include <array>
 #include <fstream>
 #include <iomanip>
 #include <iterator>
@@ -20,6 +24,7 @@ const char* stop_reason_name(R5900DispatchStopReason reason) noexcept {
     case R5900DispatchStopReason::Trap: return "Trap";
     case R5900DispatchStopReason::UnsupportedSyscall: return "UnsupportedSyscall";
     case R5900DispatchStopReason::HostSyscallFailure: return "HostSyscallFailure";
+    case R5900DispatchStopReason::GuestCallFailure: return "GuestCallFailure";
     case R5900DispatchStopReason::InvalidBlockBudget: return "InvalidBlockBudget";
     case R5900DispatchStopReason::AnalysisFailure: return "AnalysisFailure";
     case R5900DispatchStopReason::LoweringFailure: return "LoweringFailure";
@@ -195,5 +200,179 @@ int main(int argc, char** argv) {
     const auto trap = no_service.run(wrapper, bad, 8u);
     expect(trap.reason == R5900DispatchStopReason::Trap && trap.next_pc == wrapper + 4u,
            "null service must preserve the existing trap boundary");
+
+    {
+        using namespace b3r::analysis;
+        constexpr std::array<std::uint32_t, 6> pad_pcs{
+            0x00100100u,
+            0x00100120u,
+            0x00100140u,
+            0x00100160u,
+            0x00100180u,
+            0x001001a0u,
+        };
+        constexpr std::uint32_t unknown_pc = 0x001001c0u;
+        constexpr std::uint32_t return_pc = 0x001001e0u;
+        constexpr std::uint32_t pad_area = 0x00120000u;
+        constexpr std::uint32_t read_destination = 0x00121000u;
+
+        auto pad_memory = make_memory({
+            {pad_pcs[0], {0x70000000u}},
+            {pad_pcs[1], {0x70000000u}},
+            {pad_pcs[2], {0x70000000u}},
+            {pad_pcs[3], {0x70000000u}},
+            {pad_pcs[4], {0x70000000u}},
+            {pad_pcs[5], {0x70000000u}},
+            {return_pc, {0x70000000u}},
+        });
+
+        PadBindingDiscoveryResult discovery{};
+        PadRuntimeConfirmationResult runtime_result{};
+        for (std::size_t index = 0; index < pad_pcs.size(); ++index) {
+            const auto function = static_cast<PadBindingFunction>(index);
+            const auto confidence =
+                index == 0u || index == 4u || index == 5u
+                    ? PadBindingConfidence::Trusted
+                    : (index == 2u ? PadBindingConfidence::Unresolved
+                                   : PadBindingConfidence::Candidate);
+            auto& resolution = discovery.resolutions[index];
+            resolution.function = function;
+            resolution.confidence = confidence;
+            resolution.evidence.push_back({
+                function,
+                index == 0u ? PadBindingEvidenceKind::ElfSymbol
+                            : PadBindingEvidenceKind::StaticFingerprint,
+                pad_pcs[index],
+                index == 0u ? 1000u : 100u,
+                "synthetic-runtime-activation",
+            });
+
+            auto& runtime_function = runtime_result.functions[index];
+            runtime_function.function = function;
+            runtime_function.static_confidence = confidence;
+            runtime_function.runtime_status = PadRuntimeConfirmationStatus::RuntimeConfirmed;
+            runtime_function.guest_pc = pad_pcs[index];
+            runtime_function.calls_observed = 1u;
+            runtime_function.compatible_calls = 1u;
+        }
+
+        const auto decision =
+            make_ps2_pad_activation_decision(discovery, runtime_result);
+        expect(decision.readiness == PadActivationReadiness::Ready &&
+                   decision.bindings.has_value(),
+               "six synthetic evidence-backed confirmations must activate atomically");
+        expect(decision.bindings->pad_init == pad_pcs[0] &&
+                   decision.bindings->pad_port_open == pad_pcs[1] &&
+                   decision.bindings->pad_get_state == pad_pcs[2] &&
+                   decision.bindings->pad_read == pad_pcs[3] &&
+                   decision.bindings->pad_port_close == pad_pcs[4] &&
+                   decision.bindings->pad_end == pad_pcs[5],
+               "activation decision must materialize the exact six synthetic PCs");
+
+        b3r::runtime::Ps2PadHleService pad_service(*decision.bindings);
+        b3r::input::Ps2PadReport report{};
+        report.connected = true;
+        report.buttons_active_low = 0xffefu;
+        report.left_x = 0x12u;
+        report.left_y = 0x34u;
+        report.right_x = 0x56u;
+        report.right_y = 0x78u;
+        pad_service.set_report(report);
+
+        R5900BlockDispatcherOptions pad_options{};
+        pad_options.guest_calls = &pad_service;
+        R5900BlockDispatcher pad_dispatcher(pad_memory, pad_options);
+
+        const auto run_pad_call = [&](std::uint32_t pc, R5900IrExecutionState& state) {
+            state.gpr[31].low64 = return_pc;
+            const auto result = pad_dispatcher.run(pc, state, 1u);
+            expect(result.reason == R5900DispatchStopReason::UnsupportedInstruction &&
+                       result.next_pc == return_pc,
+                   "handled PAD HLE call must resume at the synthetic return sentinel");
+            expect(result.guest_calls_handled == 1u && result.blocks_executed == 0u,
+                   "PAD HLE interception must count one guest call and no native block");
+            return result;
+        };
+
+        R5900IrExecutionState init_state{};
+        init_state.gpr[4].low64 = 0u;
+        run_pad_call(decision.bindings->pad_init, init_state);
+        expect(init_state.gpr[2].low64 == 1u && pad_service.initialized(),
+               "activated padInit must initialize HLE and return success");
+
+        expect(pad_memory.translate(pad_area, 256u).has_value() &&
+                   (pad_area % 64u) == 0u,
+               "synthetic padArea must be aligned and completely backed");
+        R5900IrExecutionState open_state{};
+        open_state.gpr[4].low64 = 0u;
+        open_state.gpr[5].low64 = 0u;
+        open_state.gpr[6].low64 = pad_area;
+        run_pad_call(decision.bindings->pad_port_open, open_state);
+        expect(open_state.gpr[2].low64 == 1u && pad_service.port_open() &&
+                   pad_service.pad_area_address() == pad_area,
+               "activated padPortOpen must open the exact synthetic pad area");
+
+        R5900IrExecutionState state_state{};
+        state_state.gpr[4].low64 = 0u;
+        state_state.gpr[5].low64 = 0u;
+        run_pad_call(decision.bindings->pad_get_state, state_state);
+        expect(state_state.gpr[2].low64 == 0x06u,
+               "activated padGetState must report stable connected state");
+
+        expect(pad_memory.translate(read_destination, 32u).has_value(),
+               "synthetic padRead destination must be completely backed");
+        R5900IrExecutionState read_state{};
+        read_state.gpr[4].low64 = 0u;
+        read_state.gpr[5].low64 = 0u;
+        read_state.gpr[6].low64 = read_destination;
+        run_pad_call(decision.bindings->pad_read, read_state);
+        expect(read_state.gpr[2].low64 == 32u,
+               "activated padRead must return the 32-byte report size");
+        const auto read_span = pad_memory.translate(read_destination, 32u);
+        expect(read_span.has_value(), "padRead output span must remain backed");
+        constexpr std::array<std::uint8_t, 8> expected_prefix{
+            0x00u, 0x79u, 0xefu, 0xffu, 0x56u, 0x78u, 0x12u, 0x34u};
+        for (std::size_t index = 0; index < expected_prefix.size(); ++index) {
+            expect((*read_span)[index] == expected_prefix[index],
+                   "activated padRead report prefix mismatch");
+        }
+        for (std::size_t index = expected_prefix.size(); index < read_span->size(); ++index) {
+            expect((*read_span)[index] == 0u,
+                   "activated padRead report tail must remain zero");
+        }
+
+        R5900IrExecutionState close_state{};
+        close_state.gpr[4].low64 = 0u;
+        close_state.gpr[5].low64 = 0u;
+        run_pad_call(decision.bindings->pad_port_close, close_state);
+        expect(close_state.gpr[2].low64 == 1u && !pad_service.port_open() &&
+                   pad_service.pad_area_address() == 0u,
+               "activated padPortClose must clear the open state and pad area");
+
+        R5900IrExecutionState end_state{};
+        run_pad_call(decision.bindings->pad_end, end_state);
+        expect(end_state.gpr[2].low64 == 1u && !pad_service.initialized() &&
+                   !pad_service.port_open(),
+               "activated padEnd must clear PAD HLE lifecycle state");
+
+        const std::array<std::uint32_t, 6> materialized{
+            decision.bindings->pad_init,
+            decision.bindings->pad_port_open,
+            decision.bindings->pad_get_state,
+            decision.bindings->pad_read,
+            decision.bindings->pad_port_close,
+            decision.bindings->pad_end,
+        };
+        for (const auto pc : materialized) {
+            expect(pc != unknown_pc,
+                   "fixed unknown PC must differ from every materialized PAD binding");
+        }
+        R5900IrExecutionState unknown_state{};
+        const auto unknown = pad_service.try_handle(
+            R5900GuestCallRequest{unknown_pc}, unknown_state, pad_memory);
+        expect(unknown.status == R5900GuestCallStatus::NotHandled,
+               "unbound synthetic PC must remain outside activated PAD HLE");
+    }
+
     std::cout << "r5900_block_dispatcher_createsema_windows_tests: PASS\n";
 }
