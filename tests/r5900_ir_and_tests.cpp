@@ -150,6 +150,8 @@ int main() {
     expect(xori_lowered.instructions.size() == 1u,
            "XORI must lower to one IR instruction");
     const auto& xori_ir = xori_lowered.instructions.front();
+    expect(xori_ir.opcode == R5900IrOpcode::Xor64,
+           "XORI must lower to Xor64");
     expect(xori_ir.destination.has_value() &&
                xori_ir.destination->kind == R5900IrDestinationKind::Gpr &&
                xori_ir.destination->index == 5u,
@@ -164,6 +166,28 @@ int main() {
            "XORI immediate must be zero-extended from 16 bits");
     expect(xori_ir.guest_pc == xori_pc && xori_ir.guest_raw == xori_word,
            "XORI lowering must retain guest provenance");
+    expect(validate_r5900_ir_instruction(xori_ir, 0u).ok(),
+           "Xor64 GPR+immediate must validate");
+
+    R5900IrExecutionState xori_state{};
+    xori_state.gpr[3] = {0x123456789abcdef0ull, 0x1111111111111111ull};
+    xori_state.gpr[5] = {0u, 0xaaaaaaaaaaaaaaaaull};
+    expect(execute_r5900_ir(xori_lowered.instructions, xori_state).ok(),
+           "reference executor must execute XORI Xor64 IR");
+    expect(xori_state.gpr[5].low64 == 0x123456789abc21f0ull,
+           "XORI must XOR the full source low64 with zero-extended imm16");
+    expect(xori_state.gpr[5].high64 == 0xaaaaaaaaaaaaaaaaull,
+           "XORI must preserve destination high64");
+
+    const auto xori_zero_word = i_type(0x0eu, 3u, 0u, 0xffffu);
+    const auto xori_zero_lowered =
+        lower_r5900_instruction(decode_r5900(xori_zero_word), xori_pc + 4u);
+    expect(xori_zero_lowered.ok() && xori_zero_lowered.instructions.size() == 1u,
+           "XORI writing r0 must lower deterministically");
+    expect(xori_zero_lowered.instructions.front().opcode == R5900IrOpcode::Nop,
+           "XORI writing r0 must become provenance-preserving Nop");
+    expect(xori_zero_lowered.instructions.front().guest_raw == xori_zero_word,
+           "discarded XORI write must retain guest word provenance");
 
     std::cout << "r5900_ir_and_tests: PASS\n";
     return EXIT_SUCCESS;
