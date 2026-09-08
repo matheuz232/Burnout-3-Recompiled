@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 namespace {
 using namespace b3r::recompiler;
@@ -194,6 +195,39 @@ int main() {
         expect_faults_equal(reference_context.memory_fault,
                             native_context.memory_fault,
                             "failing JAL delay fault differential mismatch");
+    }
+    {
+        R5900IrInstruction xori{};
+        xori.guest_pc = 0x00108a00u;
+        xori.opcode = R5900IrOpcode::Xor64;
+        xori.destination = R5900IrDestination{5u};
+        xori.write_mode = R5900IrGprWriteMode::Low64PreserveUpper64;
+        xori.inputs = {
+            R5900IrOperand{R5900IrOperandKind::Gpr, 3u, 0},
+            R5900IrOperand{R5900IrOperandKind::Immediate, 0u, 0xff00},
+        };
+        const std::vector<R5900IrInstruction> sequence{xori};
+
+        auto reference_state = sentinel_state();
+        auto native_state = reference_state;
+        reference_state.gpr[3].low64 = 0x123456789abcdef0ull;
+        native_state.gpr[3].low64 = 0x123456789abcdef0ull;
+        reference_state.gpr[5].high64 = 0xaaaaaaaaaaaaaaaaull;
+        native_state.gpr[5].high64 = 0xaaaaaaaaaaaaaaaaull;
+
+        expect(execute_r5900_ir(sequence, reference_state).ok(),
+               "reference Xor64 sequence must execute");
+        auto compiled = compile_r5900_ir_x64(sequence);
+        expect(compiled.ok() && compiled.block.has_value(),
+               "x64 backend must compile Xor64");
+        const auto next_pc = compiled.block->execute(native_state);
+        expect(next_pc == 0u,
+               "linear Xor64 native sequence must preserve zero fallthrough PC");
+        expect_states_equal(reference_state, native_state,
+                            "native/reference Xor64 differential mismatch");
+        expect(native_state.gpr[5].low64 == 0x123456789abc21f0ull &&
+                   native_state.gpr[5].high64 == 0xaaaaaaaaaaaaaaaaull,
+               "native Xor64 must preserve upper64 and XOR low64");
     }
 
     std::cout << "r5900_x64_direct_transfer_windows_tests: PASS\n";
