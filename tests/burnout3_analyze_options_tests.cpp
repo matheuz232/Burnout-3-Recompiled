@@ -1,5 +1,9 @@
+#include "analysis/ps2_pad_activation_report.h"
 #include "tools/burnout3_analyze_options.h"
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -22,6 +26,83 @@ void expect(bool condition, const char* message) {
 b3r::tools::Burnout3AnalyzeOptionsResult parse(std::initializer_list<std::string_view> args) {
     const std::vector<std::string_view> values(args);
     return b3r::tools::parse_burnout3_analyze_options(values);
+}
+
+constexpr std::array<std::uint32_t, 6> kReportActivationPcs{
+    0x00101000u,
+    0x00102000u,
+    0x00103000u,
+    0x00104000u,
+    0x00105000u,
+    0x00106000u,
+};
+
+b3r::analysis::PadBindingConfidence report_activation_confidence(std::size_t index) {
+    using b3r::analysis::PadBindingConfidence;
+    if (index == 0u || index == 4u || index == 5u) {
+        return PadBindingConfidence::Trusted;
+    }
+    if (index == 2u) {
+        return PadBindingConfidence::Unresolved;
+    }
+    return PadBindingConfidence::Candidate;
+}
+
+b3r::analysis::PadBindingDiscoveryResult report_activation_discovery() {
+    using namespace b3r::analysis;
+    PadBindingDiscoveryResult discovery{};
+    for (std::size_t i = 0; i < discovery.resolutions.size(); ++i) {
+        const auto function = static_cast<PadBindingFunction>(i);
+        auto& resolution = discovery.resolutions[i];
+        resolution.function = function;
+        resolution.confidence = report_activation_confidence(i);
+        resolution.evidence.push_back({
+            function,
+            i == 0u ? PadBindingEvidenceKind::ElfSymbol
+                    : PadBindingEvidenceKind::StaticFingerprint,
+            kReportActivationPcs[i],
+            i == 0u ? 1000u : 100u,
+            "synthetic-activation-report",
+        });
+    }
+    return discovery;
+}
+
+b3r::analysis::PadRuntimeConfirmationResult report_activation_runtime() {
+    using namespace b3r::analysis;
+    PadRuntimeConfirmationResult runtime{};
+    for (std::size_t i = 0; i < runtime.functions.size(); ++i) {
+        auto& item = runtime.functions[i];
+        item.function = static_cast<PadBindingFunction>(i);
+        item.static_confidence = report_activation_confidence(i);
+        item.runtime_status = PadRuntimeConfirmationStatus::RuntimeConfirmed;
+        item.guest_pc = kReportActivationPcs[i];
+        item.calls_observed = 1u;
+        item.compatible_calls = 1u;
+    }
+    return runtime;
+}
+
+void test_pad_activation_ready_report() {
+    using namespace b3r::analysis;
+    const auto decision = make_ps2_pad_activation_decision(
+        report_activation_discovery(), report_activation_runtime());
+    const std::string expected =
+        "PAD_ACTIVATION_V0 readiness=ready eligible=6 required=6\n"
+        "PAD_ACTIVATION function=padInit static_confidence=trusted runtime_status=runtime_confirmed eligibility=eligible pc=0x00101000 reason=eligible_runtime_confirmed\n"
+        "PAD_ACTIVATION function=padPortOpen static_confidence=candidate runtime_status=runtime_confirmed eligibility=eligible pc=0x00102000 reason=eligible_runtime_confirmed\n"
+        "PAD_ACTIVATION function=padGetState static_confidence=unresolved runtime_status=runtime_confirmed eligibility=eligible pc=0x00103000 reason=eligible_runtime_confirmed\n"
+        "PAD_ACTIVATION function=padRead static_confidence=candidate runtime_status=runtime_confirmed eligibility=eligible pc=0x00104000 reason=eligible_runtime_confirmed\n"
+        "PAD_ACTIVATION function=padPortClose static_confidence=trusted runtime_status=runtime_confirmed eligibility=eligible pc=0x00105000 reason=eligible_runtime_confirmed\n"
+        "PAD_ACTIVATION function=padEnd static_confidence=trusted runtime_status=runtime_confirmed eligibility=eligible pc=0x00106000 reason=eligible_runtime_confirmed\n"
+        "PAD_ACTIVATION_BINDINGS padInit=0x00101000 padPortOpen=0x00102000 padGetState=0x00103000 padRead=0x00104000 padPortClose=0x00105000 padEnd=0x00106000\n"
+        "PAD_ACTIVATION_END\n";
+
+    const auto formatted = format_ps2_pad_activation_decision(decision);
+    expect(formatted == expected,
+           "ready activation report must match the canonical byte format");
+    expect(format_ps2_pad_activation_decision(decision) == formatted,
+           "activation report must be byte-identical on repeated render");
 }
 
 } // namespace
@@ -103,6 +184,8 @@ int main() {
         expect(result.error == Burnout3AnalyzeOptionError::UnknownOption,
                "unknown option must have a specific error");
     }
+
+    test_pad_activation_ready_report();
 
     std::cout << "burnout3_analyze_options_tests: PASS\n";
     return EXIT_SUCCESS;
