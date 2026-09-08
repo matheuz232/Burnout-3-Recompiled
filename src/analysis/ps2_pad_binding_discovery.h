@@ -199,7 +199,7 @@ collect_ps2_pad_symbol_evidence(const Elf32MetadataResult& metadata,
             *function,
             PadBindingEvidenceKind::ElfSymbol,
             symbol.value,
-            1000u,
+            0u,
             symbol.name,
         });
     }
