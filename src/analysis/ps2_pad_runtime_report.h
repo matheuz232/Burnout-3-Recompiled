@@ -47,7 +47,8 @@ namespace ps2_pad_runtime_report_detail {
             << " static_confidence=" << confidence_name(source.static_confidence)
             << " runtime_status=" << status_name(source.runtime_status)
             << " pc=";
-        if (source.guest_pc.has_value()) {
+        if (source.runtime_status == PadRuntimeConfirmationStatus::RuntimeConfirmed &&
+            source.guest_pc.has_value()) {
             out << format_pc(*source.guest_pc);
         } else {
             out << "none";
