@@ -1,6 +1,6 @@
 # PS2 PAD Runtime Confirmation v0 Validation
 
-Status: `PENDING_FINAL_EXACT_HEAD_CI`
+Status: `CI_VALIDATED`
 Date: 2026-09-08
 Branch: `feature/ps2-pad-runtime-confirmation-v0`
 Base: `d7b9fc436805dc7e5908d277409eed208ded8f32`
@@ -8,6 +8,8 @@ Design: `docs/superpowers/specs/2026-09-08-ps2-pad-runtime-confirmation-v0-desig
 Plan: `docs/superpowers/plans/2026-09-08-ps2-pad-runtime-confirmation-v0.md`
 Implementation head before documentation: `b4ea8d1fc874d8f92e1a210bd76b441bcc60b565`
 Implementation-head Windows CI: #893, run `34186019018`, job `101934385601`
+Documentation prevalidation head: `976bd6627e85f70f4da77090fa643a58d9a7a9a1`
+Documentation prevalidation Windows CI: #898, run `34186399407`, job `101935488093`
 
 ## Scope validated
 
@@ -179,7 +181,9 @@ Characterization commit:
 
 Because all production units were already implemented under RED→GREEN gates, Task 4 adds end-to-end characterization only; no production behavior was changed.
 
-## Implementation-head CI evidence
+## CI evidence
+
+### Implementation head
 
 Windows CI #893 (`34186019018`), job `101934385601`, exact SHA `b4ea8d1fc874d8f92e1a210bd76b441bcc60b565`:
 
@@ -219,6 +223,22 @@ P95           8.333 ms
 P99           8.333 ms
 >9/10/12 ms   0 / 0 / 0
 ```
+
+### Documentation prevalidation head
+
+Windows CI #898 (`34186399407`), job `101935488093`, exact SHA `976bd6627e85f70f4da77090fa643a58d9a7a9a1`:
+
+```text
+Configure                         PASS
+Build                             PASS
+CTest                             73/73 PASS
+Frame pacing telemetry            PASS
+120 Hz pacing probe               PASS
+Analyzer package validation       PASS
+Pacing package validation         PASS
+```
+
+This validates the complete implementation together with the validation ledger and progress documentation before the status-only final commit.
 
 The only warnings observed are the pre-existing MSVC C4834 `[[nodiscard]]` warnings in existing x64 tests.
 
@@ -262,9 +282,8 @@ This milestone does not claim:
 
 Real Burnout 3 runtime confirmation remains `PENDING_EXTERNAL_VALIDATION` until a complete lawful user-supplied ELF executes evidence-backed calls.
 
-## Remaining validation gates
+## Final status-head gate
 
-1. Run full Windows CI on the exact documentation commit containing this ledger and `docs/PROGRESS.md` with status `PENDING_FINAL_EXACT_HEAD_CI`.
-2. If green, update only these status documents to `CI_VALIDATED` and record the successful documentation run.
-3. Run full Windows CI again on that exact final status SHA.
-4. Only after the second documentation-head run is completely green may this milestone be reported `CI_VALIDATED`.
+The `CI_VALIDATED` status in this status-only documentation commit is not to be reported externally until full Windows CI passes on this exact final head. No further code, test or CMake change is permitted during that gate.
+
+After that exact-head gate passes, the next engineering milestone is **PS2 PAD Runtime Activation**, which requires a separate design and does not change the continuing requirement for real Burnout 3 evidence from a complete lawful ELF.
