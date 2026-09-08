@@ -1,3 +1,4 @@
+#include "analysis/ps2_pad_fingerprint.h"
 #include "analysis/r5900_reachability.h"
 #include "recompiler/ps2_elf.h"
 #include "runtime/ps2_memory_map.h"
@@ -68,6 +69,18 @@ bool any_of(const std::vector<T>& items, Pred pred) {
 
 int main() {
     using namespace b3r::analysis;
+
+    {
+        PadFingerprintFeatures features{};
+        features.command_end = true;
+        expect(score_pad_end(features) == 120u,
+               "public PAD END command must produce fixed score 120");
+
+        PadFingerprintFeatures weak{};
+        weak.port_bound_2 = true;
+        expect(score_pad_get_state(weak) < 100u,
+               "below-threshold state evidence must remain weak");
+    }
 
     {
         // 1000: BEQ -> 1010, fallthrough 1008; 1008: JAL 1100, continuation 1010; 1010: JR ra.
