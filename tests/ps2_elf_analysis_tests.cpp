@@ -1,3 +1,4 @@
+#include "analysis/elf32_metadata.h"
 #include "analysis/ps2_elf_analysis.h"
 
 #include <cstdint>
@@ -73,6 +74,13 @@ void expect(bool condition, const char* message) {
 
 int main() {
     using namespace b3r::analysis;
+
+    {
+        const auto metadata = parse_elf32_metadata(make_break_elf());
+        expect(metadata.status == Elf32MetadataStatus::Absent,
+               "ELF without section table must report metadata absent");
+        expect(metadata.symbols.empty(), "absent metadata must not fabricate symbols");
+    }
 
     const std::string expected =
         "ENTRY 0x00100000\n"
