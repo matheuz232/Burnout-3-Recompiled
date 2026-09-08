@@ -1,0 +1,554 @@
+# PS2 PAD Runtime Confirmation v0 Design
+
+Status: DESIGN_APPROVED
+Date: 2026-09-08
+Base: `d7b9fc436805dc7e5908d277409eed208ded8f32`
+Base milestone: `PS2 PAD Binding Discovery v0` (`CI_VALIDATED`)
+
+## 1. Purpose
+
+`PS2 PAD Runtime Confirmation v0` adds read-only runtime evidence that connects the existing static PAD binding discovery results to actual R5900 guest call behavior.
+
+The milestone does **not** activate PAD HLE. Its job is to answer a narrower question:
+
+> Did the guest actually call an evidence-backed PAD candidate PC, and were the observed call arguments compatible with the already implemented libpad-facing ABI contract?
+
+The validated pipeline after this milestone is:
+
+```text
+PS2 PAD Binding Discovery v0
+        ↓
+static candidate/trusted PCs
+        ↓
+R5900 call observer
+        ↓
+PS2 PAD Runtime Confirmation v0
+        ↓
+runtime evidence/report only
+```
+
+Runtime activation remains a separate future milestone.
+
+## 2. Goals
+
+1. Add a generic, reusable, read-only observer for successful R5900 `JAL` / `JALR` calls executed by `R5900BlockDispatcher`.
+2. Capture the architectural call site, actual target, return/link PC, direct/indirect kind, and `$a0..$a3` after the delay slot has executed.
+3. Preserve existing dispatcher semantics when no observer is installed.
+4. Feed observations into a host-independent PAD runtime-confirmation component.
+5. Match only PCs already present in `PadBindingDiscoveryResult` evidence.
+6. Validate observed arguments using the ABI contract already enforced by `Ps2PadHleService`.
+7. Resolve ambiguous static PAD candidates only when runtime evidence is unique and ABI-compatible.
+8. Produce deterministic bounded diagnostic/report data.
+9. Never create or mutate `Ps2PadHleBindings` in this milestone.
+10. Preserve current Windows CI, 120 Hz pacing, analyzer packaging, and all existing tests.
+
+## 3. Non-goals
+
+This milestone does not:
+
+- activate `Ps2PadHleService` from discovered or confirmed PCs;
+- hardcode Burnout 3 guest PCs;
+- invent missing ELF bytes;
+- weaken PS2 ELF/PT_LOAD validation;
+- emulate SIF, PADMAN, IOP, SIO2, multitap, pressure mode, rumble, or port 1;
+- prove a real Burnout 3 PC without a complete lawful user-supplied ELF reaching the relevant guest call;
+- add unlimited call tracing or proprietary code/memory dumps;
+- add a new dispatcher stop reason for tracing;
+- change guest-visible execution state because tracing is enabled;
+- claim game boot, rendering, audio, menus, or gameplay.
+
+## 4. Architecture
+
+Three components participate:
+
+```text
+R5900BlockDispatcher
+        ↓ successful JAL/JALR
+IR5900CallObserver
+        ↓ immutable snapshot
+Ps2PadRuntimeConfirmation
+        ↓
+PadRuntimeConfirmationResult / deterministic report
+```
+
+The observer is generic and belongs to the R5900 recompiler layer. The PAD confirmation component depends on PAD discovery metadata plus read-only guest-memory validation. PAD-specific knowledge must not leak into the dispatcher or x64 backend.
+
+### 4.1 Generic observer contract
+
+A portable interface is added outside the Windows namespace:
+
+```cpp
+struct R5900CallObservation {
+    std::uint32_t call_pc{};
+    std::uint32_t target_pc{};
+    std::uint32_t return_pc{};
+    bool indirect{};
+    std::array<std::uint64_t, 4> args{};
+};
+
+class IR5900CallObserver {
+public:
+    virtual ~IR5900CallObserver() = default;
+    virtual void observe(const R5900CallObservation& observation) noexcept = 0;
+};
+```
+
+`R5900BlockDispatcherOptions` gains:
+
+```cpp
+IR5900CallObserver* call_observer{};
+```
+
+The observer intentionally receives no mutable `R5900IrExecutionState`, no mutable `Ps2MemoryMap`, and no dispatcher object.
+
+### 4.2 Read-only guarantee
+
+The call observer cannot directly mutate:
+
+- guest PC;
+- GPR state;
+- guest memory;
+- cache state;
+- dispatcher counters;
+- HLE bindings.
+
+`observe()` is `noexcept` and returns `void`. Runtime confirmation cannot introduce a new control-flow disposition or dispatcher failure state.
+
+With `call_observer == nullptr`, the dispatcher must retain existing behavior.
+
+## 5. Exact observation semantics
+
+An observation is emitted only after a supported guest call block completes successfully.
+
+### 5.1 `JAL`
+
+For a supported direct call:
+
+- `call_pc` = PC of the `JAL` instruction;
+- `return_pc` = `call_pc + 8`;
+- `$ra` is produced according to the current IR/backend contract before the delay slot;
+- the architectural delay slot executes;
+- `target_pc` = actual `native_execution.next_pc` returned by the completed native block;
+- `args[0..3]` snapshot GPR `$a0..$a3` after the delay slot;
+- `indirect = false`.
+
+### 5.2 `JALR`
+
+For a supported indirect call:
+
+- `call_pc` = PC of the `JALR` instruction;
+- target is captured architecturally before the delay slot by the current backend;
+- link register semantics execute before the delay slot;
+- the delay slot executes;
+- `target_pc` = actual `native_execution.next_pc` returned by the completed native block;
+- `return_pc` = the link value generated by the terminator (`call_pc + 8` under the currently supported R5900 call contract);
+- `args[0..3]` snapshot `$a0..$a3` after the delay slot;
+- `indirect = true`.
+
+The observer must use the completed block's returned target rather than re-deriving the target from mutable post-delay-slot GPRs.
+
+### 5.3 Events that do not produce observations
+
+No observation is emitted for:
+
+- `J`;
+- `JR`;
+- conditional branches;
+- branch-likely instructions;
+- fallthrough blocks;
+- `SYSCALL`;
+- guest-call HLE interception itself;
+- a block that fails during analysis, lowering, compilation, or execution;
+- a memory-faulted block that did not complete its call terminator.
+
+If a guest `JAL/JALR` targets an HLE-intercepted PC, the call is observed when the call block completes. The subsequent HLE interception is not a second call observation.
+
+## 6. Cache semantics
+
+Call observation must be identical across cold compilation, ordinary cache hit, and fast-cache replay.
+
+`CachedBlock` therefore retains enough immutable call metadata to reconstruct the observation without re-analysis. The metadata contains, when the block terminator is a call:
+
+```cpp
+struct CachedCallMetadata {
+    std::uint32_t call_pc{};
+    std::uint32_t return_pc{};
+    bool indirect{};
+};
+```
+
+A cached block without a call terminator has no call metadata.
+
+After a successful native block execution:
+
+1. determine whether the executed block has call metadata;
+2. use `native_execution.next_pc` as `target_pc`;
+3. snapshot `$a0..$a3` from the post-delay-slot state;
+4. invoke the observer exactly once.
+
+Fast-cache replay must not bypass the observer.
+
+Observation itself does not increment `blocks_executed`, `instructions_executed`, `guest_calls_handled`, or syscall counters beyond the normal values the executed guest block already produces.
+
+## 7. PAD runtime-confirmation input
+
+`Ps2PadRuntimeConfirmation` consumes:
+
+- the immutable `PadBindingDiscoveryResult` from Binding Discovery v0;
+- `R5900CallObservation` snapshots;
+- read-only access to `Ps2MemoryMap` only when validating pointer-backed PAD ABI arguments.
+
+It does not modify `PadBindingDiscoveryResult`.
+
+### 7.1 Observable PC set
+
+For each `PadBindingFunction`, all distinct PCs present in `PadBindingResolution::evidence` are eligible runtime targets.
+
+This intentionally includes cases where static discovery has no selected `guest_pc`, such as:
+
+- multiple static fingerprint candidates;
+- multiple conflicting ELF symbol PCs.
+
+Runtime confirmation never substitutes arbitrary score-based selection for ambiguity.
+
+Observations whose `target_pc` is absent from all PAD binding evidence are ignored.
+
+## 8. ABI compatibility rules
+
+Runtime ABI compatibility mirrors the current `Ps2PadHleService` contract.
+
+The low 32 bits of arguments are interpreted as the libpad-facing parameters used by the current HLE service.
+
+### 8.1 `padInit`
+
+Compatible when:
+
+```text
+a0 == 0
+```
+
+### 8.2 `padPortOpen`
+
+Compatible when:
+
+```text
+a0 == 0
+a1 == 0
+a2 != 0
+a2 % 64 == 0
+[a2, a2 + 255] is fully backed by EE RAM
+```
+
+The 256-byte validation must be all-or-nothing.
+
+### 8.3 `padGetState`
+
+Compatible when:
+
+```text
+a0 == 0
+a1 == 0
+```
+
+### 8.4 `padRead`
+
+Compatible when:
+
+```text
+a0 == 0
+a1 == 0
+a2 != 0
+[a2, a2 + 31] is fully backed by EE RAM
+```
+
+The confirmation component validates addressability only; it does not write the 32-byte destination.
+
+### 8.5 `padPortClose`
+
+Compatible when:
+
+```text
+a0 == 0
+a1 == 0
+```
+
+### 8.6 `padEnd`
+
+No argument restriction is required in v0.
+
+## 9. Per-PC evidence state
+
+Runtime data is bounded and aggregated. No unbounded trace is retained.
+
+For each `(PadBindingFunction, guest_pc)`:
+
+```cpp
+struct Ps2PadRuntimePcEvidence {
+    PadBindingFunction function{};
+    std::uint32_t guest_pc{};
+    std::size_t calls_observed{};
+    std::size_t compatible_calls{};
+    std::size_t incompatible_calls{};
+    std::optional<R5900CallObservation> first_compatible{};
+    std::optional<R5900CallObservation> first_incompatible{};
+};
+```
+
+Only the first compatible and first incompatible observations may be retained for diagnostics. The implementation does not store every call.
+
+Counters must saturate or otherwise avoid undefined overflow behavior if practical; exact overflow policy may use checked/saturating increment because the report is diagnostic rather than guest-visible.
+
+## 10. Per-function runtime status
+
+```cpp
+enum class PadRuntimeConfirmationStatus : std::uint8_t {
+    Unobserved,
+    ObservedIncompatible,
+    RuntimeConfirmed,
+    RuntimeAmbiguous,
+};
+```
+
+Resolution is based on distinct evidence PCs, not call counts or static scores.
+
+### 10.1 `Unobserved`
+
+No evidence-backed PC for the function has been called.
+
+### 10.2 `ObservedIncompatible`
+
+At least one evidence-backed PC was called, but no evidence PC has any ABI-compatible call.
+
+### 10.3 `RuntimeConfirmed`
+
+Exactly one distinct evidence-backed PC has at least one ABI-compatible call.
+
+The selected runtime PC is that unique PC.
+
+### 10.4 `RuntimeAmbiguous`
+
+Two or more distinct evidence-backed PCs have ABI-compatible calls.
+
+No selected runtime PC is produced.
+
+### 10.5 Static confidence is independent
+
+Static and runtime states remain separate dimensions.
+
+Valid combinations include:
+
+```text
+Trusted    + Unobserved
+Candidate  + RuntimeConfirmed
+Trusted    + RuntimeConfirmed
+Unresolved + RuntimeConfirmed
+Candidate  + RuntimeAmbiguous
+```
+
+A runtime result does not rewrite `PadBindingConfidence`.
+
+Static score never breaks a runtime tie.
+
+## 11. Lifecycle sequence diagnostics
+
+The expected high-level libpad pattern:
+
+```text
+padInit
+→ padPortOpen
+→ padGetState / padRead
+→ padPortClose
+→ padEnd
+```
+
+may be tracked as additional diagnostics, but it is not a hard prerequisite for `RuntimeConfirmed`.
+
+The milestone must not reject a compatible call solely because:
+
+- `padGetState` appeared before an observed open within the current trace window;
+- calls begin mid-lifecycle;
+- the currently executable R5900 subset stops before close/end;
+- the game calls `padGetState` or `padRead` repeatedly;
+- the trace is partial.
+
+## 12. Deterministic report
+
+The confirmation component exposes a deterministic formatter, separate from the existing static `PAD_BINDINGS_V0` formatter.
+
+Header:
+
+```text
+PAD_RUNTIME_CONFIRMATION_V0
+```
+
+Per function, canonical order is:
+
+1. `padInit`
+2. `padPortOpen`
+3. `padGetState`
+4. `padRead`
+5. `padPortClose`
+6. `padEnd`
+
+Example summary line:
+
+```text
+PAD_RUNTIME function=padRead static_confidence=candidate runtime_status=runtime_confirmed pc=0x00124500 observed=15 compatible=15 incompatible=0
+```
+
+When no unique runtime PC exists:
+
+```text
+pc=none
+```
+
+Per-PC detail lines are ordered by function then ascending guest PC:
+
+```text
+PAD_RUNTIME_PC function=padRead pc=0x00124500 observed=15 compatible=15 incompatible=0
+```
+
+Formatting rules:
+
+- lowercase hexadecimal;
+- eight hex digits for 32-bit PCs;
+- stable canonical function ordering;
+- stable PC ordering;
+- no pointer values or memory bytes beyond the already-observed scalar call arguments needed for bounded diagnostics;
+- no proprietary code bytes or RAM dumps;
+- repeated formatting of identical state must be byte-identical.
+
+## 13. Runtime integration boundary
+
+This milestone may provide a runtime/probe integration path that installs the observer and emits confirmation results, but it must remain explicitly opt-in and non-activating.
+
+No code path may transform `RuntimeConfirmed` into active `Ps2PadHleBindings` automatically.
+
+The existing `Ps2PadHleService` implementation remains functionally unchanged.
+
+A future `PS2 PAD Runtime Activation` milestone may consume both static and runtime evidence, but requires a separate approved design.
+
+## 14. Error handling
+
+Runtime confirmation is diagnostic and non-fatal.
+
+- Unknown target PC: ignore.
+- Evidence-backed target with incompatible ABI: count as incompatible; do not fault dispatcher.
+- Invalid guest pointer in a candidate `padPortOpen`/`padRead`: classify incompatible; do not mutate RAM and do not stop dispatch.
+- Observer pointer null: no observation and no behavioral change.
+- Unsupported/non-call control flow: no event.
+- Multiple compatible candidate PCs: report `RuntimeAmbiguous`, never choose a winner.
+- Empty static evidence for a function: remain `Unobserved` with no candidate PC.
+
+## 15. TDD strategy
+
+Implementation follows strict RED → GREEN gates.
+
+### Gate 1 — generic call observer
+
+Tests must prove:
+
+- no observer preserves current dispatcher result/state;
+- direct `JAL` emits exactly one observation;
+- indirect `JALR` emits exactly one observation;
+- `J`, `JR`, conditional branch, likely branch, fallthrough, syscall, and HLE interception do not emit call observations by themselves;
+- `call_pc`, `return_pc`, target and direct/indirect flag are correct;
+- `$a0..$a3` are captured after delay-slot effects;
+- failed/memory-faulted call block emits no observation;
+- ordinary cache hit emits exactly one observation;
+- fast-cache hit emits exactly one observation;
+- cache replay uses the actual `native_execution.next_pc` target;
+- observer does not change block/instruction/HLE/syscall counters.
+
+### Gate 2 — PAD ABI classification
+
+Synthetic tests cover all six functions:
+
+- valid arguments;
+- invalid port/slot;
+- null pointer;
+- misaligned `padPortOpen` area;
+- fully backed 256-byte area;
+- partially out-of-range 256-byte area;
+- fully backed 32-byte `padRead` destination;
+- partially out-of-range 32-byte destination;
+- `padEnd` unrestricted arguments;
+- unrelated target ignored.
+
+### Gate 3 — dynamic resolution
+
+Tests cover:
+
+- no observations → `Unobserved`;
+- only incompatible observations → `ObservedIncompatible`;
+- exactly one compatible PC → `RuntimeConfirmed`;
+- multiple calls to the same compatible PC remain `RuntimeConfirmed`;
+- two compatible PCs → `RuntimeAmbiguous`;
+- static ambiguous candidate resolved by one unique runtime-compatible PC;
+- static `Trusted` PC can remain `Unobserved`;
+- static score does not break runtime ambiguity;
+- evidence aggregation remains bounded.
+
+### Gate 4 — deterministic report
+
+Tests cover:
+
+- header and canonical six-function order;
+- lowercase eight-digit PCs;
+- `pc=none` rules;
+- ascending per-PC evidence order;
+- stable counts;
+- repeated formatting byte-identical;
+- no HLE binding mutation;
+- no behavior change in `Ps2PadHleService`.
+
+### Gate 5 — integration/regression
+
+Required before milestone completion:
+
+- complete Windows Configure PASS;
+- Build PASS;
+- all CTest tests PASS;
+- existing guest-call HLE tests PASS;
+- new call-observer tests PASS;
+- new PAD runtime confirmation tests PASS;
+- frame pacing telemetry PASS;
+- 120 Hz pacing probe PASS;
+- analyzer package validation PASS;
+- pacing probe package validation PASS;
+- exact-head CI on the final documentation SHA.
+
+## 16. Acceptance criteria
+
+`PS2 PAD Runtime Confirmation v0` is complete when all of the following are true:
+
+1. A synthetic `JAL` and `JALR` can be observed without changing guest execution.
+2. Delay-slot updates to `$a0..$a3` are reflected in the observation.
+3. Cold, cached, and fast-cached call execution produce exactly one equivalent observation each.
+4. A synthetic evidence-backed PAD target with compatible ABI becomes `RuntimeConfirmed`.
+5. Multiple compatible evidence PCs become `RuntimeAmbiguous` without score-based selection.
+6. Invalid candidate pointers are classified incompatible without dispatcher failure or guest-memory mutation.
+7. The deterministic `PAD_RUNTIME_CONFIRMATION_V0` report is covered by tests.
+8. No `Ps2PadHleBindings` are created or activated by confirmation.
+9. No Burnout-specific PC or proprietary game byte is committed.
+10. Full Windows CI succeeds on the exact final documentation head.
+
+## 17. External validation boundary
+
+Synthetic CI can validate the observer, ABI classifier, ambiguity logic, and report determinism.
+
+A real Burnout 3 result requires a complete lawful user-supplied ELF whose execution reaches the evidence-backed call sites.
+
+Until that happens, real-game confirmation remains:
+
+```text
+PENDING_EXTERNAL_VALIDATION
+```
+
+The project must not claim that Burnout 3 is consuming live controller input merely because the synthetic confirmation path is green.
+
+## 18. Follow-up milestone
+
+After runtime confirmation is implemented and real evidence is available, the next separate milestone is expected to define **runtime activation policy**: when and how a uniquely confirmed PAD PC may populate `Ps2PadHleBindings` and enable `Ps2PadHleService`.
+
+That milestone must preserve an explicit safety boundary between evidence and activation and is outside this design.
