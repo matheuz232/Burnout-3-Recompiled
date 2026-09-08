@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -36,6 +37,7 @@ int main() {
                "output path must be retained");
         expect(result.options->max_blocks == 8192u, "max block limit must parse as a positive integer");
         expect(result.options->follow_direct_calls, "--follow-direct-calls must enable direct callee traversal");
+        expect(!result.options->pad_bindings, "PAD discovery must remain disabled unless explicitly requested");
         expect(!result.options->show_help, "normal invocation must not request help");
     }
 
@@ -45,6 +47,27 @@ int main() {
         expect(result.options->max_blocks == 4096u, "default max block limit must remain bounded");
         expect(!result.options->output_path.has_value(), "output must default to stdout");
         expect(!result.options->follow_direct_calls, "direct call traversal must remain disabled by default");
+        expect(!result.options->pad_bindings, "PAD binding discovery must default off");
+    }
+
+    {
+        const auto result = parse({"--elf", "game.elf", "--pad-bindings"});
+        expect(result.ok(), "--pad-bindings must be accepted as a value-less option");
+        expect(result.options->pad_bindings,
+               "--pad-bindings must enable opt-in PAD binding discovery");
+    }
+
+    {
+        const auto result = parse({"--elf", "game.elf", "--pad-bindings", "--pad-bindings"});
+        expect(!result.ok(), "duplicate --pad-bindings must fail");
+        expect(result.error == Burnout3AnalyzeOptionError::DuplicateOption,
+               "duplicate --pad-bindings must use DuplicateOption");
+    }
+
+    {
+        const std::string usage = burnout3_analyze_usage();
+        expect(usage.find("[--pad-bindings]") != std::string::npos,
+               "usage must advertise the opt-in --pad-bindings flag");
     }
 
     {
