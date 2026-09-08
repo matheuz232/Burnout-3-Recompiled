@@ -1,3 +1,4 @@
+#include "analysis/ps2_pad_binding_report.h"
 #include "analysis/r5900_analysis_report.h"
 
 #include <algorithm>
@@ -81,6 +82,63 @@ b3r::analysis::R5900ReachabilityGraph make_graph(bool reverse_order) {
     return graph;
 }
 
+void test_pad_binding_report() {
+    using namespace b3r::analysis;
+
+    PadBindingDiscoveryResult result{};
+    for (std::size_t i = 0; i < result.resolutions.size(); ++i) {
+        result.resolutions[i].function = static_cast<PadBindingFunction>(i);
+    }
+    auto& init = result.resolutions[static_cast<std::size_t>(PadBindingFunction::PadInit)];
+    init.confidence = PadBindingConfidence::Trusted;
+    init.guest_pc = 0x00102000u;
+    init.evidence.push_back({PadBindingFunction::PadInit,
+                             PadBindingEvidenceKind::ElfSymbol,
+                             0x00102000u,
+                             0u,
+                             "padInit"});
+
+    const std::string expected =
+        "PAD_BINDINGS_V0 1\n"
+        "PAD_BINDING function=padInit confidence=trusted pc=0x00102000 evidence_count=1 max_score=0\n"
+        "PAD_BINDING_EVIDENCE function=padInit kind=elf_symbol pc=0x00102000 score=0 detail=padInit\n"
+        "PAD_BINDING function=padPortOpen confidence=unresolved pc=none evidence_count=0 max_score=0\n"
+        "PAD_BINDING function=padGetState confidence=unresolved pc=none evidence_count=0 max_score=0\n"
+        "PAD_BINDING function=padRead confidence=unresolved pc=none evidence_count=0 max_score=0\n"
+        "PAD_BINDING function=padPortClose confidence=unresolved pc=none evidence_count=0 max_score=0\n"
+        "PAD_BINDING function=padEnd confidence=unresolved pc=none evidence_count=0 max_score=0\n"
+        "PAD_BINDINGS_END\n";
+
+    const auto rendered = render_ps2_pad_binding_report(result);
+    expect(rendered == expected,
+           "minimal trusted symbol report must match the stable PAD_BINDINGS_V0 format");
+    expect(render_ps2_pad_binding_report(result) == rendered,
+           "repeated PAD binding report rendering must be byte-identical");
+
+    PadBindingDiscoveryResult ambiguous{};
+    for (std::size_t i = 0; i < ambiguous.resolutions.size(); ++i) {
+        ambiguous.resolutions[i].function = static_cast<PadBindingFunction>(i);
+    }
+    auto& read = ambiguous.resolutions[static_cast<std::size_t>(PadBindingFunction::PadRead)];
+    read.confidence = PadBindingConfidence::Candidate;
+    read.evidence = {
+        {PadBindingFunction::PadRead, PadBindingEvidenceKind::StaticFingerprint,
+         0x00126000u, 125u, "slot_bound_8,copies_32_bytes"},
+        {PadBindingFunction::PadRead, PadBindingEvidenceKind::StaticFingerprint,
+         0x00125000u, 130u, "port_bound_2,slot_bound_8,copies_32_bytes"},
+    };
+    ambiguous.diagnostics = {"z diagnostic", "a diagnostic"};
+    const auto ambiguous_report = render_ps2_pad_binding_report(ambiguous);
+    expect(ambiguous_report.find(
+               "PAD_BINDING function=padRead confidence=candidate pc=none evidence_count=2 max_score=130") != std::string::npos,
+           "ambiguous static candidates must render pc=none and retain max score");
+    expect(ambiguous_report.find("pc=0x00125000") < ambiguous_report.find("pc=0x00126000"),
+           "PAD evidence must render in deterministic guest-PC order");
+    expect(ambiguous_report.find("PAD_BINDING_DIAGNOSTIC a diagnostic") <
+               ambiguous_report.find("PAD_BINDING_DIAGNOSTIC z diagnostic"),
+           "PAD diagnostics must render in lexical order");
+}
+
 } // namespace
 
 int main() {
@@ -133,6 +191,8 @@ int main() {
     const auto reordered = render_r5900_analysis_report(make_graph(true));
     expect(reordered == expected,
            "direct-call target aggregation must remain deterministic regardless of graph container order");
+
+    test_pad_binding_report();
 
     std::cout << "r5900_analysis_report_tests: PASS\n";
     return EXIT_SUCCESS;
