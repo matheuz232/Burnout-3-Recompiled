@@ -1,3 +1,4 @@
+#include "analysis/ps2_pad_binding_discovery.h"
 #include "recompiler/ps2_elf.h"
 
 #include <cstdint>
@@ -81,10 +82,30 @@ void expect_error(const Bytes& bytes, b3r::recompiler::Ps2ElfError expected, con
     }
 }
 
+void run_pad_binding_merge_red() {
+    using namespace b3r::analysis;
+
+    const std::vector<PadBindingEvidence> evidence{
+        {PadBindingFunction::PadRead,
+         PadBindingEvidenceKind::StaticFingerprint,
+         0x00101234u,
+         120u,
+         "copies_32_bytes,port_bound_2"},
+    };
+    const auto result = resolve_ps2_pad_binding_evidence(evidence);
+    const auto& read = result.resolutions[static_cast<std::size_t>(PadBindingFunction::PadRead)];
+    expect(read.confidence == PadBindingConfidence::Candidate,
+           "static fingerprint alone must resolve only as candidate");
+    expect(read.guest_pc == 0x00101234u,
+           "single static fingerprint candidate must retain its PC");
+}
+
 } // namespace
 
 int main() {
     using namespace b3r::recompiler;
+
+    run_pad_binding_merge_red();
 
     {
         const auto result = parse_ps2_elf(make_valid_elf());
