@@ -116,8 +116,8 @@ void run_pad_binding_resolution_tests() {
                    "canonical symbols must map in PAD function enum order");
             expect(collected.evidence[index].kind == PadBindingEvidenceKind::ElfSymbol,
                    "exact symbol evidence must be tagged ElfSymbol");
-            expect(collected.evidence[index].score == 0u,
-                   "exact symbol evidence must use rule-based score 0");
+            expect(collected.evidence[index].score == 1000u,
+                   "exact symbol evidence must use fixed score 1000");
         }
     }
 
