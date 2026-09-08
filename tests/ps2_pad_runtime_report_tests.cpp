@@ -1,5 +1,7 @@
+#include "analysis/ps2_pad_activation.h"
 #include "analysis/ps2_pad_runtime_report.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -107,11 +109,88 @@ void test_nonconfirmed_status_never_exposes_pc() {
            "non-confirmed runtime statuses must always render pc=none");
 }
 
+constexpr std::array<std::uint32_t, 6> kActivationPcs{
+    0x00101000u,
+    0x00102000u,
+    0x00103000u,
+    0x00104000u,
+    0x00105000u,
+    0x00106000u,
+};
+
+b3r::analysis::PadBindingConfidence activation_confidence(std::size_t index) {
+    using b3r::analysis::PadBindingConfidence;
+    if (index == 0u || index == 4u || index == 5u) {
+        return PadBindingConfidence::Trusted;
+    }
+    if (index == 2u) {
+        return PadBindingConfidence::Unresolved;
+    }
+    return PadBindingConfidence::Candidate;
+}
+
+b3r::analysis::PadBindingDiscoveryResult activation_discovery(
+    const std::array<std::uint32_t, 6>& pcs) {
+    using namespace b3r::analysis;
+    PadBindingDiscoveryResult discovery{};
+    for (std::size_t i = 0; i < discovery.resolutions.size(); ++i) {
+        const auto function = static_cast<PadBindingFunction>(i);
+        auto& resolution = discovery.resolutions[i];
+        resolution.function = function;
+        resolution.confidence = activation_confidence(i);
+        resolution.evidence.push_back(PadBindingEvidence{
+            function,
+            i == 0u ? PadBindingEvidenceKind::ElfSymbol
+                    : PadBindingEvidenceKind::StaticFingerprint,
+            pcs[i],
+            i == 0u ? 1000u : 100u,
+            "synthetic-activation",
+        });
+    }
+    return discovery;
+}
+
+b3r::analysis::PadRuntimeConfirmationResult activation_runtime(
+    const std::array<std::uint32_t, 6>& pcs) {
+    using namespace b3r::analysis;
+    PadRuntimeConfirmationResult runtime{};
+    for (std::size_t i = 0; i < runtime.functions.size(); ++i) {
+        auto& result = runtime.functions[i];
+        result.function = static_cast<PadBindingFunction>(i);
+        result.static_confidence = activation_confidence(i);
+        result.runtime_status = PadRuntimeConfirmationStatus::RuntimeConfirmed;
+        result.guest_pc = pcs[i];
+        result.calls_observed = 1u;
+        result.compatible_calls = 1u;
+    }
+    return runtime;
+}
+
+void test_pad_activation_ready_requires_six_evidence_backed_distinct_confirmations() {
+    using namespace b3r::analysis;
+    const auto discovery = activation_discovery(kActivationPcs);
+    const auto runtime = activation_runtime(kActivationPcs);
+    const auto decision = make_ps2_pad_activation_decision(discovery, runtime);
+
+    expect(decision.readiness == PadActivationReadiness::Ready,
+           "six consistent evidence-backed confirmed distinct PCs must be activation-ready");
+    expect(decision.bindings.has_value(),
+           "Ready activation must materialize complete bindings");
+    expect(decision.bindings->pad_init == kActivationPcs[0] &&
+               decision.bindings->pad_port_open == kActivationPcs[1] &&
+               decision.bindings->pad_get_state == kActivationPcs[2] &&
+               decision.bindings->pad_read == kActivationPcs[3] &&
+               decision.bindings->pad_port_close == kActivationPcs[4] &&
+               decision.bindings->pad_end == kActivationPcs[5],
+           "bindings must exactly match the six confirmed evidence PCs");
+}
+
 } // namespace
 
 int main() {
     test_complete_canonical_report();
     test_nonconfirmed_status_never_exposes_pc();
+    test_pad_activation_ready_requires_six_evidence_backed_distinct_confirmations();
     std::cout << "ps2_pad_runtime_report_tests: PASS\n";
     return EXIT_SUCCESS;
 }
