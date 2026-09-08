@@ -1,6 +1,7 @@
 #include "tools/burnout3_analyze_app.h"
 
 #include "analysis/ps2_elf_analysis.h"
+#include "analysis/ps2_pad_binding_report.h"
 
 #include <cstdint>
 #include <fstream>
@@ -70,14 +71,40 @@ run_burnout3_analyze(const Burnout3AnalyzeOptions& options,
                         : analysis_result.message);
     }
 
+    std::string report = *analysis_result.report;
+    if (options.pad_bindings) {
+        const auto parsed = recompiler::parse_ps2_elf(bytes);
+        if (!parsed.ok()) {
+            return fail(Burnout3AnalyzeRunError::AnalysisFailed,
+                        "PS2 ELF parse failed while preparing PAD binding discovery");
+        }
+
+        auto mapped = runtime::Ps2MemoryMap::from_elf(*parsed.image);
+        if (!mapped.ok()) {
+            return fail(Burnout3AnalyzeRunError::AnalysisFailed,
+                        "PS2 ELF memory mapping failed while preparing PAD binding discovery");
+        }
+
+        const auto graph = analysis::analyze_r5900_reachability(
+            *mapped.memory, parsed.image->entry_point(), analysis_options);
+        if (!graph.ok()) {
+            return fail(Burnout3AnalyzeRunError::AnalysisFailed,
+                        "R5900 reachability analysis failed while preparing PAD binding discovery");
+        }
+
+        const auto bindings = analysis::discover_ps2_pad_bindings(
+            bytes, *parsed.image, *mapped.memory, *graph.graph);
+        report.push_back('\n');
+        report += analysis::render_ps2_pad_binding_report(bindings);
+    }
+
     if (options.output_path.has_value()) {
         std::ofstream output(*options.output_path, std::ios::binary | std::ios::trunc);
         if (!output) {
             return fail(Burnout3AnalyzeRunError::OutputOpenFailed,
                         "could not open report output: " + *options.output_path);
         }
-        output.write(analysis_result.report->data(),
-                     static_cast<std::streamsize>(analysis_result.report->size()));
+        output.write(report.data(), static_cast<std::streamsize>(report.size()));
         if (!output) {
             return fail(Burnout3AnalyzeRunError::OutputWriteFailed,
                         "could not write complete report output: " + *options.output_path);
@@ -85,8 +112,7 @@ run_burnout3_analyze(const Burnout3AnalyzeOptions& options,
         return {};
     }
 
-    standard_output.write(analysis_result.report->data(),
-                          static_cast<std::streamsize>(analysis_result.report->size()));
+    standard_output.write(report.data(), static_cast<std::streamsize>(report.size()));
     if (!standard_output) {
         return fail(Burnout3AnalyzeRunError::OutputWriteFailed,
                     "could not write analysis report to stdout");
