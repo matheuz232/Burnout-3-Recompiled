@@ -34,6 +34,16 @@ constexpr std::uint32_t r_type(std::uint8_t rs,
            funct;
 }
 
+constexpr std::uint32_t i_type(std::uint8_t op,
+                               std::uint8_t rs,
+                               std::uint8_t rt,
+                               std::uint16_t immediate) {
+    return (static_cast<std::uint32_t>(op) << 26u) |
+           (static_cast<std::uint32_t>(rs) << 21u) |
+           (static_cast<std::uint32_t>(rt) << 16u) |
+           immediate;
+}
+
 } // namespace
 
 int main() {
@@ -129,6 +139,31 @@ int main() {
            "OR writing r0 must become provenance-preserving Nop");
     expect(or_zero_lowered.instructions.front().guest_raw == or_zero_word,
            "discarded OR write must retain guest word provenance");
+
+    constexpr std::uint32_t xori_pc = 0x00100160u;
+    const auto xori_word = i_type(0x0eu, 3u, 5u, 0xff00u); // XORI r5,r3,0xff00
+    const auto xori_decoded = decode_r5900(xori_word);
+    expect(xori_decoded.instruction == R5900Instruction::Xori,
+           "XORI must already decode before lowering support is added");
+    const auto xori_lowered = lower_r5900_instruction(xori_decoded, xori_pc);
+    expect(xori_lowered.ok(), "XORI must lower instead of stopping as unsupported");
+    expect(xori_lowered.instructions.size() == 1u,
+           "XORI must lower to one IR instruction");
+    const auto& xori_ir = xori_lowered.instructions.front();
+    expect(xori_ir.destination.has_value() &&
+               xori_ir.destination->kind == R5900IrDestinationKind::Gpr &&
+               xori_ir.destination->index == 5u,
+           "XORI destination must be rt");
+    expect(xori_ir.write_mode == R5900IrGprWriteMode::Low64PreserveUpper64,
+           "XORI must preserve destination high64");
+    expect(xori_ir.inputs.size() == 2u &&
+               xori_ir.inputs[0].kind == R5900IrOperandKind::Gpr &&
+               xori_ir.inputs[0].gpr_index == 3u &&
+               xori_ir.inputs[1].kind == R5900IrOperandKind::Immediate &&
+               xori_ir.inputs[1].immediate == 0xff00,
+           "XORI immediate must be zero-extended from 16 bits");
+    expect(xori_ir.guest_pc == xori_pc && xori_ir.guest_raw == xori_word,
+           "XORI lowering must retain guest provenance");
 
     std::cout << "r5900_ir_and_tests: PASS\n";
     return EXIT_SUCCESS;
