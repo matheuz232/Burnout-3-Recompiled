@@ -15,6 +15,7 @@ enum class R5900IrOpcode {
     Add64,
     Or64,
     And64,
+    Xor64,
     LoadUpperImmediateSignExtend,
     AddPackedU32Saturate128,
     MoveGprLow64,
