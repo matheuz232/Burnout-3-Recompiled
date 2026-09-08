@@ -95,13 +95,13 @@ void test_pad_binding_report() {
     init.evidence.push_back({PadBindingFunction::PadInit,
                              PadBindingEvidenceKind::ElfSymbol,
                              0x00102000u,
-                             0u,
+                             1000u,
                              "padInit"});
 
     const std::string expected =
         "PAD_BINDINGS_V0 1\n"
-        "PAD_BINDING function=padInit confidence=trusted pc=0x00102000 evidence_count=1 max_score=0\n"
-        "PAD_BINDING_EVIDENCE function=padInit kind=elf_symbol pc=0x00102000 score=0 detail=padInit\n"
+        "PAD_BINDING function=padInit confidence=trusted pc=0x00102000 evidence_count=1 max_score=1000\n"
+        "PAD_BINDING_EVIDENCE function=padInit kind=elf_symbol pc=0x00102000 score=1000 detail=padInit\n"
         "PAD_BINDING function=padPortOpen confidence=unresolved pc=none evidence_count=0 max_score=0\n"
         "PAD_BINDING function=padGetState confidence=unresolved pc=none evidence_count=0 max_score=0\n"
         "PAD_BINDING function=padRead confidence=unresolved pc=none evidence_count=0 max_score=0\n"
